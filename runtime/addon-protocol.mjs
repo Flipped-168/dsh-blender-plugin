@@ -9,7 +9,7 @@
  *
  * 两种协议的真实差异（实测）：
  *
- *   ahujasid（DSH Blender Bridge v1.6）
+ *   ahujasid（DSH Blender Bridge 的扁平协议；实测 addon v1.6/protocol 5 与 v1.7/protocol 11 都是这一种）
  *     请求  {"type":"get_scene_info","params":{}}          ← 无分帧
  *     应答  {"status":"success","result":{…}} / {"status":"error","message":"…"}
  *     词汇  扁平名（ping / execute_code / get_viewport_screenshot …）
@@ -111,7 +111,7 @@ function planCategoryAction(type, params) {
 export const PROTOCOLS = {
   ahujasid: {
     id: 'ahujasid',
-    label: 'ahujasid / DSH Blender Bridge v1.6（扁平协议，无分帧）',
+    label: 'ahujasid / DSH Blender Bridge（扁平协议，无分帧；实测 v1.6/protocol5 与 v1.7/protocol11 都通 —— 活版本看 rt_cmd get_addon_info）',
     framing: 'none',
     panelHint: '「DSH Blender Bridge」面板 → Connect',
     plan(type, params) { return { wire: { type: type, params: params || {} } }; },
