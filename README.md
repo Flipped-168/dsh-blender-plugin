@@ -7,6 +7,19 @@
 
 ---
 
+## Support · Afdian (爱发电)
+
+This plugin is **open source and free** (BSD-3-Clause): every feature is available to everyone — no paywall, no license key, no "sponsor edition".
+If it saved you some time, you're welcome to support its development on Afdian: **[afdian.com/a/sixtysevenlf](https://afdian.com/a/sixtysevenlf)** — a **voluntary donation, not a purchase**.
+
+**A few things, so there's no misunderstanding:**
+
+- **A donation is not a purchase** — it buys no service, license, customization or priority. Issues and PRs are triaged on their own merits, regardless of donations.
+- **Donations don't change the license** — the code stays BSD-3-Clause for everyone, with identical features.
+- These are **personal appreciation gifts** only; **not** for business or commercial payments. For commercial support, custom work or collaboration, open an issue and we'll do it properly (contract + invoice).
+
+---
+
 > 🌐 **Language:** **English (this page)** · [简体中文](README.zh-CN.md)
 >
 > 🧩 **Companion skill: [blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling)** — the process and the acceptance criteria for modeling / assembly (multi-agent division of labour, reference-image-driven shapes, six pitfalls, numeric assembly gates). The plugin owns the *channel*; the skill owns *how to build and how to verify*.
