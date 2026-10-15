@@ -34,7 +34,7 @@ const IS_WIN = process.platform === 'win32'
  * description 由**已加载的那份 lib** 生成 → 会话里一眼能看出自己跑的是哪一代，
  * 不会再出现「读的是新源码、跑的是旧 lib」那种排查事故（外部反馈 j20-build 的元教训）。
  */
-const PLUGIN_VERSION = '1.1.0'
+const PLUGIN_VERSION = '1.2.0'
 // 注意：必须**先加前缀、再交给 defineTool** —— defineTool 负责校验与规范化，
 // 自己 spread 一个成品对象会绕过它（实测：spread 版本会让插件 fiber 直接 failed）。
 //
@@ -279,6 +279,8 @@ const T = {
   // v0.9.3（D6.2）：job 新增 op=wait（服务端单次上限 600 s）→ 静态截止要盖住它
   job: 660000,
   viewport: 60000,    // status/doctor/lease + start/restart 的重试窗口
+  // v1.2：等用户点选 —— 后端 TTL 默认 120 s（夹 [5,600]），静态截止留余量盖住最长 600 s + 收尾
+  pick: 660000,
 }
 
 /**
@@ -1693,6 +1695,64 @@ export function apply(ctx: any, config: Config): void {
       return { text: parts.join(String.fromCharCode(10)) }
     },
   })), '@dsh-external/dsh-blender-plugin: rt-txn')
+
+  /**
+   * v1.2：**请用户点选**（阻塞式）。
+   * 面板只在 Blender 通道可用时出现在 DSH 右侧栏（见契约 §7.3）；用户点完由
+   * `POST /host/pick/answer` 结束请求，本工具轮询 `/host/pick/result` 取回对象名。
+   */
+  ctx.effect(() => ctx.tools.register(vTool({
+    name: 'blender_rt_pick',
+    description: '【请用户点选】让**用户**在右侧栏视口面板点一个物体，你拿到确切对象名。'
+      + '用在"用户说的那个"你从描述确定不了时 —— 比在几千个对象里猜名字快。'
+      + '**阻塞**：点完（或点空处=表示没有）即返回；超时/取消给原因。'
+      + '前提：面板只在通道可用时出现，用户没开着会等到超时 —— 先说明再调用。',
+    parameters: {
+      prompt: { type: 'string', description: '给用户看的一句话（≤200 字）；省略用默认句' },
+      timeout_s: { type: 'integer', description: '等多久（秒），默认 120，夹 [5,600]' },
+    },
+    output: { schema: ANY_SCHEMA, render: renderOne },
+    isConcurrencySafe: () => false,
+    timeoutMs: T.pick,
+    async execute(args: any) {
+      if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）' }
+      const reqBody: any = {}
+      if (args && args.prompt) reqBody.prompt = String(args.prompt)
+      if (args && args.timeout_s) reqBody.timeout_s = Number(args.timeout_s)
+      const timeoutS = Math.max(5, Math.min(600, Number((args && args.timeout_s) || 120)))
+      const rq = await backendPost(port, '/host/pick/request', reqBody, 20000)
+      if (!rq || rq.ok !== true || !rq.request || !rq.request.requestId) {
+        return { text: 'PICK 发起失败 · ' + String((rq && (rq.error || rq.raw)) || 'unknown') + String.fromCharCode(10) + '（若为 404：后端版本旧，未装载 /host 路由）' }
+      }
+      const requestId = String(rq.request.requestId)
+      const deadline = Date.now() + (timeoutS + 10) * 1000
+      const cancel = async (reason: string) => {
+        try { await backendPost(port, '/host/pick/cancel', { requestId: requestId, reason: reason }, 8000) } catch (e) { /* 尽力而为 */ }
+      }
+      let lastState = ''
+      while (Date.now() < deadline) {
+        if (execSignal() && execSignal()!.aborted) { await cancel('aborted'); return { text: 'PICK 已取消（宿主打断）；请求已作废。' } }
+        await new Promise((r) => setTimeout(r, 400))
+        const r = await backendJson(port, '/host/pick/result?requestId=' + encodeURIComponent(requestId), 20000)
+        const st = String((r && r.state) || '')
+        lastState = st
+        if (st === 'answered') {
+          const o = (r && r.object) || null
+          if (o && o.name) {
+            return { text: 'PICK ok · 用户点了：' + String(o.name) + '（' + String(o.type || '?') + ' · ' + String(o.detail || '') + '）'
+              + String.fromCharCode(10) + '位置：' + JSON.stringify(o.location || null)
+              + String.fromCharCode(10) + '这是用户点选的确切对象，直接用这个名字（bpy.data.objects["' + String(o.name) + '"]），不要再去猜别的名字。' }
+          }
+          return { text: 'PICK ok · 用户点了**空处** —— 表示他没有选中任何物体。别替他挑一个：问一下他想指什么，或让他再点一次。' }
+        }
+        if (st === 'cancelled') return { text: 'PICK 已取消（用户或系统取消）。别自己猜对象；问一下他想指什么。' }
+        if (st === 'expired') return { text: 'PICK 超时（' + String(timeoutS) + ' s 内用户没点）。可能他没看到面板，或右侧栏面板没打开（面板只在 Blender 通道可用时出现）。问一句再决定是否重试。' }
+        if (st === 'unknown') return { text: 'PICK 请求已不可查（unknown）—— 后端可能重启过。重新调用一次即可。' }
+      }
+      await cancel('tool-timeout')
+      return { text: 'PICK 本地等待超时（' + String(timeoutS) + ' s，最后状态 ' + String(lastState || 'pending') + '）；请求已作废。' }
+    },
+  })), '@dsh-external/dsh-blender-plugin: rt-pick')
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_preset',

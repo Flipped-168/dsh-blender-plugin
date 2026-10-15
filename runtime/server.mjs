@@ -16,6 +16,13 @@
  *   POST /host/view/pick     点击反投影 → 对象（先校验 file/scene 错配 → *_mismatch）
  *   GET  /host/scene-items   `@` 提及数据源（objects/materials/collections）
  *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 loopback Origin 回显）
+ *   ── v1.2（契约 §7.1/§7.2）──
+ *   GET  /host/ready         就绪门控（**零 I/O、零 bpy 往返**，面板每 2 s 轮询）
+ *   POST /host/pick/request  发起点选请求（模型侧；全局至多一个 pending）
+ *   GET  /host/pick/request  面板取当前 pending（过期先判过期）
+ *   POST /host/pick/answer   应答（复用 §1.5 的 pick 逻辑；错配不结束请求）
+ *   POST /host/pick/cancel   取消（幂等）
+ *   GET  /host/pick/result   结果轮询（`expired` 惰性判定）
  *   POST /headless       body: {script, file, outdir, args, timeoutMs} → 无头 Blender 独立进程跑脚本
  *   GET  /who            JSON：租约持有者 + 通道指标（多会话共存时先看它）
  *   POST /lease          body: {holder, ttlMs, force?, renewOnly?} → 拿写权限租约
@@ -34,6 +41,8 @@ import { createEngine, engineProvenance, PLAN_READ_ONLY_OPS } from './engine.mjs
 import { CFG, describeConfig } from './config.mjs';
 // S12（宿主集成）：视口状态存储（面板轮询只读它，绝不因此碰 Blender）
 import { viewStore, clampItemsLimit, clampUnit } from './viewstore.mjs';
+// S13（宿主集成 v1.2 · §7.2）：点选请求状态机（全局至多一个 pending）
+import { pickRequestStore } from './pickrequest.mjs';
 
 const argv = process.argv.slice(2);
 const portArg = argv.indexOf('--port');
@@ -232,6 +241,42 @@ function hostPng(res, buf, origin) {
   res.end(buf);
 }
 function hostErrText(e) { return String((e && e.message) || e); }
+function hostNormEmpty(v) { return (v === '' || v == null) ? null : v; }
+
+/**
+ * §1.5 的点击反投影**唯一实现**（v1.2 抽出）。
+ *
+ * 为什么必须抽出来：契约 §7.2 要求 `POST /host/pick/answer` 用"与 §1.5 **完全相同**的 pick 逻辑
+ * （含 file/scene 错配拒绝）"。两份拷贝迟早会漂移 —— 尤其"错配绝不降级投到当前场景"这条纪律。
+ * 返回 `{status, body}`，由调用方决定 HTTP 语义（§1.5 直接回，§7.2 再叠加请求状态机）。
+ */
+async function hostPickCore(payload) {
+  const p = payload || {};
+  const v = viewStore.viewFor(p.seq);
+  if (!v) return { status: 200, body: { ok: false, error: 'unknown_seq' } };
+  let out;
+  try {
+    out = await engine.hostPick({
+      x: clampUnit(p.x, 0.5), y: clampUnit(p.y, 0.5),
+      width: v.width, height: v.height,
+      view_matrix: v.view_matrix, window_matrix: v.window_matrix,
+      file: v.file, scene: v.scene,
+    });
+  } catch (e) {                                   // Blender 不可达 / 通道失败 → 502
+    return { status: 502, body: { ok: false, error: hostErrText(e) } };
+  }
+  if (!out || out.ok === false) {
+    const err = String((out && out.error) || 'pick_failed');
+    if (err === 'file_mismatch' || err === 'scene_mismatch') {
+      // 契约 §1.5：错配是**正常回执**（HTTP 200），但绝不降级为"投到当前场景"
+      return { status: 200, body: { ok: false, error: err,
+                                    expected: hostNormEmpty(out.expected), current: hostNormEmpty(out.current) } };
+    }
+    if (err === 'unknown_seq') return { status: 200, body: { ok: false, error: 'unknown_seq' } };
+    return { status: 502, body: { ok: false, error: err } };
+  }
+  return { status: 200, body: { ok: true, object: (out.object === undefined ? null : out.object) } };
+}
 
 async function handleHost(req, res, url, p) {
   const origin = req.headers.origin || null;
@@ -283,38 +328,10 @@ async function handleHost(req, res, url, p) {
     const raw = await readBody(req);
     let payload = {};
     try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const v = viewStore.viewFor(payload.seq);
-    if (!v) { hostJson(res, 200, { ok: false, error: 'unknown_seq' }, origin); return; }
-    let out;
-    try {
-      out = await engine.hostPick({
-        x: clampUnit(payload.x, 0.5), y: clampUnit(payload.y, 0.5),
-        width: v.width, height: v.height,
-        view_matrix: v.view_matrix, window_matrix: v.window_matrix,
-        file: v.file, scene: v.scene,
-      });
-    } catch (e) {                                   // Blender 不可达 / 通道失败 → 502
-      stats.lastError = hostErrText(e);
-      hostJson(res, 502, { ok: false, error: hostErrText(e) }, origin);
-      return;
-    }
-    if (!out || out.ok === false) {
-      const err = String((out && out.error) || 'pick_failed');
-      if (err === 'file_mismatch' || err === 'scene_mismatch') {
-        // 契约 §1.5：错配是**正常回执**（HTTP 200），但绝不降级为"投到当前场景"
-        hostJson(res, 200, { ok: false, error: err,
-                             expected: (out.expected === '' || out.expected == null) ? null : out.expected,
-                             current: (out.current === '' || out.current == null) ? null : out.current }, origin);
-      } else if (err === 'unknown_seq') {
-        hostJson(res, 200, { ok: false, error: 'unknown_seq' }, origin);
-      } else {
-        stats.lastError = err;
-        hostJson(res, 502, { ok: false, error: err }, origin);
-      }
-      return;
-    }
-    stats.hostPicks = (stats.hostPicks || 0) + 1;
-    hostJson(res, 200, { ok: true, object: (out.object === undefined ? null : out.object) }, origin);
+    const r = await hostPickCore(payload);
+    if (r.status === 200 && r.body.ok) stats.hostPicks = (stats.hostPicks || 0) + 1;
+    else if (!r.body.ok) stats.lastError = String(r.body.error || '');
+    hostJson(res, r.status, r.body, origin);
     return;
   }
 
@@ -331,6 +348,80 @@ async function handleHost(req, res, url, p) {
     }
     hostJson(res, 200, { ok: true, objects: out.objects || [], materials: out.materials || [],
                          collections: out.collections || [] }, origin);
+    return;
+  }
+
+  // ── v1.2（契约 §7.1 / §7.2）──────────────────────────────────────────────
+
+  // §7.1 就绪端点：面板每 2 s 轮询它做门控 ⇒ **必须便宜**。
+  // 全同步、零 I/O、零 Blender 往返（engine.hostReady 只读常驻 socket 的存活态与握手缓存）。
+  if (req.method === 'GET' && p === '/host/ready') {
+    hostJson(res, 200, engine.hostReady(), origin);
+    return;
+  }
+
+  // §7.2 发起点选请求（模型侧用）
+  if (req.method === 'POST' && p === '/host/pick/request') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const reqObj = pickRequestStore.create({ prompt: payload.prompt, timeout_s: payload.timeout_s });
+    stats.pickRequests = (stats.pickRequests || 0) + 1;
+    hostJson(res, 200, { ok: true, request: reqObj }, origin);
+    return;
+  }
+
+  // §7.2 面板取当前 pending（过期则先判过期再回 null）
+  if (req.method === 'GET' && p === '/host/pick/request') {
+    hostJson(res, 200, { ok: true, request: pickRequestStore.current() }, origin);
+    return;
+  }
+
+  // §7.2 应答：**复用与 §1.5 完全相同的 pick 逻辑**（同一个 hostPickCore）
+  if (req.method === 'POST' && p === '/host/pick/answer') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const requestId = payload.requestId;
+    const pre = pickRequestStore.stateOf(requestId);
+    if (!pre.known || pre.state !== 'pending') {
+      // requestId 不存在/已结束：不动任何状态，回"当前态或 unknown"
+      hostJson(res, 200, { ok: false, state: pre.state, error: 'no_such_request' }, origin);
+      return;
+    }
+    const r = await hostPickCore(payload);
+    if (r.status === 200 && r.body.ok) {
+      // 命中**或点空处**（object:null）→ answered。空处的语义是"用户明确表示没有"
+      const a = pickRequestStore.answer(requestId, r.body.object);
+      if (!a.ok) { hostJson(res, 200, { ok: false, state: a.state, error: a.error }, origin); return; }
+      stats.hostPicks = (stats.hostPicks || 0) + 1;
+      hostJson(res, 200, { ok: true, state: 'answered', object: r.body.object }, origin);
+      return;
+    }
+    // 失败（错配 / 未知 seq / 通道挂了）→ **请求不结束**，让用户刷新后重试。
+    // ⚠ pick 期间请求可能已被取消/被新请求取代/过期 ⇒ 回**实际态**，绝不硬写 pending。
+    const now = pickRequestStore.stateOf(requestId);
+    const body = { ok: false, state: now.state, error: String(r.body.error || 'pick_failed') };
+    if (r.body.expected !== undefined) body.expected = r.body.expected;
+    if (r.body.current !== undefined) body.current = r.body.current;
+    if (!r.body.ok && r.status === 200) stats.lastError = String(r.body.error || '');
+    hostJson(res, r.status === 200 ? 200 : r.status, body, origin);
+    return;
+  }
+
+  // §7.2 取消（幂等：已结束也回 200 + 实际态）
+  if (req.method === 'POST' && p === '/host/pick/cancel') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const c = pickRequestStore.cancel(payload.requestId, payload.reason);
+    hostJson(res, 200, c, origin);
+    return;
+  }
+
+  // §7.2 结果轮询（模型工具用；`expired` 惰性判定）
+  if (req.method === 'GET' && p === '/host/pick/result') {
+    hostJson(res, 200, pickRequestStore.result(url.searchParams.get('requestId')), origin);
     return;
   }
 
@@ -842,7 +933,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /host/ready /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items /host/pick/request /host/pick/answer /host/pick/cancel /host/pick/result)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。

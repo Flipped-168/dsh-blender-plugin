@@ -691,6 +691,18 @@ export function createEngine(opts = {}) {
   const injected = new Set();
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
   const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0 };
+  /**
+   * S13（宿主集成 v1.2 · 契约 §7.1）：`/host/ready` 的**只读缓存**。
+   *
+   * 为什么必须是缓存而不是"问一下 Blender"：面板每 2 s 轮询它做门控（契约 §7.3），
+   * 实测 `/doctor` 205 ms（它要发 ping 命令、占 addon 主线程）vs `/health` 2.6 ms。
+   * 本对象的每个字段都是**别人已经付过的代价**顺手记下来的：
+   *   · `addon` 连接态来自 AddonClient 的**常驻 socket**（`addon.sock`，socket 的 close 事件会置空）
+   *     —— 于是 Blender 一死，下一个 `/host/ready` 立刻看到 `addon:false`，**零 I/O**；
+   *   · `protocol` 来自任何一次成功的 `get_addon_info` 回包（`protocol_version`，实测 addon v1.7 = 11）；
+   *   · `handshakeFrom` 来自 addon 客户端自己的协议解析缓存（'config'/'auto'/'fallback'）。
+   */
+  const readiness = { protocol: null, protocolAt: null, handshakeFrom: null, handshakeId: null, lastTransportErrorAt: null };
   const rawSend = addon.send.bind(addon);
   /**
    * @param {object} [opts] `{noMark:true}` = 这条命令**不算"会改场景"**（不参与 scene_version 计数）。
@@ -728,6 +740,8 @@ export function createEngine(opts = {}) {
       const r = await rawSend(type, params, timeoutMs);
       metrics.lastOkAt = Date.now();
       metrics.lastDiagnosis = null;
+      // S13（§7.1）：顺手记"握手证据"—— `/host/ready` 之后只读这份缓存，绝不再发包
+      noteHandshake(type, r);
       if (sceneChanging) viewStore.noteSceneChange();
       return r;
     } catch (e) {
@@ -737,7 +751,7 @@ export function createEngine(opts = {}) {
       // 半途失败也可能已经改到了场景（execute_code 跑到一半抛错）→ 保守标记，宁可多标 stale
       if (sceneChanging) viewStore.noteSceneChange();
       const transport = /timeout|closed|ECONN|ECONNRESET|socket/i.test(msg);
-      if (transport) metrics.timeouts++;
+      if (transport) { metrics.timeouts++; readiness.lastTransportErrorAt = Date.now(); }
       // v0.7.0：只有**传输/超时类**错误才做三级判定；执行类错误（代码抛错/编译错）不该被误判成 main-thread-busy
       if (transport) {
         try { e.diagnosis = await diagnose(); metrics.lastDiagnosis = e.diagnosis; } catch (x) { /* 诊断自身失败不影响原错误 */ }
@@ -750,6 +764,46 @@ export function createEngine(opts = {}) {
       viewStore.endCommand();
     }
   };
+  /**
+   * S13（§7.1）：把"刚刚确实握过手"的证据记进 `readiness`（**免费** —— 只是读已经拿到的东西）。
+   * 只做两件事：① 任何成功的 `get_addon_info` 回包 → 记 addon 自己报的协议号；
+   * ② addon 客户端的协议解析缓存（`addon.protocolInfo`）→ 记它是不是"探测失败回退"。
+   */
+  function noteHandshake(type, result) {
+    try {
+      if (String(type) === 'get_addon_info' && result && typeof result === 'object') {
+        const pv = Number(result.protocol_version !== undefined ? result.protocol_version : result.protocolVersion);
+        if (Number.isFinite(pv)) { readiness.protocol = pv; readiness.protocolAt = Date.now(); }
+      }
+      const pi = addon.protocolInfo;
+      if (pi && typeof pi === 'object') {
+        readiness.handshakeFrom = pi.from || null;
+        readiness.handshakeId = (pi.proto && pi.proto.id) || null;
+      }
+    } catch (e) { /* 记证据失败绝不影响命令本身 */ }
+  }
+  /**
+   * S13（宿主集成 v1.2 · 契约 §7.1）：`GET /host/ready` 的**全部**逻辑。
+   * **同步、零 I/O、零 Blender 往返** —— 只读上面那份缓存 + 常驻 socket 的存活态。
+   * `ready=false` 的两种 reason（契约只允许这两个）：
+   *   · `addon-unreachable`：常驻 socket 不在了（后端启动时就没连上，或 Blender 中途死了 —— socket 的 close 事件会把 sock 置空）
+   *   · `handshake-stale`：socket 在，但协议解析是 `fallback`（端口通、探测不回包 ⇒ 对面不是我们认的 addon，或线程卡住）
+   */
+  function hostReady() {
+    const sock = addon.sock;
+    const connected = !!(sock && !sock.destroyed);
+    let reason = null;
+    if (!connected) reason = 'addon-unreachable';
+    else if (readiness.handshakeFrom === 'fallback') reason = 'handshake-stale';
+    return {
+      ok: true,
+      ready: reason === null,
+      addon: connected,
+      protocol: readiness.protocol,
+      backend: PLUGIN_VERSION,
+      reason: reason,
+    };
+  }
   /** 把 Blender 侧 python 模块注入运行中的 Blender（模块自己把 API 挂到 K 上） */
   const MODULE_ATTR = { RUNNER_READY: 'dsh_loop_api', PERF_READY: 'dsh_perf_api', VIEW_READY: 'dsh_view_api',
                         CONTRACT_READY: 'dsh_contract_api', PLAN_READY: 'dsh_plan_api',
@@ -2062,7 +2116,10 @@ export function createEngine(opts = {}) {
   const TRAJ_OFF = process.env.DSH_TRAJ === '0' || process.env.DSH_TRAJ === 'false';
   const TRAJ_FULL = process.env.DSH_TRAJ_FULL === '1';
   const TRAJ_MAX_BYTES = Number(process.env.DSH_TRAJ_MAX_BYTES || 16000000);
-  const TRAJ_SKIP = new Set(['metrics', 'status', 'protocol', 'sceneEpoch']);
+  // S13（§7.1）：`hostReady` 必须便宜 —— 它每 2 s 被面板轮询一次做门控。
+  // 轨迹台账是 `fs.appendFileSync` 到 workDir（本机是 drvfs 挂载），实测一次 ~35 ms：
+  // 不加进来会让 /host/ready 从 ~1.5 ms 变成 ~37 ms（比 /health 慢 14 倍），直接违背 §7.1。
+  const TRAJ_SKIP = new Set(['metrics', 'status', 'protocol', 'sceneEpoch', 'hostReady']);
   function trajShortHash(s) {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
@@ -2140,6 +2197,8 @@ export function createEngine(opts = {}) {
     /** v0.9.4：拉起 GUI Blender + 自动 Connect addon（server.mjs /launch 路由用） */
     launchBlender: (opts) => launchBlender(opts || {}),
     sceneEpoch: sceneEpoch,
+    /** S13（§7.1）：`GET /host/ready` 的唯一实现 —— 同步、零 I/O、零 Blender 往返 */
+    hostReady: () => hostReady(),
     /** 通道指标快照（inflight / last_cmd / 超时计数） */
     metrics() {
       return { ...metrics, lastCmdAgeMs: metrics.lastCmdAt ? Date.now() - metrics.lastCmdAt : null };
@@ -2813,7 +2872,16 @@ export function createEngine(opts = {}) {
           : (gpuFailed ? 'gpu required but unavailable' : (res.exitCode === 0 ? null : 'exit code ' + String(res.exitCode))),
         result: parsed, stdout: clipMiddle(stdout, 4000, 4000), stderr: clipMiddle(stderr, 2000, 2000), artifacts: artifacts };
     },
-    async start() { await addon.ensure(); return true; },
+    /**
+     * S13（§7.1）：启动时连上常驻 socket，并**尽力**补一次 `get_addon_info` 把协议号记进
+     * `readiness`（`/host/ready` 的 `protocol` 字段就靠它；不 await、失败即忽略 ——
+     * 绝不让"addon 没起来"或"addon 正忙"拖慢后端启动）。
+     */
+    async start() {
+      await addon.ensure();
+      addon.send('get_addon_info', {}, 3000).catch(() => null);   // 尽力而为，不阻塞 listen
+      return true;
+    },
     // v0.9.4（P1-1）：worker 现在是多实例 —— 关后端时要把**所有**实例收干净（原来只杀单例）
     stop() { addon.close(); try { for (const w of WORKERS.values()) { if (workerAlive(w)) w.child.kill('SIGKILL'); } } catch (e) {} },
   });

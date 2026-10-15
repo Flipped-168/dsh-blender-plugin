@@ -125,6 +125,8 @@ Besides the model tools, the package ships a **user-side** half for the DSH UI (
 > The panel calls `9877` cross-origin from `http://127.0.0.1:3080`, so the backend only echoes CORS for **loopback** origins (`https://` or a non-loopback hostname is refused).
 > Usage, CORS/port requirements and the **troubleshooting table** live in [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成) (Chinese).
 
+**Added in v1.2**: a **right-sidebar** viewport panel (appears only while `/host/ready` is true — it disappears when Blender is closed) plus **model-requested picking** (the 16th tool, `blender_rt_pick`: the model asks you to click an object and gets its name back). Usage, the answer/cancel banner, troubleshooting and the unverified list live in [操作教程 §10 右侧栏视口面板 + 模型请求点选](docs/操作教程.md#10-右侧栏视口面板--模型请求点选v12) (Chinese).
+
 ---
 
 ## 5. What's new in v1.0

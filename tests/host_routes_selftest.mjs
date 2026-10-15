@@ -31,6 +31,28 @@
 const BASE = String(process.env.DSH_BLENDER_BACKEND || 'http://127.0.0.1:9877').replace(/\/+$/, '');
 const LOOPBACK = 'http://127.0.0.1:3080';
 const NO_MUTATE = process.env.DSH_HOST_TEST_NO_MUTATE === '1';
+/**
+ * 判据 7 / 13 都要走 `/act`（写通道）。**默认绝不抢**别的会话的写租约（被占就 SKIP）；
+ * 只有显式设 `DSH_HOST_TEST_FORCE_LEASE=1` 才带 `force:true` —— 用于"确认没有别人在驱动这个 Blender"时
+ * 把最关键的判据 13 跑起来。默认行为不变。
+ */
+const FORCE_LEASE = process.env.DSH_HOST_TEST_FORCE_LEASE === '1';
+/** `/act` 请求体（`force` 只在显式 opt-in 时才带） */
+function actBody(code) { return FORCE_LEASE ? { code, force: true } : { code }; }
+/**
+ * 读"**当前**场景名"（走 `/act` 的 stdout；拿不到返回 null）。
+ *
+ * 为什么要它：判据 7 / 13 靠"临时改名"构造错配，但**共享同一个 Blender 时别的会话可能也在改名**
+ * （实测：两个 run 并发时，A 改完名、B 又改回去 ⇒ A 的 pick 拿到"命中"而不是 scene_mismatch，
+ * 变成**假红**）。改名前/应答前先核一次当前场景名，不一致就如实 SKIP，而不是冤枉服务端。
+ */
+async function currentSceneName() {
+  const r = await req('POST', '/act', { json: actBody('import bpy\nprint("DSH_SCENE " + bpy.context.scene.name)\n'), timeout: 40000 });
+  const j = jbody(r);
+  if (!j || j.ok !== true) return null;
+  const m = /DSH_SCENE (.+)/.exec(String(j.stdout || ''));
+  return m ? m[1].trim() : null;
+}
 const CAPTURE_TIMEOUT = Number(process.env.DSH_HOST_TEST_CAPTURE_TIMEOUT_MS || 40000);
 
 let pass = 0; let fail = 0; let skip = 0; let warn = 0;
@@ -207,6 +229,8 @@ if (!blenderUp) {
     ['7', '需要帧+矩阵+写通道'], ['8', 'scene-items 需要 Blender']]) {
     doSkip('判据 ' + n, 'Blender 不可达（doctor.kind=' + JSON.stringify(doctorKind) + '）：' + why);
   }
+  // §7 的判据 11（`/host/ready` 计时 + `ready:false` + `reason` 非空）**不需要 Blender**，照跑
+  await v12(blenderUp);
   finish();
 }
 
@@ -393,7 +417,7 @@ if (!pickable) {
     const tmpName = frameScene + '.dshselftest';
     const renameCode = 'import bpy\ns = bpy.context.scene\ns.name = ' + JSON.stringify(tmpName) + '\nprint("DSH_RENAMED " + s.name)\n';
     console.log('      · 为构造错配，临时把场景名 ' + JSON.stringify(frameScene) + ' → ' + JSON.stringify(tmpName) + '（finally 里还原）');
-    const ren = await req('POST', '/act', { json: { code: renameCode }, timeout: 40000 });
+    const ren = await req('POST', '/act', { json: actBody(renameCode), timeout: 40000 });
     show(ren, 'POST /act 改名');
     const rj = jbody(ren);
     if (ren.status === 409) {
@@ -402,6 +426,12 @@ if (!pickable) {
       doSkip('判据 7', '无法构造错配：/act 未把场景名改成 ' + JSON.stringify(tmpName) + '（回执 '
         + (ren.ok ? JSON.stringify(rj).slice(0, 200) : ren.err) + '）');
     } else {
+      // 并发护栏：改名后立刻核一次"当前场景名还是不是我设的那个"，防别的会话把它改回去造成假红
+      const nowScene = await currentSceneName();
+      if (nowScene !== tmpName) {
+        doSkip('判据 7', '并发改名：改名后读到的当前场景名是 ' + JSON.stringify(nowScene) + '，不是本测试设的 '
+          + JSON.stringify(tmpName) + '（多半是别的会话在同跑同一个探针）—— 环境噪声，不是服务端缺陷');
+      } else {
       try {
         const { rec: r7, body: p7 } = await pickAt(0.5, 0.5);
         show(r7, 'pick 旧 seq（场景已改名）');
@@ -418,13 +448,14 @@ if (!pickable) {
         ok('判据 7 · 绝不降级投到当前场景（不得回 object）', !(p7 && p7.object), p7 && p7.object);
       } finally {
         const backCode = 'import bpy\ns = bpy.context.scene\ns.name = ' + JSON.stringify(frameScene) + '\nprint("DSH_RESTORED " + s.name)\n';
-        const back = await req('POST', '/act', { json: { code: backCode }, timeout: 40000 });
+        const back = await req('POST', '/act', { json: actBody(backCode), timeout: 40000 });
         show(back, 'POST /act 还原场景名');
         const bj = jbody(back);
         const restored = !!(bj && bj.ok === true && String(bj.stdout || '').includes('DSH_RESTORED ' + frameScene));
         ok('判据 7 · 场景名已还原（不留副作用）', restored,
           bj ? { ok: bj.ok, stdout: String(bj.stdout || '').slice(0, 200), error: bj.error || null } : null);
         if (!restored) console.log('      !!! 手工处置：把 Blender 当前场景名改回 ' + JSON.stringify(frameScene));
+      }
       }
     }
   }
@@ -516,7 +547,381 @@ console.log('[判据 8] @ 数据源（scene-items 过滤 / limit / 排序）');
   }
 }
 
+await v12(blenderUp);
 finish();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §7（v1.2）就绪端点 + 阻塞式点选请求 —— 契约 §7.6 判据 11–15
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * 与判据 1–8 的区别：这一节**先探部署**——`/host/ready` 不在（404 `not found`）就整节 SKIP，
+ * 因为 v1.2 的路由由 runtime-host 并行交付，未就绪时不该把主回归拖红。
+ *
+ * 纪律：
+ *   - 判据 11 只需后端（`ready:false` 分支恰好要在 Blender 不在时验），所以 Blender 不在也照跑；
+ *   - 判据 12–15 需要 Blender；且**开跑前先看有没有别人（真人）的 pending 请求** —— 有就 SKIP，不抢占
+ *     （§7.2 全局至多一个 pending，测试若硬插会顶掉真人的请求）；
+ *   - 判据 13 要临时改场景名，遵守与判据 7 同一套纪律（finally 还原 + stdout 核验 + `DSH_HOST_TEST_NO_MUTATE`）。
+ */
+async function v12(blenderNow) {
+  console.log('');
+  console.log('§7 v1.2：/host/ready 门控 + 阻塞式点选请求（判据 11–15）');
+
+  // ── 部署探针：v1.2 路由在不在 ──────────────────────────────────────────
+  const probe = await req('GET', '/host/ready', { timeout: 8000 });
+  show(probe, '部署探针 GET /host/ready');
+  const pj = jbody(probe);
+  const missing = !probe.ok || (probe.status === 404 && pj && pj.error === 'not found');
+  if (missing) {
+    for (const n of ['11', '12', '13', '14', '15']) {
+      doSkip('判据 ' + n, 'v1.2 路由未装载（/host/ready → '
+        + (probe.ok ? probe.status + ' ' + JSON.stringify(pj) : probe.err) + '）—— runtime-host 尚未交付，契约 §7 冻结后照它写');
+    }
+    return;
+  }
+
+  // ═══ 判据 11 · /host/ready 便宜 + 不碰 Blender ═══════════════════════════
+  await req('GET', '/host/ready', { timeout: 8000 });                       // 预热（排除首连开销）
+  const who0 = await req('GET', '/who', { timeout: 8000 });
+  const calls0 = (jbody(who0) || {}).metrics ? (jbody(who0) || {}).metrics.calls : null;
+
+  const N = 5;
+  const samples = [];
+  let last = null;
+  for (let i = 0; i < N; i++) {
+    last = await req('GET', '/host/ready', { timeout: 8000 });
+    samples.push(last.ms);
+  }
+  const who1 = await req('GET', '/who', { timeout: 8000 });
+  const calls1 = (jbody(who1) || {}).metrics ? (jbody(who1) || {}).metrics.calls : null;
+  const delta = (typeof calls0 === 'number' && typeof calls1 === 'number') ? calls1 - calls0 : null;
+
+  const doc = await req('GET', '/doctor', { timeout: 30000 });               // 对照：它真跑一次 bpy 往返
+  const docJ = jbody(doc);
+  const docKind = docJ && docJ.addon && docJ.addon.kind ? docJ.addon.kind : (docJ ? docJ.kind : null);
+
+  const sorted = samples.slice().sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const rj = jbody(last);
+  console.log('      · /host/ready ×' + N + ' 样本 ms = ' + JSON.stringify(samples) + '，中位数 ' + median + ' ms');
+  console.log('      · 对照 /doctor = ' + doc.ms + ' ms（kind=' + JSON.stringify(docKind) + '，它要跑一次 bpy 往返）');
+  console.log('      · metrics.calls ' + JSON.stringify(calls0) + ' → ' + JSON.stringify(calls1) + '（增量 ' + JSON.stringify(delta) + '）');
+  console.log('      · 回执：' + JSON.stringify(rj));
+
+  ok('判据 11 · 回执形状合 §7.1（ready/addon/protocol/backend/reason）',
+    !!rj && typeof rj.ok === 'boolean' && typeof rj.ready === 'boolean' && typeof rj.addon === 'boolean'
+      && (rj.protocol === null || Number.isInteger(rj.protocol)) && typeof rj.backend === 'string'
+      && (rj.reason === null || typeof rj.reason === 'string'), rj);
+  ok('判据 11 · 中位数 < 50 ms（契约 §7.1「必须便宜」）', median < 50, { samples, median });
+  ok('判据 11 · **不碰 Blender**：metrics.calls 增量 === 0',
+    delta === 0, { calls0, calls1, delta, 提示: delta !== 0 ? '增量非 0：要么 /host/ready 真发了 addon 命令，要么共享 Blender 上别的会话在这段窗口里发了命令（看 /who 的 lastCmd/lastCmdAgeMs 分辨）' : null });
+  if (typeof doc.ms === 'number' && doc.ms >= 50) {
+    ok('判据 11 · /host/ready 中位数 < /doctor 单次（对照证明它不是"碰了 Blender 的那条路"）',
+      median < doc.ms, { median, doctorMs: doc.ms });
+  } else {
+    console.log('      · /doctor 本次也只有 ' + doc.ms + ' ms（<50），构不成有效对照 —— 跳过该对照断言');
+  }
+
+  // ready 与 /doctor 的一致性（§7.1：ready = 后端存活 且 addon 握手健康）
+  const blenderOkNow = String(docKind) === 'ok';
+  ok('判据 11 · /host/ready 与 /doctor 结论一致（ready === doctor.kind==="ok"）',
+    !!rj && rj.ready === blenderOkNow, { ready: rj && rj.ready, doctorKind: docKind });
+  if (rj && rj.ready === false) {
+    ok('判据 11 · ready:false 时 reason 非空（§7.1）', typeof rj.reason === 'string' && rj.reason.length > 0, rj.reason);
+  } else {
+    ok('判据 11 · ready:true 时 reason 为 null（§7.1）', !!rj && rj.reason === null, rj && rj.reason);
+  }
+
+  // ═══ 判据 12–15 需要 Blender + 无人在用的点选通道 ════════════════════════
+  const needBlender = [
+    ['12', '需要帧与真实 pick'], ['13', '需要帧与真实 pick'], ['14', '需要帧与真实 pick'], ['15', '需要帧与真实 pick'],
+  ];
+  if (!(rj && rj.ready === true)) {
+    for (const [n, why] of needBlender) doSkip('判据 ' + n, 'ready=false（' + JSON.stringify(rj && rj.reason) + '）：' + why);
+    return;
+  }
+  const pre = jbody(await req('GET', '/host/pick/request', { timeout: 8000 }));
+  if (pre && pre.ok === true && pre.request) {
+    for (const [n, why] of needBlender) {
+      doSkip('判据 ' + n, '已有 pending 点选请求（requestId=' + JSON.stringify(pre.request.requestId)
+        + '，可能是真人/模型正在用）—— 全局至多一个 pending，测试不抢占。' + why);
+    }
+    return;
+  }
+
+  const created = [];   // 本测试创建的请求，收尾统一 cancel
+  async function createRequest(prompt, timeoutS) {
+    const r = await req('POST', '/host/pick/request', { json: { prompt, timeout_s: timeoutS }, timeout: 15000 });
+    show(r, 'POST /host/pick/request ' + JSON.stringify({ prompt, timeout_s: timeoutS }));
+    const j = jbody(r);
+    if (j && j.ok === true && j.request && j.request.requestId) created.push(j.request.requestId);
+    return { rec: r, body: j, id: j && j.request ? j.request.requestId : null, request: j && j.request };
+  }
+  async function resultOf(id) {
+    const r = await req('GET', '/host/pick/result?requestId=' + encodeURIComponent(id), { timeout: 15000 });
+    return { rec: r, body: jbody(r) };
+  }
+  async function answerOf(id, seq, x, y) {
+    const r = await req('POST', '/host/pick/answer', { json: { requestId: id, seq, x, y }, timeout: CAPTURE_TIMEOUT });
+    return { rec: r, body: jbody(r) };
+  }
+  /**
+   * 拍一帧并用普通 `/host/view/pick` 探点（**不消耗请求状态**）。
+   * 找得到命中点 → `{hit:true, x, y, name, seq}`；找不到 → 仍返回 `{hit:false, x:0.5, y:0.5, name:null, seq}`。
+   *
+   * 为什么要兜底：视口对着空处是**用户的正常状态**，而 §7.2 的 `pending → answered` 状态机
+   * 在"点空处"时同样成立（`answered` + `object:null` = 用户明确表示"没有"）。
+   * 若因"没命中点"整条 SKIP，就等于把最容易出 bug 的状态机一起放过了。
+   * 只有"命中对象名"这一类断言才真的需要视口里有物体。
+   */
+  async function captureAndProbe(tag) {
+    const cap = await req('POST', '/host/view/capture', { json: { auto: false }, timeout: CAPTURE_TIMEOUT });
+    const c = jbody(cap);
+    if (!c || c.ok !== true || !Number.isInteger(c.seq)) return null;
+    const pts = [[0.5, 0.5]];
+    for (const y of [0.3, 0.5, 0.7]) for (const x of [0.3, 0.5, 0.7]) pts.push([x, y]);
+    for (const y of [0.1, 0.9]) for (const x of [0.1, 0.9]) pts.push([x, y]);
+    for (const [x, y] of pts) {
+      const r = await req('POST', '/host/view/pick', { json: { seq: c.seq, x, y }, timeout: CAPTURE_TIMEOUT });
+      const j = jbody(r);
+      if (j && j.ok === true && j.object && j.object.name) {
+        console.log('      · ' + tag + ' 探测到命中点 (' + x + ',' + y + ') → ' + JSON.stringify(j.object.name) + '（seq=' + c.seq + '）');
+        return { hit: true, x, y, name: j.object.name, seq: c.seq };
+      }
+    }
+    console.log('      · ' + tag + ' 中心 + 5x5 网格内无命中点 → 走"空处应答"路径（状态机照样能验，只是验不了"命中对象名"）');
+    return { hit: false, x: 0.5, y: 0.5, name: null, seq: c.seq };
+  }
+
+  try {
+    // ── 判据 12 · request → pending → answer → answered ─────────────────────
+    console.log('');
+    console.log('[判据 12] POST /host/pick/request → pending → answer → answered');
+    const p12 = await captureAndProbe('判据 12');
+    if (!p12) {
+      doSkip('判据 12', '捕获失败（拿不到可用 seq），无法走请求链路');
+    } else {
+      const c12 = await createRequest('自检：请点一下你要改的物体', 120);
+      ok('判据 12 · request → 200 且回 requestId', c12.rec.ok && c12.rec.status === 200 && !!c12.id, c12.body);
+      ok('判据 12 · request 形状合 §7.2（prompt/created_at/expires_at）',
+        !!c12.request && typeof c12.request.prompt === 'string' && typeof c12.request.created_at === 'number'
+          && typeof c12.request.expires_at === 'number' && c12.request.expires_at > c12.request.created_at, c12.request);
+      if (c12.id) {
+        const r12a = await resultOf(c12.id);
+        show(r12a.rec, 'pick/result（刚创建）');
+        ok('判据 12 · 刚创建 → state === "pending"', !!r12a.body && r12a.body.state === 'pending', r12a.body);
+
+        const panel12 = await req('GET', '/host/pick/request', { timeout: 8000 });
+        show(panel12, 'GET /host/pick/request（面板视角）');
+        const pj12 = jbody(panel12);
+        ok('判据 12 · 面板能读到同一个 pending 请求', !!pj12 && pj12.ok === true && !!pj12.request && pj12.request.requestId === c12.id, pj12);
+
+        const a12 = await answerOf(c12.id, p12.seq, p12.x, p12.y);
+        show(a12.rec, p12.hit ? 'pick/answer（命中点）' : 'pick/answer（空处）');
+        ok('判据 12 · answer → ok:true + state:"answered"',
+          !!a12.body && a12.body.ok === true && a12.body.state === 'answered', a12.body);
+        if (p12.hit) {
+          ok('判据 12 · answered 的 object.name 是预期对象（' + JSON.stringify(p12.name) + '）',
+            !!a12.body && !!a12.body.object && a12.body.object.name === p12.name, a12.body && a12.body.object);
+        } else {
+          ok('判据 12 · 空处应答 → answered + object:null（§7.2 空处行 = 用户明确表示"没有"）',
+            !!a12.body && a12.body.object === null, a12.body);
+          doSkip('判据 12 · "object.name 是预期对象"', '视口里没有物体（中心 + 5x5 全空）⇒ 无法验证命中对象名；把视口对准一个物体再重跑');
+        }
+
+        const r12b = await resultOf(c12.id);
+        show(r12b.rec, 'pick/result（应答后）');
+        ok('判据 12 · result 变 answered（终态落库）', !!r12b.body && r12b.body.state === 'answered', r12b.body);
+
+        // 附加（§7.2）：命中路径走过之后，再补一条"空处应答"，把两条分支都覆盖到
+        if (p12.hit) {
+          const c12b = await createRequest('自检：点空处', 120);
+          if (c12b.id) {
+            const empty = await req('POST', '/host/view/pick', { json: { seq: p12.seq, x: 0.01, y: 0.01 }, timeout: CAPTURE_TIMEOUT });
+            const ej = jbody(empty);
+            if (ej && ej.ok === true && ej.object === null) {
+              const a12b = await answerOf(c12b.id, p12.seq, 0.01, 0.01);
+              show(a12b.rec, 'pick/answer（空处）');
+              ok('附加 §7.2 · 点空处 → answered + object:null',
+                !!a12b.body && a12b.body.ok === true && a12b.body.state === 'answered' && a12b.body.object === null, a12b.body);
+            } else {
+              console.log('      · (0.01,0.01) 不是空处（object=' + JSON.stringify(ej && ej.object) + '），跳过"空处应答"附加断言');
+            }
+          }
+        }
+      }
+    }
+
+    // ── 判据 13 · 错配后请求仍 pending，改回后重答成功（最关键）──────────────
+    console.log('');
+    console.log('[判据 13] 错配 → answer 回 state:"pending" + scene_mismatch（请求不结束）→ 改回后重答 → answered');
+    if (NO_MUTATE) {
+      doSkip('判据 13', 'DSH_HOST_TEST_NO_MUTATE=1 → 不临时改场景名；手测：改名后 answer 应回 state:"pending"+scene_mismatch');
+    } else {
+      const latest13 = jbody(await req('GET', '/host/view/latest', { timeout: 8000 }));
+      const frameScene = latest13 && latest13.scene ? String(latest13.scene) : null;
+      if (!frameScene) {
+        doSkip('判据 13', '当前帧没有场景名（scene=null），无法构造错配');
+      } else {
+        // 错配判定发生在**射线投射之前**（§1.5/§7.2 同一条 pick 逻辑）⇒ 不需要"视口里有物体"也能验。
+        const p13 = await captureAndProbe('判据 13');
+        if (!p13) {
+          doSkip('判据 13', '捕获失败（拿不到可用 seq）');
+        } else {
+          const c13 = await createRequest('自检：错配后仍 pending', 120);
+          if (!c13.id) {
+            doSkip('判据 13', '创建请求失败：' + JSON.stringify(c13.body));
+          } else {
+            const tmp13 = frameScene + '.dshselftest';
+            let renamed = false;
+            let restored = false;
+            try {
+              console.log('      · 为构造错配，临时把场景名 ' + JSON.stringify(frameScene) + ' → ' + JSON.stringify(tmp13));
+              const ren = await req('POST', '/act', { json: actBody('import bpy\ns = bpy.context.scene\ns.name = ' + JSON.stringify(tmp13) + '\nprint("DSH_RENAMED " + s.name)\n'), timeout: 40000 });
+              show(ren, 'POST /act 改名');
+              const rj13 = jbody(ren);
+              if (ren.status === 409) {
+                doSkip('判据 13', '写通道被别的会话持有（409 leased，holder=' + JSON.stringify(rj13 && rj13.holder) + '）—— 不夺租约');
+              } else {
+                renamed = !!(rj13 && rj13.ok === true && String(rj13.stdout || '').includes('DSH_RENAMED ' + tmp13));
+                if (!renamed) {
+                  doSkip('判据 13', '无法构造错配：/act 未把场景名改成 ' + JSON.stringify(tmp13) + '（回执 '
+                    + (ren.ok ? JSON.stringify(rj13).slice(0, 200) : ren.err) + '）');
+                } else if ((await currentSceneName()) !== tmp13) {
+                  doSkip('判据 13', '并发改名：改名后读到的当前场景名不是本测试设的 ' + JSON.stringify(tmp13)
+                    + '（多半是别的会话在同跑同一个探针）—— 环境噪声，不是服务端缺陷');
+                } else {
+                  const a13 = await answerOf(c13.id, p13.seq, p13.x, p13.y);
+                  show(a13.rec, 'pick/answer（场景已改名 → 应错配）');
+                  ok('判据 13 · 错配 → ok:false + state:"pending" + error:"scene_mismatch"',
+                    !!a13.body && a13.body.ok === false && a13.body.state === 'pending' && a13.body.error === 'scene_mismatch', a13.body);
+                  if (a13.body && a13.body.error === 'scene_mismatch') {
+                    ok('判据 13 · expected/current 如实回带',
+                      a13.body.expected === frameScene && a13.body.current === tmp13,
+                      { expected: a13.body.expected, current: a13.body.current, want: frameScene });
+                  }
+                  const r13 = await resultOf(c13.id);
+                  show(r13.rec, 'pick/result（错配之后 —— 必须仍 pending）');
+                  ok('判据 13 · **请求不结束**：错配后 result 仍是 "pending"',
+                    !!r13.body && r13.body.state === 'pending', r13.body);
+
+                  // 改回场景名 → 刷新后重试（§7.2 的"让用户刷新后重试"）→ 重答
+                  const back = await req('POST', '/act', { json: actBody('import bpy\ns = bpy.context.scene\ns.name = ' + JSON.stringify(frameScene) + '\nprint("DSH_RESTORED " + s.name)\n'), timeout: 40000 });
+                  show(back, 'POST /act 改回');
+                  const bj13 = jbody(back);
+                  restored = !!(bj13 && bj13.ok === true && String(bj13.stdout || '').includes('DSH_RESTORED ' + frameScene));
+                  ok('判据 13 · 场景名已改回', restored, bj13 ? { ok: bj13.ok, stdout: String(bj13.stdout || '').slice(0, 160) } : null);
+                  if (restored) {
+                    const p13b = await captureAndProbe('判据 13 重答');
+                    if (!p13b) {
+                      doSkip('判据 13 · 改回后重答', '重拍失败（拿不到可用 seq）');
+                    } else if ((await currentSceneName()) !== frameScene) {
+                      doSkip('判据 13 · 改回后重答', '并发改名：改回后读到的当前场景名不是 ' + JSON.stringify(frameScene)
+                        + '（别的会话在同跑）—— 环境噪声');
+                    } else {
+                      const a13b = await answerOf(c13.id, p13b.seq, p13b.x, p13b.y);
+                      show(a13b.rec, 'pick/answer（改回后重答）');
+                      ok('判据 13 · 改回后重答 → answered',
+                        !!a13b.body && a13b.body.ok === true && a13b.body.state === 'answered', a13b.body);
+                      const r13b = await resultOf(c13.id);
+                      show(r13b.rec, 'pick/result（重答后）');
+                      ok('判据 13 · result 变 answered', !!r13b.body && r13b.body.state === 'answered', r13b.body);
+                    }
+                  }
+                }
+              }
+            } finally {
+              if (renamed && !restored) {
+                const b = await req('POST', '/act', { json: actBody('import bpy\ns = bpy.context.scene\ns.name = ' + JSON.stringify(frameScene) + '\nprint("DSH_RESTORED " + s.name)\n'), timeout: 40000 });
+                const bj = jbody(b);
+                const okb = !!(bj && bj.ok === true && String(bj.stdout || '').includes('DSH_RESTORED ' + frameScene));
+                ok('判据 13 · 场景名最终还原（不留副作用）', okb, bj ? { ok: bj.ok, stdout: String(bj.stdout || '').slice(0, 160) } : null);
+                if (!okb) console.log('      !!! 手工处置：把 Blender 当前场景名改回 ' + JSON.stringify(frameScene));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ── 判据 14 · timeout_s=5 → expired（惰性判定）─────────────────────────
+    console.log('');
+    console.log('[判据 14] timeout_s=5 → 约 5 s 后 result 变 expired');
+    {
+      const c14 = await createRequest('自检：超时', 5);
+      if (!c14.id) {
+        doSkip('判据 14', '创建请求失败：' + JSON.stringify(c14.body));
+      } else {
+        const span = c14.request ? c14.request.expires_at - c14.request.created_at : null;
+        ok('判据 14 · timeout_s=5 生效（expires_at - created_at ≈ 5）',
+          typeof span === 'number' && Math.abs(span - 5) < 0.75, { span, request: c14.request });
+        const t0 = Date.now();
+        let state14 = null;
+        while (Date.now() - t0 < 12000) {
+          await new Promise((r) => setTimeout(r, 700));
+          const rr = await resultOf(c14.id);
+          state14 = rr.body && rr.body.state;
+          if (state14 && state14 !== 'pending') { console.log('      · ' + Math.round((Date.now() - t0) / 100) / 10 + ' s 后 result = ' + JSON.stringify(state14)); break; }
+        }
+        ok('判据 14 · 超时后 result === "expired"', state14 === 'expired', { state: state14, waitedMs: Date.now() - t0 });
+        const panel14 = await req('GET', '/host/pick/request', { timeout: 8000 });
+        const p14 = jbody(panel14);
+        show(panel14, 'GET /host/pick/request（过期后）');
+        ok('判据 14 · 过期后面板读到 null（§7.2 先判过期再回 null）', !!p14 && p14.ok === true && p14.request === null, p14);
+      }
+      // 附加：timeout_s 夹到 [5,600]
+      const c14lo = await createRequest('自检：夹取下界', 1);
+      if (c14lo.id) {
+        const s = c14lo.request.expires_at - c14lo.request.created_at;
+        ok('附加 §7.2 · timeout_s=1 夹到下界 5', Math.abs(s - 5) < 0.75, { span: s });
+        await req('POST', '/host/pick/cancel', { json: { requestId: c14lo.id, reason: 'selftest' }, timeout: 8000 });
+      }
+      const c14hi = await createRequest('自检：夹取上界', 9999);
+      if (c14hi.id) {
+        const s = c14hi.request.expires_at - c14hi.request.created_at;
+        ok('附加 §7.2 · timeout_s=9999 夹到上界 600', Math.abs(s - 600) < 2, { span: s });
+        const canc = await req('POST', '/host/pick/cancel', { json: { requestId: c14hi.id, reason: 'selftest' }, timeout: 8000 });
+        show(canc, 'pick/cancel（清理）');
+        const cj = jbody(canc);
+        ok('附加 §7.2 · cancel 回 state:"cancelled"', !!cj && cj.ok === true && cj.state === 'cancelled', cj);
+      }
+    }
+
+    // ── 判据 15 · 新请求把旧的置 cancelled（reason:"superseded"）────────────
+    console.log('');
+    console.log('[判据 15] 新请求把旧请求置 cancelled / superseded');
+    {
+      const cA = await createRequest('自检：旧请求 A', 120);
+      const cB = await createRequest('自检：新请求 B', 120);
+      if (!cA.id || !cB.id) {
+        doSkip('判据 15', '创建请求失败：A=' + JSON.stringify(cA.body) + ' B=' + JSON.stringify(cB.body));
+      } else {
+        const rA = await resultOf(cA.id);
+        show(rA.rec, 'pick/result（旧请求 A，应已 cancelled）');
+        ok('判据 15 · 旧请求被置 cancelled', !!rA.body && rA.body.state === 'cancelled', rA.body);
+        // 契约没冻结 reason 落在哪个字段（result 的冻结字段是 ok/state/object/error）→ 用子串检查，不钉字段名
+        ok('判据 15 · 回执里带 reason "superseded"',
+          JSON.stringify(rA.body || {}).includes('superseded'), rA.body);
+        const rB = await resultOf(cB.id);
+        show(rB.rec, 'pick/result（新请求 B，应 pending）');
+        ok('判据 15 · 新请求 B 仍是 pending', !!rB.body && rB.body.state === 'pending', rB.body);
+        const panel15 = await req('GET', '/host/pick/request', { timeout: 8000 });
+        const p15 = jbody(panel15);
+        ok('判据 15 · 面板只看到 B（全局至多一个 pending）', !!p15 && !!p15.request && p15.request.requestId === cB.id, p15);
+      }
+    }
+  } finally {
+    // 收尾：把本测试创建的、仍 pending 的请求 cancel 掉（幂等，已结束也回 200）
+    const last15 = jbody(await req('GET', '/host/pick/request', { timeout: 8000 }));
+    if (last15 && last15.ok === true && last15.request && created.includes(last15.request.requestId)) {
+      const c = await req('POST', '/host/pick/cancel', { json: { requestId: last15.request.requestId, reason: 'selftest-cleanup' }, timeout: 8000 });
+      show(c, 'pick/cancel（收尾清理）');
+    }
+    const stillPending = jbody(await req('GET', '/host/pick/request', { timeout: 8000 }));
+    ok('§7 收尾 · 测试结束后不留 pending 点选请求', !!stillPending && stillPending.request === null,
+      stillPending && stillPending.request);
+  }
+}
 
 function finish() {
   console.log('');

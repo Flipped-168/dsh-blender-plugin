@@ -1,5 +1,63 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v1.2.0（2026-10-16）—— 新：右侧栏视口面板（**通道可用才出现**）· 模型请用户点选（`blender_rt_pick`）
+
+**来源**：用户裁决 —— ① 面板不该常驻（不建模时别占地方），改成"启用了才出现"；② 模型要能主动问"是哪一个，点一下"。
+
+### 新 · 面板搬到右侧栏，并且只在 Blender 通道可用时出现
+
+- **座位**：从 `conversation.view` 改为**右侧栏标签页**（`sidebar.right.pane.tab`，keyed/session 槽位）
+- **门控**：新增**便宜的就绪端点** `GET /host/ready`（客户端每 **2 s** 轮询它）。`ready:true` 才注册 tab 类型与主体
+  —— 两阶段都包在 `ctx.effect` 里 ⇒ **注销即消失**；转 `false` 就 dispose 并关掉已开的标签页
+- **自动开页**：`false→true` 边沿自动 `openTab`，**按会话记账**（同会话反复翻转只开一次；用户手动关掉后不反复弹）
+- **降级**：宿主没有 `sidebarRight`（旧版本）→ 退回 `conversation.view` 并在面板里说明
+
+### 新 · 模型请用户点选（第 16 个工具 `blender_rt_pick`）
+
+- 后端五条路由：`POST/GET /host/pick/request`、`POST /host/pick/answer`、`POST /host/pick/cancel`、`GET /host/pick/result`
+- 全局**至多一个** pending；新请求把旧的置 `cancelled`/`superseded`；`expired` **惰性判定**；结束态留最近 8 条
+- **`answer` 与 `/host/view/pick` 共用同一份实现**（抽出 `hostPickCore()`，避免两份拷贝日后漂移）
+- **错配不结束请求**：`scene_mismatch` / `unknown_seq` → 请求**仍 pending**（用户刷新后重试）；
+  命中或点空处 → `answered`（**空处 = 用户明确表示"没有"**）
+- 工具**阻塞**等待：400 ms 轮询，命中即返回对象名（`bpy.data.objects[...]` 可直接用）；
+  **响应宿主取消**（abort → `cancel(reason:"aborted")` 后快速退出）；`isConcurrencySafe:false`（全局单请求）
+
+### 修 · 两处真 bug
+
+1. **`/host/ready` 第一版 36.7 ms**（比 `/health` 慢 14 倍）—— 根因**不在路由逻辑**，而在 `engine.mjs` 的
+   **轨迹包装器**：它没进 `TRAJ_SKIP`，于是**每次轮询都 `fs.appendFileSync` 到 drvfs 挂载**（本机一次同步写 ~35 ms）。
+   加进 `TRAJ_SKIP` 后 **36.7 ms → 1.19 ms**。⚠️ 对"面板每 2 s 轮询"的端点这是致命的（又慢又刷爆台账）；
+   以后再加高频只读端点要一并注意。
+2. **`tests/discoverability_selftest.mjs` 重复计数**：它按**数组**取工具名，而 `blender_viewport` 在"降级占位"
+   分支里被**再声明一次**（占位工具复用既有名，不是新能力）⇒ 被算两遍（多计 ~175 字符），把 12000 的描述预算门
+   顶到上限。`tests/capability_lock.mjs:26-29` 早就为**同一原因**按集合去重，该测试漏了 —— 现按同一口径去重。
+   **合计门保持 12000 未放宽**（16 个工具实测 **11 949**）；逐工具 <1600 的硬门自始至终未动。
+
+### 能力面
+
+- 模型侧工具 **15 → 16**（`blender_rt_pick`）；`tests/capability.lock.json` 用 `--update` **显式记录**
+  （28 family / 186 op 未变）
+- `runtime/classes.mjs` 的 `MODEL_FACING_TOOLS` 同步补上 —— 它被 `guidance_selftest` 与能力锁**逐名对拍**，
+  且该清单进 `blender_rt_plan(op="catalog", args={handoff:true})` 的**交接块**：漏了会让子代理**不知道有这个工具**；
+  那处硬编码的"模型侧 15 个工具"改为按数组长度生成（防同类漂移）
+
+### 验收
+
+- `npm test` **exit 0**
+- `/host` 判据 1–8 + 11–15 独立自检 **99 通过 / 0 失败 / 0 跳过**；客户端 bundle 自检 **40 / 0**
+- 客户端探针 **218 / 0**（门控 ①–⑦ + 点选 UI 全绿）
+- 判据 11：`/host/ready` 中位数 **1 ms** vs `/doctor` 198–410 ms（**162–400×**），且 `metrics.calls` **增量 0**（不碰 Blender）
+- 描述预算：16 工具 **11 949 / 12 000**
+
+### 未证实项（照实登记，见契约 §7.8 与操作教程 §10.8）
+
+① 右侧栏**真实渲染形态**（`kind` 是否真变 tab、`guide` 是否真渲染成引导项）；② `useTabInfo()` 真实返回
+`{sidebar,panel,tab}`；③ `dispose()` 是否真移除窗口、`openTab` 未注册时是否真 throw；④ "面板不可见时不轮询"
+是否真省资源；⑤ **已知能力边界（非缺陷）**：降级座位（`conversation.view`）拿不到 `tab.visible`，故降级路径下
+§7.4 的轮询会一直跑；⑥ **必须重启 DSH 才生效** —— "面板只在通道可用时出现"的最终验证只能由人重启后做。
+
+---
+
 ## v1.1.0（2026-10-16）—— 新：宿主集成（视口面板 · 点击入上下文 · `@` 提及）；修：文件级 `restore` 的 filepath 语义
 
 ### 新 · 宿主集成：把 Blender 视口搬进 DSH 对话界面

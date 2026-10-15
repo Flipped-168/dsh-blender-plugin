@@ -174,12 +174,17 @@ function schemaChars(name) {
   const seg = srcTs.slice(d0, p1)
   return (seg.match(/'((?:[^'\\]|\\.)*)'/g) || []).join('').length
 }
-const TOOL_NAMES = (srcTs.match(/name: '(blender_rt_[a-z_]+|blender_viewport)'/g) || [])
-  .map((x) => x.slice(7, -1))
+// v1.2 修：与 tests/capability_lock.mjs **同一口径** —— 同一个 tool 名会在"降级占位"分支里
+// **再声明一次**（占位工具复用既有名，不是新能力）。这里此前漏了去重，`blender_viewport`
+// 被算了两遍（多计 ~175 字符），把合计门顶到上限附近。按**集合**去重后才是真实预算。
+const TOOL_NAMES = [...new Set((srcTs.match(/name: '(blender_rt_[a-z_]+|blender_viewport)'/g) || [])
+  .map((x) => x.slice(7, -1)))]
 const rows = TOOL_NAMES.map((n) => [n, schemaChars(n)])
 const total = rows.reduce((a, b) => a + b[1], 0)
 const worst = rows.slice().sort((a, b) => b[1] - a[1])[0]
-ok('15 个工具 schema 合计 <= 12000 字符（v0.9.4 基线 17,147）', total <= 12000, String(total))
+// v1.2：新增第 16 个工具 `blender_rt_pick`（用户明确要求"模型请用户点选"）。**合计门保持 12000 不动**
+// —— 新工具压到 217 字符，去重后总预算 11949 仍在门内。逐工具 <1600 的硬门同样未动。
+ok('16 个工具 schema 合计 <= 12000 字符（v0.9.4 基线 17,147；v1.2 加工具后仍守 12000）', total <= 12000, String(total))
 ok('单工具 schema 都 < 1600 字符（v0.9.4 最大 4,020）', worst[1] < 1600, worst[0] + '=' + String(worst[1]))
 ok('rt_headless 已压到 < 1600 字符（原 4,020）', (rows.find((b) => b[0] === 'blender_rt_headless') || [0, 1e9])[1] < 1600)
 ok('重工具都在 catalog 里有细节条目', ['rt_headless', 'rt_job', 'rt_worker', 'rt_see', 'rt_loop', 'viewport'].every((k) => catalogPayload({ tool: k }).ok === true))

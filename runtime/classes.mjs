@@ -130,9 +130,10 @@ export function classGuideStats() {
   return { classes: MODELING_CLASS_GUIDE.length, keys: MODELING_CLASS_GUIDE.map((r) => r.c), missing };
 }
 
-/** 模型侧工具清单（15 个）—— 与 capability.lock.json 的 tools 逐名对拍（guidance_selftest 守） */
+/** 模型侧工具清单（16 个）—— 与 capability.lock.json 的 tools 逐名对拍（guidance_selftest 守） */
 export const MODEL_FACING_TOOLS = [
   "blender_rt_see", "blender_rt_do", "blender_rt_watch", "blender_rt_loop",
+  "blender_rt_pick",
   "blender_rt_cmd", "blender_rt_commands", "blender_rt_perf", "blender_rt_opt",
   "blender_rt_headless", "blender_rt_plan", "blender_rt_worker", "blender_rt_txn",
   "blender_rt_preset", "blender_rt_job", "blender_viewport",
@@ -150,7 +151,7 @@ export function renderHandoff() {
   L.push("# Blender 工具指路（子代理必读 · 30 秒）");
   L.push("");
   L.push("**别猜工具**：先 `blender_rt_plan(op=\"catalog\")` 看 28 个能力族；按建模类型查 `args={classes:true}`（或单类 `args={class:\"recon\"}`）。");
-  L.push("模型侧 15 个工具：" + MODEL_FACING_TOOLS.map((t) => "`" + t + "`").join(" "));
+  L.push("模型侧 " + String(MODEL_FACING_TOOLS.length) + " 个工具：" + MODEL_FACING_TOOLS.map((t) => "`" + t + "`").join(" "));
   L.push("");
   L.push("## 12 类建模：第一步 | 禁止自造");
   L.push("");

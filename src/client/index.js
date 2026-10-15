@@ -48,6 +48,18 @@ window.__ModuleLoader__.load({
 		var AUTO_CAPTURE_MAX_STUCK = 3;
 		/** 截图最长边；与手动刷新同一口径（契约 §1.4 夹到 [200,2000]）。 */
 		var AUTO_CAPTURE_MAX_SIZE = 1000;
+		/** 门控轮询间隔：`GET /host/ready`（契约 §7.3.1，便宜可常开）。 */
+		var READY_POLL_MS = 2000;
+		/** 面板内轮询间隔：`GET /host/pick/request`（契约 §7.4）。 */
+		var PICK_POLL_MS = 2000;
+		/** 右侧栏 tab 类型定义 id（= 包名；也是 body 注册的 key，契约 §7.3.2）。 */
+		var TAB_ID = "@dsh-external/dsh-blender-plugin";
+		/** 右侧栏 tab 的 kind（`openTab` 用它寻址，契约 §7.3.2）。 */
+		var TAB_KIND = "blender-viewport";
+		/** 「已应答」横幅停留时长（契约 §7.4：2 s 后消失）。 */
+		var PICK_DONE_MS = 2000;
+		/** 降级座位（conversation.view）的注册 id。 */
+		var FALLBACK_VIEW_ID = TAB_ID + "-viewport";
 
 		/** apply() 期间由 ctx 配置解析出的地址；backend() 在它之上叠 localStorage。 */
 		var configuredBackend = DEFAULT_BACKEND;
@@ -179,6 +191,23 @@ window.__ModuleLoader__.load({
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(payload)
 			});
+		}
+
+		/**
+		 * `GET /host/ready` → 响应体或 null（契约 §7.1）。
+		 * **门控的唯一依据**；取不到/未就绪一律当作"不可用"（静默降级）。
+		 */
+		async function fetchReady() {
+			var r = await fetchJSON(backend() + "/host/ready");
+			if (r.ok && r.body && r.body.ok === true) return r.body;
+			return null;
+		}
+
+		/** `GET /host/pick/request` → pending 请求或 null（契约 §7.2）。失败一律当 null。 */
+		async function fetchPickRequest() {
+			var r = await fetchJSON(backend() + "/host/pick/request");
+			if (r.ok && r.body && r.body.ok === true) return r.body.request || null;
+			return null;
 		}
 
 		/** 面板上那行"后端不可达"状态文案。 */
@@ -513,7 +542,38 @@ window.__ModuleLoader__.load({
 		};
 		//#endregion
 
-		//#region 面板（conversation.view）
+		//#region 点选请求（契约 §7.4：阻塞式交互的客户端半边）
+		/**
+		 * 把 `POST /host/pick/answer` 的回执映射成横幅文案与后续动作（**纯函数**，可离线单测）。
+		 *
+		 * 契约 §7.2 的状态机：
+		 *   - `ok:true, state:"answered"`（命中或空处）→ 请求结束，横幅转「已应答」
+		 *   - `ok:false, state:"pending"` + `scene_mismatch`/`unknown_seq` → **仍 pending**，
+		 *     横幅提示「刷新后再点」，继续等用户
+		 *   - `ok:false, error:"no_such_request"` → 请求已结束，横幅收起
+		 *
+		 * @returns {{kind:'answered'|'retry'|'gone', text:string, name:(string|null)}}
+		 */
+		function answerOutcome(body) {
+			if (!body || body.ok !== true) {
+				var e = body && body.error ? String(body.error) : "unknown";
+				if (e === "no_such_request") {
+					return { kind: "gone", text: "该点选请求已结束（no_such_request）", name: null };
+				}
+				return { kind: "retry", text: "刷新后再点（" + e + "）", name: null };
+			}
+			if (body.state !== "answered") {
+				return { kind: "retry", text: "刷新后再点（" + String(body.state || "pending") + "）", name: null };
+			}
+			var obj = body.object;
+			if (obj && obj.name) {
+				return { kind: "answered", text: "已应答：" + obj.name + "（已返回给模型）", name: String(obj.name) };
+			}
+			return { kind: "answered", text: "已应答：空处（已返回给模型）", name: null };
+		}
+		//#endregion
+
+		//#region 面板（两个座位共用主体）
 		/** 面板内联样式（不引外部 CSS，避免污染全局）。 */
 		var UI = {
 			root: { display: "flex", flexDirection: "column", gap: "8px", padding: "10px 12px", minWidth: 0, fontSize: "12.5px", lineHeight: 1.5, color: "var(--dsw-alias-label-primary, #1d2129)" },
@@ -532,6 +592,10 @@ window.__ModuleLoader__.load({
 			chipIdle: { display: "inline-flex", alignItems: "center", gap: "6px", padding: "2px 8px", borderRadius: "999px", fontSize: "11.5px", background: "transparent", border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.28))", color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))" },
 			note: { fontSize: "11.5px", color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", wordBreak: "break-word" },
 			noteError: { fontSize: "11.5px", color: "#e03131", wordBreak: "break-word" },
+			banner: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "6px 8px", borderRadius: "8px", background: "rgba(255,159,10,.14)", border: "1px solid rgba(255,159,10,.45)" },
+			bannerOk: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "6px 8px", borderRadius: "8px", background: "rgba(52,199,89,.12)", border: "1px solid rgba(52,199,89,.45)" },
+			bannerText: { fontSize: "11.5px", fontWeight: 600, flex: "1 1 auto", minWidth: 0, wordBreak: "break-word" },
+			bannerMsg: { fontSize: "11px", flexBasis: "100%", color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,.9))", wordBreak: "break-word" },
 			foot: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }
 		};
 
@@ -543,10 +607,12 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 造面板组件。组件闭包里握着 root `ctx`（取 `ctx.conversation` 用）。
-		 * 每次 boot 只造一次 ⇒ 组件身份稳定。
+		 * 造面板**主体**组件（两个座位共用同一份实现）。
+		 * - 右侧栏座位：`sidebar.right.pane.tab`（`key = TAB_ID`），props 里带框架注入的 `useTabInfo`
+		 * - 降级座位：`conversation.view`（契约 §2.3 / §7.3.5）
+		 * 组件闭包里握着 root `ctx`（取 `ctx.conversation` 用）。每次 boot 只造一次 ⇒ 身份稳定。
 		 */
-		function makeViewportPanel(ctx) {
+		function makePanelBody(ctx) {
 			function BlenderViewportPanel(props) {
 				var p = props || {};
 				// sessionId 双通道：① 座位标准 props（ui-session BUILTIN_SOURCE 提供）
@@ -556,6 +622,11 @@ window.__ModuleLoader__.load({
 				//                    ② 备用 SessionInput（ctx.sessions.scope(sessionId) → actx.get("conversation").input.for(actx)）
 				var inputActions = p.inputActions || null;
 				var fallbackInput = p.blenderInput || null;
+				// 座位信息：右侧栏座位由 BlenderViewportPane 注入 __tabInfo / __seat
+				var seat = p.__seat === "sidebar" ? "sidebar" : "fallback";
+				var tabInfo = p.__tabInfo || null;
+				// 面板不可见时不轮询（契约 §7.4）：右侧栏读 tab.visible；降级座位无从得知 ⇒ 视为可见
+				var tabVisible = seat === "sidebar" && tabInfo && tabInfo.tab ? tabInfo.tab.visible !== false : true;
 
 				var viewState = React.useState(INITIAL_VIEW);
 				var view = viewState[0];
@@ -582,6 +653,14 @@ window.__ModuleLoader__.load({
 				var pickingRef = React.useRef(false);
 				// 自动重拍账本：{ lastAt: 上次发起时刻, lastSeq: 已为哪一帧拍过, stuck: 连续无进展次数 }
 				var autoRef = React.useRef({ lastAt: 0, lastSeq: -1, stuck: 0 });
+				// §7.4 点选请求：pending 请求 + 横幅文案（无 pending 时走 §2.4 原路径）
+				var pickReqLive = React.useState(null);
+				var pickReq = pickReqLive[0];
+				var setPickReq = pickReqLive[1];
+				var pickMsgLive = React.useState(null);
+				var pickMsg = pickMsgLive[0];
+				var setPickMsg = pickMsgLive[1];
+				var pickDoneTimer = React.useRef(0);
 
 				/** 进入一次在飞请求（自动重拍 / 手动刷新 / pick / 加入消息 共用同一计数）。 */
 				function beginFlight() {
@@ -694,6 +773,61 @@ window.__ModuleLoader__.load({
 					};
 				}, []);
 
+				// ── §7.4 轮询 GET /host/pick/request（面板不可见时不轮询，省资源）──
+				React.useEffect(function () {
+					if (!tabVisible) return undefined;
+					var alive = true;
+					var timer = 0;
+					async function poll() {
+						var req = await fetchPickRequest();
+						if (!alive) return;
+						setPickReq(req);
+						timer = window.setTimeout(poll, PICK_POLL_MS);
+					}
+					poll();
+					return function () {
+						alive = false;
+						if (timer) window.clearTimeout(timer);
+					};
+				}, [tabVisible]);
+
+				// 卸载时清掉「已应答」横幅的自动隐藏定时器
+				React.useEffect(function () {
+					return function () {
+						if (pickDoneTimer.current) { window.clearTimeout(pickDoneTimer.current); pickDoneTimer.current = 0; }
+					};
+				}, []);
+
+				/** 显示横幅文案；autoHideMs>0 时到点自动消失（契约 §7.4：已应答 2 s 后消失）。 */
+				function showPickMsg(text, autoHideMs) {
+					setPickMsg({ text: text });
+					if (pickDoneTimer.current) { window.clearTimeout(pickDoneTimer.current); pickDoneTimer.current = 0; }
+					if (autoHideMs > 0) {
+						pickDoneTimer.current = window.setTimeout(function () {
+							pickDoneTimer.current = 0;
+							setPickMsg(null);
+						}, autoHideMs);
+					}
+				}
+
+				/** 「取消」→ POST /host/pick/cancel（契约 §7.4）。 */
+				async function onCancelPick() {
+					var req = pickReq;
+					if (!req || !req.requestId) return;
+					if (inflightRef.current > 0) return;
+					beginFlight();
+					var cr;
+					try {
+						// 行首不能是 await（bundle 纯度粗筛会当成顶层 await）→ 赋值形式
+						cr = await postJSON(backend() + "/host/pick/cancel", { requestId: req.requestId, reason: "user" });
+					} finally {
+						endFlight();
+					}
+					if (cr === undefined) { /* 静默：取消是尽力而为 */ }
+					setPickReq(null);
+					setPickMsg(null);
+				}
+
 				/** 手动刷新：让后端重拍一张（auto:false ⇒ source="user"）。与自动重拍互斥。 */
 				async function onCapture() {
 					if (inflightRef.current > 0) return;
@@ -732,6 +866,35 @@ window.__ModuleLoader__.load({
 					}
 					// pickingRef 让自动重拍在 pick 在飞期间闭嘴（task-4 要求 3）
 					pickingRef.current = true;
+					// §7.4：有 pending 点选请求 → 这一次点击走 answer（阻塞式交互），
+					// 不再走 §2.4 的"加入消息"路径
+					if (pickReq && pickReq.requestId) {
+						beginFlight();
+						var ar;
+						try {
+							ar = await postJSON(backend() + "/host/pick/answer", { requestId: pickReq.requestId, seq: view.seq, x: x, y: y });
+						} finally {
+							pickingRef.current = false;
+							endFlight();
+						}
+						var ab = ar && ar.body ? ar.body : null;
+						var outcome = answerOutcome(ab);
+						if (outcome.kind === "answered") {
+							var aobj = ab && ab.object ? ab.object : null;
+							setPickReq(null);
+							setSel(aobj);
+							setMark(aobj ? { x: x, y: y } : null);
+							setNote(null);
+							showPickMsg(outcome.text, PICK_DONE_MS);
+						} else if (outcome.kind === "gone") {
+							setPickReq(null);
+							showPickMsg(outcome.text, PICK_DONE_MS);
+						} else {
+							// 仍 pending（错配 / seq 未知）→ 保持等待，提示刷新后重试
+							showPickMsg(outcome.text, 0);
+						}
+						return;
+					}
 					beginFlight();
 					var r;
 					try {
@@ -789,9 +952,11 @@ window.__ModuleLoader__.load({
 				}
 
 				// ── 渲染 ──
-				var canAdd = view.seq > 0 && !!sessionId && !!(inputActions || fallbackInput) && !busy;
+				var pickPending = !!(pickReq && pickReq.requestId);
+				var canAdd = view.seq > 0 && !!sessionId && !!(inputActions || fallbackInput) && !busy && !pickPending;
 				var addHint = "";
-				if (!(view.seq > 0)) addHint = "还没有视口帧";
+				if (pickPending) addHint = "模型正在请求你点选 —— 先点画面（或「取消」）再加消息";
+				else if (!(view.seq > 0)) addHint = "还没有视口帧";
 				else if (!sessionId) addHint = "未取得 sessionId（该座位没有会话身份）—— 只能预览";
 				else if (!inputActions && !fallbackInput) addHint = "未取得 inputActions —— 只能预览";
 				// 降级可见化：拿不到 sessionId / inputActions 时把原因显示成一行状态
@@ -840,22 +1005,40 @@ window.__ModuleLoader__.load({
 					if (!view.pickable) metaBits.push("不可点选");
 				}
 
-				var kids = [
-					h("div", { key: "head", style: UI.head },
-						h("span", { key: "dot", style: Object.assign({}, UI.dot, { background: dotColor }) }),
-						h("span", { key: "title", style: UI.title }, "Blender 视口"),
-						h("span", { key: "spacer", style: UI.spacer }),
+				var kids = [];
+				// §7.4：顶部显著横幅（有 pending 请求 → 请求点选 + 取消；否则显示应答/重试结果）
+				if (pickPending) {
+					kids.push(h("div", { key: "pickreq", style: UI.banner },
+						h("div", { key: "t", style: UI.bannerText },
+							h("b", { key: "b" }, "模型请求你点选"),
+							"：" + String(pickReq.prompt || "请点一下你要改的物体")),
 						h("button", {
-							key: "capture",
+							key: "cancel",
 							type: "button",
 							style: UI.btn,
-							disabled: busy,
-							onClick: onCapture,
-							title: "让后端重新截一张（POST /host/view/capture）"
-						}, busy ? "…" : "刷新")
-					),
-					h("div", { key: "stage", style: UI.stage }, stageKids)
-				];
+							onClick: onCancelPick,
+							title: "取消这次点选请求（模型会收到「已取消」）"
+						}, "取消"),
+						pickMsg ? h("div", { key: "m", style: UI.bannerMsg }, pickMsg.text) : null
+					));
+				} else if (pickMsg) {
+					kids.push(h("div", { key: "pickmsg", style: UI.bannerOk },
+						h("div", { key: "t", style: UI.bannerText }, pickMsg.text)));
+				}
+				kids.push(h("div", { key: "head", style: UI.head },
+					h("span", { key: "dot", style: Object.assign({}, UI.dot, { background: dotColor }) }),
+					h("span", { key: "title", style: UI.title }, "Blender 视口"),
+					h("span", { key: "spacer", style: UI.spacer }),
+					h("button", {
+						key: "capture",
+						type: "button",
+						style: UI.btn,
+						disabled: busy,
+						onClick: onCapture,
+						title: "让后端重新截一张（POST /host/view/capture）"
+					}, busy ? "…" : "刷新")
+				));
+				kids.push(h("div", { key: "stage", style: UI.stage }, stageKids));
 
 				if (metaBits.length) kids.push(h("div", { key: "meta", style: UI.meta }, metaBits.join(" · ")));
 
@@ -888,10 +1071,185 @@ window.__ModuleLoader__.load({
 				if (note && note.text) {
 					kids.push(h("div", { key: "note", style: note.level === "error" ? UI.noteError : UI.note }, note.text));
 				}
+				// §7.3.5 降级说明：右侧栏不可用 → 已退回对话页签
+				if (seat === "fallback") {
+					kids.push(h("div", { key: "seatnote", style: UI.note }, "右侧栏不可用，已退回对话页签。"));
+				}
 
 				return h("div", { style: UI.root }, kids);
 			}
 			return BlenderViewportPanel;
+		}
+
+		/**
+		 * 右侧栏座位的包装：把框架注入的 `useTabInfo` 读出来，透传给共用主体。
+		 *
+		 * `useTabInfo` 由槽位 `sidebar.right.pane.tab` 的 inject face（`hooks.tabInfo`）
+		 * 合成 —— 契约 §7.3.6；类型见
+		 * `dsh-client-ui-sidebar-right/lib/types/client/contract/slots.d.ts:196-202`
+		 * （`UseSidebarRightTabInfo = () => SidebarRightTabInfo`）。
+		 */
+		function makeSidebarPane(PanelBody) {
+			function BlenderViewportPane(props) {
+				var useTabInfo = props && props.useTabInfo;
+				var tabInfo = null;
+				if (typeof useTabInfo === "function") {
+					try { tabInfo = useTabInfo(); } catch (e) { tabInfo = null; }
+				}
+				var merged = {};
+				for (var k in props) {
+					if (Object.prototype.hasOwnProperty.call(props, k)) merged[k] = props[k];
+				}
+				merged.__seat = "sidebar";
+				merged.__tabInfo = tabInfo;
+				return React.createElement(PanelBody, merged);
+			}
+			return BlenderViewportPane;
+		}
+		//#endregion
+
+		//#region 右侧栏门控（契约 §7.3："启用才出现"）
+		/**
+		 * 取 `sidebarRightTabs` / `sidebarRight` 两个服务。
+		 * 旧宿主没有它们 ⇒ `ok:false` ⇒ 走 §7.3.5 的 conversation.view 降级。
+		 * 服务名出处：`dsh-client-ui-sidebar-right/lib/client.js:9114-9115`
+		 * （`ctx.reflect.provide("sidebarRightTabs", tabs)` / `("sidebarRight", controller)`）。
+		 */
+		function sidebarRightServices(ctx) {
+			var tabs = null;
+			var right = null;
+			try { tabs = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRightTabs") : null; } catch (e) { tabs = null; }
+			try { right = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRight") : null; } catch (e) { right = null; }
+			var ok = !!(tabs && typeof tabs.register === "function" && right && typeof right.openTab === "function");
+			return { tabs: tabs, right: right, ok: ok };
+		}
+
+		/**
+		 * 就绪门控状态机（`ready` 由调用方喂进来 ⇒ **可离线单测**，不必起定时器）。
+		 *
+		 * - `ready===true` 且未注册 → 两阶段注册（类型 + 主体）；
+		 *   两个服务缺失 → 降级注册到 `conversation.view`（§7.3.5）
+		 * - `false→true` 边沿 → `openTab(TAB_KIND)`，**每个会话只自动开一次**（§7.3.3）
+		 * - `true→false` → `dispose()` 注销 + 关掉已开的本 kind 标签页（§7.3.4）
+		 *
+		 * @param ctx  cordis 客户端 ctx
+		 * @param opts {{ paneBody: Function, fallbackRegister: (() => Function)|null }}
+		 * @returns {{ applyReady:Function, dispose:Function, state:Function }}
+		 */
+		function createPaneGate(ctx, opts) {
+			var registered = null;      // { mode, dispose } | null
+			var mode = "idle";          // idle | sidebar | fallback
+			var lastReady = null;
+			var openedSessions = {};    // sessionId（或 "__no_session__"）→ 已自动开过
+
+			function disposeAll(list) {
+				for (var i = list.length - 1; i >= 0; i--) {
+					try { list[i](); } catch (e) { /* 注销失败不阻断 */ }
+				}
+			}
+
+			/** 当前在屏会话 id；读不到给 null（`openTab` 在没有会话时会 throw，先探再调）。 */
+			function mountedSessionId() {
+				try {
+					var right = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRight") : null;
+					if (right && right.mounted && typeof right.mounted.getSnapshot === "function") {
+						var sid = right.mounted.getSnapshot();
+						return sid === undefined ? null : sid;
+					}
+				} catch (e) { /* ignore */ }
+				return null;
+			}
+
+			/** 两阶段注册（契约 §7.3.2）；任一阶段失败都返回 null（调用方转降级）。 */
+			function registerSidebar() {
+				if (!sidebarRightServices(ctx).ok) return null;
+				var disposers = [];
+				try {
+					// ① 类型：静态声明，无运行时钩子；返回 disposer。
+					//    下面三处用**契约 §7.3.2 的冻结字面量**逐字写（id / kind / key / openTab 的 kind）——
+					//    tests/client_bundle_selftest.mjs 对它们做静态断言；TAB_ID/TAB_KIND 必须与之保持一致。
+					disposers.push(ctx.sidebarRightTabs.register({
+						id: "@dsh-external/dsh-blender-plugin",
+						kind: "blender-viewport",
+						title: function () { return "Blender 视口"; },
+						guide: [{ id: "viewport", title: "Blender 视口", description: "看 Blender 当前画面，点物体写进消息" }]
+					}));
+				} catch (e) {
+					return null;
+				}
+				try {
+					// ② 主体：等槽位声明（sidebar-right 在运行时声明 sidebar.right.pane.tab）
+					//    槽位是 keyed ⇒ 必须给 key（= 类型定义的 id，契约 §7.3.2 冻结字面量）
+					disposers.push(ctx.slots.inject("sidebar.right.pane.tab", function () {
+						return ctx.slots.register({ name: "sidebar.right.pane.tab", key: "@dsh-external/dsh-blender-plugin" }, opts.paneBody);
+					}));
+				} catch (e) {
+					disposeAll(disposers);
+					return null;
+				}
+				return { mode: "sidebar", dispose: function () { disposeAll(disposers); } };
+			}
+
+			/** 自动开一次；同一会话只开一次（用户手动关掉后不反复弹，§7.3.3）。 */
+			function openOnce() {
+				var sid = mountedSessionId();
+				var key = sid === null ? "__no_session__" : String(sid);
+				if (openedSessions[key] === true) return false;
+				openedSessions[key] = true;
+				// 契约 §7.3.3 的冻结字面量（静态断言要求逐字出现；TAB_KIND 必须与之保持一致）
+				try { ctx.sidebarRight.openTab("blender-viewport"); return true; } catch (e) { return false; }
+			}
+
+			/** 关掉本 kind 已开的标签页（否则注销类型后它们会显示"nothing can view this"）。 */
+			function closeOurTabs() {
+				var sid = mountedSessionId();
+				if (sid === null) return;
+				try {
+					var right = ctx.sidebarRight;
+					if (!right || typeof right.tabsIn !== "function" || typeof right.close !== "function") return;
+					var list = right.tabsIn(sid) || [];
+					for (var i = 0; i < list.length; i++) {
+						var t = list[i];
+						if (t && t.kind === TAB_KIND && t.id) {
+							try { right.close(t.id); } catch (e) { /* ignore */ }
+						}
+					}
+				} catch (e) { /* ignore */ }
+			}
+
+			function applyReady(ready) {
+				var isReady = ready === true;
+				var edge = lastReady !== isReady;
+				lastReady = isReady;
+				if (isReady) {
+					if (!registered) {
+						var r = registerSidebar();
+						if (r) {
+							registered = r;
+							mode = "sidebar";
+						} else if (typeof opts.fallbackRegister === "function") {
+							registered = { mode: "fallback", dispose: opts.fallbackRegister() };
+							mode = "fallback";
+						}
+					}
+					if (edge) openOnce();
+				} else {
+					if (registered) { registered.dispose(); registered = null; }
+					if (mode === "sidebar") closeOurTabs();
+					mode = "idle";
+				}
+			}
+
+			return {
+				applyReady: applyReady,
+				dispose: function () {
+					if (registered) { registered.dispose(); registered = null; }
+					mode = "idle";
+				},
+				state: function () {
+					return { mode: mode, registered: !!registered, lastReady: lastReady, openedSessions: openedSessions };
+				}
+			};
 		}
 		//#endregion
 
@@ -932,18 +1290,42 @@ window.__ModuleLoader__.load({
 			started = true;
 			configuredBackend = resolveConfiguredBackend(ctx);
 
-			// ① 视口面板 → conversation.view（list/session 槽位）
-			//    双参数正规写法：register(options, component)（契约 §2.3；
-			//    运行时见 dsh-client-ui-slots/lib/index.js:163,204）
-			ctx.slots.inject("conversation.view", function () {
-				return ctx.slots.register({
-					name: "conversation.view",
-					id: "@dsh-external/dsh-blender-plugin-viewport",
-					order: 40,
-					label: function () { return "Blender 视口"; },
-					inject: function (sessionId) { return sessionFallback(ctx, sessionId); }
-				}, makeViewportPanel(ctx));
-			});
+			var PanelBody = makePanelBody(ctx);
+			var PaneBody = makeSidebarPane(PanelBody);
+
+			// ① 就绪门控（§7.3）：轮询 GET /host/ready；ready===true 才注册右侧栏座位。
+			//    旧宿主（无 sidebarRightTabs/sidebarRight）→ 降级到 conversation.view（§7.3.5）。
+			ctx.effect(function () {
+				var gate = createPaneGate(ctx, {
+					paneBody: PaneBody,
+					fallbackRegister: function () {
+						// §2.3 降级座位：双参数正规写法 register(options, component)
+						return ctx.slots.inject("conversation.view", function () {
+							return ctx.slots.register({
+								name: "conversation.view",
+								id: FALLBACK_VIEW_ID,
+								order: 40,
+								label: function () { return "Blender 视口"; },
+								inject: function (sessionId) { return sessionFallback(ctx, sessionId); }
+							}, PanelBody);
+						});
+					}
+				});
+				var alive = true;
+				var timer = 0;
+				async function tick() {
+					var body = await fetchReady();
+					if (!alive) return;
+					gate.applyReady(!!(body && body.ready === true));
+					timer = window.setTimeout(tick, READY_POLL_MS);
+				}
+				tick();
+				return function () {
+					alive = false;
+					if (timer) window.clearTimeout(timer);
+					gate.dispose();
+				};
+			}, "@dsh-external/dsh-blender-plugin: /host/ready gate");
 
 			// ② @ 提及源（契约 §2.5）。inputTriggers 服务名见
 			//    dsh-client-ui-input-trigger/lib/client.js:1526
@@ -992,7 +1374,19 @@ window.__ModuleLoader__.load({
 			addFrameToDraft: addFrameToDraft,
 			stripTrailingSlashes: stripTrailingSlashes,
 			clamp01: clamp01,
-			makeViewportPanel: makeViewportPanel
+			makeViewportPanel: makePanelBody,
+			// v1.2（§7.3 / §7.4）
+			READY_POLL_MS: READY_POLL_MS,
+			PICK_POLL_MS: PICK_POLL_MS,
+			PICK_DONE_MS: PICK_DONE_MS,
+			TAB_ID: TAB_ID,
+			TAB_KIND: TAB_KIND,
+			FALLBACK_VIEW_ID: FALLBACK_VIEW_ID,
+			answerOutcome: answerOutcome,
+			createPaneGate: createPaneGate,
+			sidebarRightServices: sidebarRightServices,
+			makePanelBody: makePanelBody,
+			makeSidebarPane: makeSidebarPane
 		};
 		return module.exports;
 	}

@@ -1,7 +1,7 @@
 {
   "families_count": 28,
   "ops_count": 186,
-  "tools_count": 15,
+  "tools_count": 16,
   "tools": [
     "blender_rt_cmd",
     "blender_rt_commands",
@@ -11,6 +11,7 @@
     "blender_rt_loop",
     "blender_rt_opt",
     "blender_rt_perf",
+    "blender_rt_pick",
     "blender_rt_plan",
     "blender_rt_preset",
     "blender_rt_see",

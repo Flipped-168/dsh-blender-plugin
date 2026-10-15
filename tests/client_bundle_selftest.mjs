@@ -46,13 +46,32 @@ const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
 
 let pass = 0;
 let fail = 0;
+let skip = 0;
 const fails = [];
+const skips = [];
 const infos = [];
 function ok(name, cond, extra) {
   if (cond) pass++;
   else { fail++; fails.push({ clause: name, detail: extra === undefined ? null : extra }); }
 }
+function doSkip(name, why) { skip++; skips.push({ clause: name, why: String(why) }); }
 function info(msg) { infos.push(msg); }
+/**
+ * 值断言：接受**内联字面量**或**指向该字面量的命名常量**两种写法。
+ * 契约只冻结"值"，没要求内联；命名常量（`var TAB_KIND = "blender-viewport"; … kind: TAB_KIND`）是更好的写法。
+ * ⚠ 实测踩到过：按内联字面量断言会把这种写法**误判成缺失**（v1.2 首次回归就红了 3 条，全是假红）。
+ */
+function literalOrConst(code, prefix, value) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const v = esc(value);
+  if (new RegExp(prefix + "\\s*['\"]" + v + "['\"]").test(code)) return { ok: true, how: '内联字面量' };
+  const ids = [...code.matchAll(new RegExp("(?:var|let|const)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*['\"]" + v + "['\"]", 'g'))].map((m) => m[1]);
+  for (const id of ids) {
+    if (new RegExp(prefix + "\\s*" + id + "\\b").test(code)) return { ok: true, how: '命名常量 ' + id + ' = ' + JSON.stringify(value) };
+  }
+  return { ok: false, how: '既没有内联 `' + prefix + ' "' + value + '"`，也没有指向该值的命名常量'
+    + (ids.length ? '（找到常量 ' + ids.join('/') + '，但没被用在 `' + prefix + '` 上）' : '') };
+}
 
 // ── ① 静态粗筛：顶层 import/export、顶层 await、Node 内置模块 ────────────────
 /**
@@ -319,10 +338,78 @@ if (!st) {
 info('factory 内 require：' + (requiredByFactory.length ? JSON.stringify([...new Set(requiredByFactory)]) : '（无）'));
 info('bundle 大小：' + src.length + ' B（' + path.relative(ROOT, BUNDLE) + '）');
 
+// ── ⑤ v1.2（契约 §7）：右侧栏门控 + 阻塞式点选请求 —— 只断言静态可断言的部分 ──
+/**
+ * 口径：只断言**契约 §7.3 / §7.4 冻结的字面量**（路径、`kind`、`key`、轮询间隔、guide 条目），
+ * **不碰运行时行为** —— `useTabInfo()` 的真实返回、`dispose()` 是否真把窗口移除、`ready:false` 时
+ * `openTab` 是否真 throw，这些是契约 §7.8 登记过的**未证实项**，静态测试证明不了。
+ *
+ * 时序：client-ui 的 v1.2 门控是并行交付的 ⇒ bundle 里还没有 `/host/ready` 时**整块 SKIP**（不算失败）。
+ * 容忍度说明：契约没有冻结常量**名字**，所以"轮询 2000 ms"优先读 `__selftest` 暴露的常量，
+ * 退回"源码里 `*POLL* = 2000`"或"`/host/ready` 附近 400 字符内有 2000`"两种等价证据。
+ */
+if (!/\/host\/ready/.test(code)) {
+  doSkip('§7.3/§7.4 v1.2 静态断言', 'bundle 里没有 `/host/ready` ⇒ 客户端半边尚未实现 v1.2（契约 §7 冻结后照它写）');
+} else {
+  // ① 就绪轮询间隔 2000 ms（§7.3.1）
+  const readyKey = st ? Object.keys(st).find((k) => /ready/i.test(k) && /(poll|ms|interval|tick)/i.test(k)) : null;
+  let pollOk = false;
+  let pollHow = '';
+  if (readyKey && typeof st[readyKey] === 'number') {
+    pollOk = st[readyKey] === 2000; pollHow = '__selftest.' + readyKey + ' = ' + st[readyKey];
+  } else {
+    const named = [...code.matchAll(/([A-Za-z_$][\w$]*)\s*=\s*2000\b/g)].map((m) => m[1]).filter((n) => /ready|poll/i.test(n));
+    if (named.length) { pollOk = true; pollHow = '源码常量 ' + JSON.stringify([...new Set(named)]) + ' = 2000'; }
+    else if ([...code.matchAll(/\/host\/ready/g)].some((m) => code.slice(Math.max(0, m.index - 400), m.index + 400).includes('2000'))) {
+      pollOk = true; pollHow = '`/host/ready` 附近 400 字符内出现 2000';
+    }
+  }
+  ok('§7.3 就绪轮询间隔 = 2000 ms', pollOk,
+    pollHow || '既没有 `*ready*POLL* = 2000` 的常量，也没有 `/host/ready` 附近的 2000；建议命名常量（如 READY_POLL_MS = 2000）并挂到 __selftest');
+  if (pollHow) info('§7.3 轮询间隔判定依据：' + pollHow);
+
+  // ② 右侧栏座位 + 门控（§7.3.2 / §7.3.3 / §7.3.5）
+  ok('§7.3 调用了 ctx.sidebarRightTabs.register(...)', /sidebarRightTabs\s*\.\s*register\s*\(/.test(code));
+  {
+    const k = literalOrConst(code, 'kind\\s*:', 'blender-viewport');
+    ok('§7.3 kind === "blender-viewport"', k.ok, k.how);
+    if (k.ok) info('§7.3 kind 判定依据：' + k.how);
+    const key = literalOrConst(code, 'key\\s*:', '@dsh-external/dsh-blender-plugin');
+    ok('§7.3 面板 body 座位 key = 包名（sidebar.right.pane.tab）',
+      /['"]sidebar\.right\.pane\.tab['"]/.test(code) && key.ok,
+      { hasPaneSlot: /['"]sidebar\.right\.pane\.tab['"]/.test(code), key: key.how });
+    if (key.ok) info('§7.3 座位 key 判定依据：' + key.how);
+    const ot = literalOrConst(code, 'openTab\\s*\\(', 'blender-viewport');
+    ok('§7.3 ready 变 true 时自动开一次 openTab("blender-viewport")', ot.ok, ot.how);
+  }
+  ok('§7.3 guide 条目（id "viewport" + 「Blender 视口」）',
+    /guide\s*:\s*\[/.test(code) && /['"]viewport['"]/.test(code) && /Blender 视口/.test(code));
+  ok('§7.3 旧宿主降级：仍保留 conversation.view 座位（§2.3）', /['"]conversation\.view['"]/.test(code));
+
+  // ③ 点选请求的路径字面量（§7.4）
+  //    ⚠ `/host/pick/result` 是**模型侧**轮询用的（§7.5），面板不需要引用它 —— 故不断言它。
+  for (const p of ['/host/pick/request', '/host/pick/answer', '/host/pick/cancel']) {
+    ok('§7.4 引用了 ' + p, code.includes(p));
+  }
+  // 附加：点选请求的轮询间隔（§7.4「同 §7.3 的 2000 ms tick，或面板自身 tick」）
+  if (st && typeof st.PICK_POLL_MS === 'number') {
+    ok('附加 §7.4 点选轮询间隔 = 2000 ms', st.PICK_POLL_MS === 2000, st.PICK_POLL_MS);
+  }
+
+  // ④ 未证实项：只记 INFO，不判定（契约 §7.8）
+  if (/useTabInfo/.test(code)) info('§7.3 面板用了 useTabInfo() —— 其真实返回 `{sidebar,panel,tab}` **未证实**（契约 §7.8）');
+  else info('未在 bundle 里看到 useTabInfo —— §7.3.6 说面板 body 用它读 `{sidebar,panel,tab}`，请核对');
+  if (/dispose\s*\(/.test(code)) info('§7.3 门控用了 dispose() —— "注销后窗口真消失" **未证实**（契约 §7.8）');
+}
+
 // ── 汇总 ───────────────────────────────────────────────────────────────────
-console.log('客户端 bundle 自检：' + pass + ' 通过 / ' + fail + ' 失败' +
+console.log('客户端 bundle 自检：' + pass + ' 通过 / ' + fail + ' 失败' + (skip ? ' / ' + skip + ' 跳过' : '') +
   (fail ? '' : '  ✅') + '   （' + path.relative(ROOT, BUNDLE) + '）');
 for (const m of infos) console.log('  · ' + m);
+if (skips.length) {
+  console.log('  跳过（不算失败）：');
+  for (const s of skips) console.log('  - ' + s.clause + '：' + s.why);
+}
 if (fail) {
   console.log('  失败项：');
   for (const f of fails) console.log('  x ' + f.clause + (f.detail !== null ? ' — ' + JSON.stringify(f.detail).slice(0, 400) : ''));
