@@ -9,6 +9,13 @@
  *   POST /cmd            body: {"name":"命令名","params":{...}} → 直连透传任意 addon 命令
  *   POST /loop           body: {"op":"start|status|stop|bench","spec":{...}} → Blender 侧内环（runner.py）
  *   POST /view           body: {from, look_at, lens, ortho, ...} → 自定义视角出图（view.py，不动场景）
+ *   ── 宿主集成（用户侧能力，契约 docs/宿主集成-接口契约.md §1；不进 /plan 的 op 目录）──
+ *   GET  /host/view/latest   最近一次视口捕获的**状态**（只读 store，不碰 Blender）
+ *   GET  /host/view.png      该帧 PNG（?seq=；陈旧 seq → 409 stale_seq）
+ *   POST /host/view/capture  抓当前 GUI 视口一帧（唯一会驱动 Blender 取帧的 /host 路由；只读）
+ *   POST /host/view/pick     点击反投影 → 对象（先校验 file/scene 错配 → *_mismatch）
+ *   GET  /host/scene-items   `@` 提及数据源（objects/materials/collections）
+ *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 loopback Origin 回显）
  *   POST /headless       body: {script, file, outdir, args, timeoutMs} → 无头 Blender 独立进程跑脚本
  *   GET  /who            JSON：租约持有者 + 通道指标（多会话共存时先看它）
  *   POST /lease          body: {holder, ttlMs, force?, renewOnly?} → 拿写权限租约
@@ -25,6 +32,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createEngine, engineProvenance, PLAN_READ_ONLY_OPS } from './engine.mjs';
 import { CFG, describeConfig } from './config.mjs';
+// S12（宿主集成）：视口状态存储（面板轮询只读它，绝不因此碰 Blender）
+import { viewStore, clampItemsLimit, clampUnit } from './viewstore.mjs';
 
 const argv = process.argv.slice(2);
 const portArg = argv.indexOf('--port');
@@ -192,11 +201,157 @@ function readBody(req, limit = 1 << 22) {
   });
 }
 
+// ── 宿主集成（/host/*，契约 docs/宿主集成-接口契约.md §1）────────────────────────
+// 这是**用户侧**能力（人点视口 → 进自己的消息），不是模型工具：不进 /plan 的 op 目录、
+// 不加模型工具（capability.lock 的 family/op/工具名一动不动）。三条纪律：
+//   ① 所有 /host/* 响应（含错误）都带 CORS 头，但 `Access-Control-Allow-Origin`
+//      **只对 loopback Origin 回显**（其余站点不回该头）；
+//   ② 面板轮询只读 store（/host/view/latest 与 /host/view.png 一行都不碰 Blender）——
+//      面板开着不能占 Blender 主线程，这是上游 ViewportStore 的核心设计；
+//   ③ pick 先校验 file/scene 错配 → `*_mismatch`，**绝不**降级为"投到当前场景"。
+// 这五条路由都**不改场景**（capture 只是离屏画一帧）→ 不碰写租约（只读语义）。
+const HOST_ORIGIN_RE = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+function hostCorsHeaders(origin) {
+  const h = {
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Max-Age': '600',
+    'Vary': 'Origin',
+  };
+  if (origin && HOST_ORIGIN_RE.test(String(origin))) h['Access-Control-Allow-Origin'] = String(origin);
+  return h;
+}
+function hostJson(res, code, obj, origin) {
+  res.writeHead(code, Object.assign({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+                                    hostCorsHeaders(origin)));
+  res.end(JSON.stringify(obj));
+}
+function hostPng(res, buf, origin) {
+  res.writeHead(200, Object.assign({ 'content-type': 'image/png', 'cache-control': 'no-store' },
+                                   hostCorsHeaders(origin)));
+  res.end(buf);
+}
+function hostErrText(e) { return String((e && e.message) || e); }
+
+async function handleHost(req, res, url, p) {
+  const origin = req.headers.origin || null;
+
+  // §1.1 CORS 预检：204 空体
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, hostCorsHeaders(origin));
+    res.end();
+    return;
+  }
+
+  // §1.2 状态（**只读 store，绝不碰 Blender**）
+  // `since` 按契约可省（默认 0）；这里**非阻塞**接受它（返回当前状态）—— 契约没有定义阻塞语义，
+  // 客户端照 §2.3 每 1500 ms（stale 时 600 ms）轮询即可，长轮询留给以后有明确需求时再加。
+  if (req.method === 'GET' && p === '/host/view/latest') {
+    hostJson(res, 200, viewStore.latest(), origin);
+    return;
+  }
+
+  // §1.3 取图（同样只读 store）
+  if (req.method === 'GET' && p === '/host/view.png') {
+    const r = viewStore.pngFor(url.searchParams.get('seq'));
+    if (r.status !== 200) { hostJson(res, r.status, r.body, origin); return; }
+    hostPng(res, r.png, origin);
+    return;
+  }
+
+  // §1.4 捕获：/host/* 里**唯一**驱动 Blender 取帧的一条（离屏只读；不碰租约）
+  if (req.method === 'POST' && p === '/host/view/capture') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const t0 = Date.now();
+    const out = await viewStore.captureThrough(engine, { maxSize: payload.max_size, auto: !!payload.auto });
+    if (!out.ok) {
+      stats.hostCaptureFails = (stats.hostCaptureFails || 0) + 1;
+      stats.lastError = out.error;
+      hostJson(res, 502, { ok: false, error: out.error }, origin);
+      return;
+    }
+    stats.hostCaptures = (stats.hostCaptures || 0) + 1;
+    stats.lastHostCaptureMs = Date.now() - t0;
+    hostJson(res, 200, viewStore.latest(), origin);
+    return;
+  }
+
+  // §1.5 点击反投影
+  if (req.method === 'POST' && p === '/host/view/pick') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const v = viewStore.viewFor(payload.seq);
+    if (!v) { hostJson(res, 200, { ok: false, error: 'unknown_seq' }, origin); return; }
+    let out;
+    try {
+      out = await engine.hostPick({
+        x: clampUnit(payload.x, 0.5), y: clampUnit(payload.y, 0.5),
+        width: v.width, height: v.height,
+        view_matrix: v.view_matrix, window_matrix: v.window_matrix,
+        file: v.file, scene: v.scene,
+      });
+    } catch (e) {                                   // Blender 不可达 / 通道失败 → 502
+      stats.lastError = hostErrText(e);
+      hostJson(res, 502, { ok: false, error: hostErrText(e) }, origin);
+      return;
+    }
+    if (!out || out.ok === false) {
+      const err = String((out && out.error) || 'pick_failed');
+      if (err === 'file_mismatch' || err === 'scene_mismatch') {
+        // 契约 §1.5：错配是**正常回执**（HTTP 200），但绝不降级为"投到当前场景"
+        hostJson(res, 200, { ok: false, error: err,
+                             expected: (out.expected === '' || out.expected == null) ? null : out.expected,
+                             current: (out.current === '' || out.current == null) ? null : out.current }, origin);
+      } else if (err === 'unknown_seq') {
+        hostJson(res, 200, { ok: false, error: 'unknown_seq' }, origin);
+      } else {
+        stats.lastError = err;
+        hostJson(res, 502, { ok: false, error: err }, origin);
+      }
+      return;
+    }
+    stats.hostPicks = (stats.hostPicks || 0) + 1;
+    hostJson(res, 200, { ok: true, object: (out.object === undefined ? null : out.object) }, origin);
+    return;
+  }
+
+  // §1.6 `@` 提及数据源
+  if (req.method === 'GET' && p === '/host/scene-items') {
+    let out;
+    try {
+      out = await engine.hostSceneItems({ q: url.searchParams.get('q') || '',
+                                          limit: clampItemsLimit(url.searchParams.get('limit')) });
+    } catch (e) {
+      stats.lastError = hostErrText(e);
+      hostJson(res, 502, { ok: false, error: hostErrText(e) }, origin);
+      return;
+    }
+    hostJson(res, 200, { ok: true, objects: out.objects || [], materials: out.materials || [],
+                         collections: out.collections || [] }, origin);
+    return;
+  }
+
+  hostJson(res, 404, { ok: false, error: 'not found', path: p }, origin);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + HOST + ':' + String(PORT));
   const p = url.pathname;
   bump(p);
   try {
+    // 宿主集成（/host/*）：独立路由面；出错也必须是**带 CORS 头**的 JSON
+    if (p === '/host' || p.startsWith('/host/')) {
+      try { await handleHost(req, res, url, p); }
+      catch (e) {
+        try { hostJson(res, 500, { ok: false, error: hostErrText(e) }, req.headers.origin || null); }
+        catch (e2) { try { res.end(); } catch (e3) { /* 已经断了就算了 */ } }
+      }
+      return;
+    }
+
     if (req.method === 'GET' && p === '/health') {
       json(res, 200, { ok: true, stats: stats, lease: leaseView(), requests: Object.fromEntries(reqCounts),
                        // v0.9.4（P2-1）：分布 + 后端自身内存。⚠ 不含 blender.exe 的 RSS ——
@@ -485,6 +640,10 @@ const server = http.createServer(async (req, res) => {
           return { ok: false, ms: Date.now() - t0, error: stats.lastError, hint: (e && e.hint) || null, code: (e && e.code) || null };
         }
       });
+      // 契约 §3：/headless 计入"会改场景"（保守口径 —— 它跑的是独立 blender -b 进程，
+      // 严格说没动**当前**这个场景；但上游把无头执行也算进 SCENE_CHANGING_COMMANDS，
+      // 这里照契约执行：宁可让面板多刷一次，也不让用户对着过期画面点选）。
+      viewStore.noteSceneChange();
       return;
     }
     if (req.method === 'POST' && p === '/plan') {
@@ -683,7 +842,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。

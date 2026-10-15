@@ -125,6 +125,21 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 
 期望：① `kind=ok`（含 `roundTripMs` / `ping_ms` / `config`）；②③ 返回内联图片 + 毫秒数与 hash。
 
+### 4.1 宿主集成：视口面板 · 点击进消息 · `@` 提及
+
+除模型工具外，本包还给 DSH 界面贡献一个**用户侧**半边（走独立 `/host/*` 路由，**不进** op 目录、**不加**模型工具 ⇒ 15 个工具 / 186 个 op 的能力面零变化）：
+
+- **视口面板**：会话视图里的「Blender 视口」tab，显示最新一帧视口（1500 ms 轮询；帧陈旧时 600 ms）。
+- **点击进消息**：点画面里的物体 → 打标记 → 按「加入消息」把**截图 + 对象名文本**放进草稿（**不自动发送**，发不发你决定）。
+- **`@` 提及**：输入框敲 `@` 出对象 / 材质 / 集合候选（引用带前缀 `object:<name>` / `material:<name>` / `collection:<name>`），选中后由 `codec` **拆掉前缀**、序列化成 `<blender-object>Cube</blender-object>`，模型不再猜对象名。
+- 三条纪律：面板只读后端 store（**不占 Blender 主线程**）· 文件/场景**错配拒绝**（回 `*_mismatch`，绝不投到当前场景）· 静默窗口 0.8 s 是**后端**语义。
+
+> ⚠ **照实说明（未证实项）**：面板在 `conversation.view` 槽位上，**大概率是对话区的一个 View 页签**而非常驻侧栏；`section` 分组标题、`codec.serialize` 进模型文本、`inject` 业务面合并、以及"静默后自动重拍"（当前**只有手动重拍**）**均未证实**。逐条见 [操作教程 §9.9](docs/操作教程.md#9-宿主集成)。
+
+> ⚠ **改完/升级完必须重启 DSH**：客户端半边（`lib/client.js`）是 DSH 启动时加载的模块；只改了后端才用 `blender_viewport(op="restart")`。
+> 面板从 `http://127.0.0.1:3080` 跨源调 `9877`，所以后端只对 **loopback** Origin 回 CORS（`https://` 或非 loopback 主机名会被拒）。
+> 用法、CORS/端口要求与**故障对照表**见 [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成)。
+
 ---
 
 ## 5. 工具参考（Tool reference，15 个工具）
@@ -323,6 +338,15 @@ blender_viewport(op="doctor")            # 回执里的「宿主 API：dsh-tools
 各能力族都有自己的 `*_selftest`：`mate`（配合门）· `txn`（事务 / 编辑协议）· `deliver`（导出与 md5）· `motion`（关节与运动学扫掠）· `qc`（IoU 与对齐）· `upstream_integration`（雕刻 / 修复 / UV / 制造 / 扫掠 / 材质 / 渲染 guard 一条链）· `view_diag`（自定义视角诊断）；用 `blender_rt_headless(preload=…, script_file=…)` 或 `blender -b --python <文件>` 跑。
 
 **④ 通道三条 `curl`**（同 §3 第 ⑤ 步）：`/health`（含加载版本自证 `provenance`）· `/doctor`（`kind=ok`）· `/who`（租约 + 指标 + 生效配置）。
+
+**⑤ 宿主集成两条**（都不进 `npm test`，需要时单独跑；不可用时**打印 SKIP 且退出码 0**，不算失败）：
+
+```bash
+node tests/client_bundle_selftest.mjs    # 假 window.__ModuleLoader__ 下执行 lib/client.js：
+                                         # 注册 id / factory→apply+inject / 无 import·export·Node 内置模块
+node tests/host_routes_selftest.mjs      # 打契约 §4 判据 1–8（CORS / PNG 魔数 / 陈旧 seq 409 /
+                                         # pick 命中·空处·错配 / scene-items 过滤与 limit）
+```
 
 ---
 

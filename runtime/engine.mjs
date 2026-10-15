@@ -145,6 +145,10 @@ import { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER
 import { writeHeadlessScript } from './staging.mjs';
 // workdirStagingWarning 也在这个模块里（搬移时一并带过去了）；readJsonSafe 仍是 engine 本地（不进导出面）
 import { baseChildEnv, withWslEnv, workdirStagingWarning } from './proc_env.mjs';
+// S12（宿主集成）：视口状态存储（/host/*）。engine 侧**只接线**：
+// 在 addon 通道的 send 包装里记「在飞命令」与「场景变更」，并把捕获结果交给 store。
+// 目录面（15 工具 / 186 op）**不动** —— 宿主集成是用户侧能力，不进 op 目录。
+import { viewStore, isSceneChangingCommand } from './viewstore.mjs';
 export { writeHeadlessScript };
 export { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER };
 
@@ -688,7 +692,15 @@ export function createEngine(opts = {}) {
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
   const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0 };
   const rawSend = addon.send.bind(addon);
-  addon.send = async (type, params, timeoutMs) => {
+  /**
+   * @param {object} [opts] `{noMark:true}` = 这条命令**不算"会改场景"**（不参与 scene_version 计数）。
+   * 只给两类用：① 插件自己加载 python 模块（纯 plumbing，不可能改场景）；
+   * ② `/host/*` 宿主集成原语（取帧/点击反投影/@列表 —— 全是只读）。
+   * 为什么必须显式排除：契约把 `execute_code` 整条计入"会改场景"（保守口径），
+   * 于是"点一下视口"会经由 ensureView() 的 execute_code 把**刚抓的那帧**标成 stale，
+   * 面板随即自动重拍 —— 点击自己把自己弄脏。见 docs/宿主集成-接口契约.md §3。
+   */
+  addon.send = async (type, params, timeoutMs, opts) => {
     // v0.9.6（A7）：渲染中把主线程命令**秒回 busy**，不再排队到超时（实测 76/111 条失败是超时）
     if (MAIN_THREAD_CMDS.has(String(type))) {
       const g = readRenderFlag();
@@ -708,15 +720,22 @@ export function createEngine(opts = {}) {
     metrics.inflight++;
     metrics.lastCmd = type;
     metrics.lastCmdAt = Date.now();
+    // S12（宿主集成 · 契约 §3）：在飞计数（blender_quiet 的判据）+「会改场景」的命令完成后
+    // scene_version += 1。opts.noMark 的两类例外见 addon.send 的注释。
+    viewStore.beginCommand();
+    const sceneChanging = isSceneChangingCommand(type) && !(opts && opts.noMark);
     try {
       const r = await rawSend(type, params, timeoutMs);
       metrics.lastOkAt = Date.now();
       metrics.lastDiagnosis = null;
+      if (sceneChanging) viewStore.noteSceneChange();
       return r;
     } catch (e) {
       const msg = String((e && e.message) || e);
       metrics.errors++;
       metrics.lastError = msg;
+      // 半途失败也可能已经改到了场景（execute_code 跑到一半抛错）→ 保守标记，宁可多标 stale
+      if (sceneChanging) viewStore.noteSceneChange();
       const transport = /timeout|closed|ECONN|ECONNRESET|socket/i.test(msg);
       if (transport) metrics.timeouts++;
       // v0.7.0：只有**传输/超时类**错误才做三级判定；执行类错误（代码抛错/编译错）不该被误判成 main-thread-busy
@@ -728,6 +747,7 @@ export function createEngine(opts = {}) {
       throw e;
     } finally {
       metrics.inflight--;
+      viewStore.endCommand();
     }
   };
   /** 把 Blender 侧 python 模块注入运行中的 Blender（模块自己把 API 挂到 K 上） */
@@ -799,14 +819,15 @@ export function createEngine(opts = {}) {
     try { const st = fs.statSync(file); fp = String(st.size) + '-' + String(Math.round(st.mtimeMs)) + '-k' + KIT_HASH; } catch (e) { fp = 'missing-k' + KIT_HASH; }
     // K 才是真相：Blender 重启后 K 会清空，仅靠本地 Set 会误判"已注入"
     try {
-      const chk = await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nprint("HAVE " + str(hasattr(K, "' + attr + '")) + " FP " + str(getattr(K, "' + hashAttr + '", "none")))' }, 30000);
+      // noMark：加载 python 模块是纯 plumbing，不可能改场景 —— 不该参与 stale 判定
+      const chk = await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nprint("HAVE " + str(hasattr(K, "' + attr + '")) + " FP " + str(getattr(K, "' + hashAttr + '", "none")))' }, 30000, { noMark: true });
       const t = (chk && typeof chk.result === 'string') ? chk.result : '';
       if (t.includes('HAVE True') && t.includes(fp)) { injected.add(file); return true; }
       injected.delete(file);
     } catch (e) { /* 探测失败 → 走重新注入 */ }
     const src = fs.readFileSync(file, 'utf8');
     const tail = '\nK.' + hashAttr + ' = ' + JSON.stringify(fp) + '\nprint("' + marker + ' v%d" % ' + versionExpr + ')';
-    const out = await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\n' + (prelude ? prelude + '\n' : '') + src + tail }, 60000);
+    const out = await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\n' + (prelude ? prelude + '\n' : '') + src + tail }, 60000, { noMark: true });
     const txt = (out && typeof out.result === 'string') ? out.result : '';
     if (!txt.includes(marker)) throw new Error(path.basename(file) + ' 注入失败: ' + txt.slice(0, 200));
     injected.add(file);
@@ -2333,6 +2354,40 @@ export function createEngine(opts = {}) {
       if (!info || info.ok === false) throw new Error('view 失败: ' + JSON.stringify(info).slice(0, 300));
       metrics.lastView = { at: Date.now(), ms: info.ms, mode: info.mode, path: info.path };
       return { png: fs.readFileSync(winToWsl(info.path)), meta: info };
+    },
+    /**
+     * 宿主集成（/host/view/capture，契约 §1.4）：抓**当前 GUI 视口**那一帧。
+     * 与 view() 的分工：view() 是"从任意位置看一眼"（自建矩阵、不动用户视口）；
+     * 本方法是"用户现在看到的就是这一帧"（矩阵直接取 region_3d）→ 面板显示 + 点击反投影。
+     * 零场景/零视口改动；拿不到矩阵时 view.py 回 ok=false（上层据此把 pickable 置 false，不撒谎）。
+     */
+    async hostCapture(opts = {}) {
+      await ensureView();
+      const spec = { max_size: Number(opts.maxSize) || 1000, path: VIEW_PNG_WIN };
+      const body = 'print("HOSTCAP " + K.dsh_view_api["host_capture"](' + JSON.stringify(JSON.stringify(spec)) + '))';
+      const info = extractTag(await addon.send('execute_code',
+        { code: KERNEL_BOOTSTRAP + '\n' + body }, Math.max(30000, Number(opts.timeoutMs) || 120000), { noMark: true }), 'HOSTCAP');
+      if (!info || info.ok === false) throw new Error('宿主视口捕获失败: ' + JSON.stringify(info).slice(0, 300));
+      return { png: fs.readFileSync(winToWsl(info.path)), meta: info };
+    },
+    /**
+     * 宿主集成（/host/view/pick，契约 §1.5）：归一化点击 → 反投影 → 命中对象。
+     * ⚠ 错配（file/scene）由 Blender 侧**先判**并回 *_mismatch —— 本方法原样把结论带回去，不降级。
+     */
+    async hostPick(spec = {}) {
+      await ensureView();
+      const body = 'print("HOSTPICK " + K.dsh_view_api["host_pick"](' + JSON.stringify(JSON.stringify(spec)) + '))';
+      const info = extractTag(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\n' + body }, 60000, { noMark: true }), 'HOSTPICK');
+      if (!info) throw new Error('pick 无回执');
+      return info;
+    },
+    /** 宿主集成（/host/scene-items，契约 §1.6）：`@` 提及的数据源（objects/materials/collections）。 */
+    async hostSceneItems(spec = {}) {
+      await ensureView();
+      const body = 'print("HOSTITEMS " + K.dsh_view_api["host_scene_items"](' + JSON.stringify(JSON.stringify(spec)) + '))';
+      const info = extractTag(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\n' + body }, 60000, { noMark: true }), 'HOSTITEMS');
+      if (!info || info.ok === false) throw new Error('scene-items 失败: ' + JSON.stringify(info).slice(0, 300));
+      return info;
     },
     /**
      * 无头 Blender：独立进程跑脚本（重渲染 / 批量几何 / 校验都走它）。

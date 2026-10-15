@@ -2,6 +2,25 @@
 
 > 这些检查把 v0.4.0（自定义视角 / 无头 / 租约）的关键结论固定下来，换机器或升级 Blender 后**先跑它们**。
 
+## 宿主集成自检（v1.1.0 · 不需要 Blender 的那一条可单独跑）
+
+```bash
+node tests/client_bundle_selftest.mjs   # 客户端半边：假 window.__ModuleLoader__ 下装载 lib/client.js
+node tests/host_routes_selftest.mjs     # /host/* 路由（需要后端 127.0.0.1:9877；Blender 不在则 SKIP 且 exit 0）
+```
+
+- **`client_bundle_selftest.mjs`**：这是"**用户重启 DSH 后插件会不会崩**"的安全网。断言注册 `id` ===
+  `@dsh-external/dsh-blender-plugin`、`factory(require)` 返回带 `apply`(函数)/`inject`(字符串数组)、
+  bundle 内无顶层 `import`/`export`/`await`、不引 Node 内置模块；另按契约断言轮询节流常量与 §2.4/§2.5 文案。
+  实测 29 项全绿；对 6 类蓄意违规 fixture（id 错 / 缺 apply / 顶层 import / `require('fs')` / factory 抛 / 语法错）
+  **全部 exit 1**。`lib/client.js` 缺失时打印 `SKIP` 且 exit 0。
+- **`host_routes_selftest.mjs`**：对 `127.0.0.1:9877` 打契约 §4 判据 1–8（CORS 预检与 loopback 白名单、
+  capture→PNG 魔数、陈旧 seq 409、pick 命中/空处/错配、`scene-items` 过滤与 `limit` 夹取）。
+  Blender 不在、后端不可达、或后端未装载 `/host` → **SKIP 且 exit 0**（不算失败）。
+  判据 7 需临时改场景名构造错配：默认开、`finally` 还原并核验 stdout、`DSH_HOST_TEST_NO_MUTATE=1` 可关、
+  写租约被别的会话持有时**不夺租约**而是跳过（共享同一 Blender 时的有意取舍）。
+- 两条都不进 `npm test` 主链（`host_routes` 依赖真后端），需要时手动跑。
+
 ## 上游整合 A1–A5 自检（v0.9.6）
 
 ``python

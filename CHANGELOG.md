@@ -1,6 +1,55 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
-## 未发布（v1.0.6 待定）—— 修：文件级 `restore` 的 filepath 语义（`blender_rt_txn`，TXN_VERSION 3 → 4）
+## v1.1.0（2026-10-16）—— 新：宿主集成（视口面板 · 点击入上下文 · `@` 提及）；修：文件级 `restore` 的 filepath 语义
+
+### 新 · 宿主集成：把 Blender 视口搬进 DSH 对话界面
+
+**来源**：上游 `ahujasid/mcp-for-blender` 的 **Codex 插件**（`integrations/codex/`，plugin 2.1.1）—— 它把最新一帧视口内联在对话旁，
+**点击画面里的物体即把该对象挂进下一条消息**，并提供 `@` 提及与缩略图选择器。本版把这套**体验**用 DSH 原生设施实现
+（**不是**照搬 MCP Apps 协议 —— DSH 不是 MCP 宿主，要的是同一体验）。评估与接口契约见
+`docs/宿主集成层评估-Codex插件与DSH移植.md` 与 `docs/宿主集成-接口契约.md`。
+
+**全部走独立 `/host/*` 路由，不进 `/plan` op 目录、不加模型工具 ⇒ 能力面零变更**
+
+| 能力 | 实现 |
+|---|---|
+| 视口状态机 | `runtime/viewstore.mjs`（新）：`seq`/`source`/`captured_at`/`origin(file,scene)`/`stale`/`pickable`/`blender_quiet`；场景变更计数；在飞计数；`AUTO_CAPTURE_QUIET_S=0.8`；最近 50 帧相机矩阵 |
+| 五条宿主路由 | `GET /host/view/latest` · `GET /host/view.png` · `POST /host/view/capture` · `POST /host/view/pick` · `GET /host/scene-items`（`runtime/server.mjs`） |
+| CORS | 仅对 **loopback** Origin 回显 `Access-Control-Allow-Origin`；`OPTIONS` 预检 204 |
+| 反投影 pick | `runtime/view.py::host_pick` —— 复用已有 `make_view_matrix`/`make_proj_matrix` 反投影 → `scene.ray_cast` → 灯光/相机/空物体按屏幕距离兜底；**先校验 `.blend`/场景错配并拒绝**（`file_mismatch`/`scene_mismatch`），绝不把点击投到当前场景 |
+| 客户端半边 | `src/client/index.js`（新，手写 bundle，零打包器/零新增依赖）+ `scripts/build-client.mjs`；`package.json` 加 `dsh.client` 与 `exports["./client"]` |
+| 视口面板 | 注册到 `conversation.view` 槽位；轮询 1500ms（陈旧 600ms）；`seq` 变化才换图 |
+| 点击入上下文 | 点击 → 归一化坐标 → `/host/view/pick` → 命中加标记（再点取消）；「加入消息」把整帧作为**草稿附件** + 一句对象说明**写进草稿**（`ctx.conversation.createDrafts` + `inputActions.addAttachments/insertText`）—— **不自动发送** |
+| 自动重拍（上游 A8） | `stale && blender_quiet` → `POST /host/view/capture {auto:true}`；**1200ms 节流**、同一 `seq` 不重复、**连续 3 次无进展停手**并在状态行说明、`visibilityState==="hidden"` 停手、pick 在飞不并发 |
+| `@` 提及 | `ctx.inputTriggers.registerSource({trigger:'@'})`，数据源 `/host/scene-items`，按 对象/材质/集合 用 `section` 分组；候选失败返回 `[]` 不抛 |
+
+**两条设计纪律（与上游同源）**
+
+- **面板轮询不碰 Blender**：轮询只读 store。实测 60 次轮询 `metrics.calls` 增量 **0**（面板开着不占 Blender 主线程）。
+- **pick 不得把自己刚抓的帧标成 stale**：`execute_code` 属"会改场景"命令集，而 pick 会经 `ensureView()` 发 `execute_code` ——
+  故对**插件自身的 python 模块加载**与**三条只读 host 原语**用逐调用 `{noMark:true}` 排除（**不用**全局抑制计数器：
+  那会在别的会话的写命令恰好落在窗口内时吞掉它的标记，**欠标 stale 是危险方向**）。
+
+**验收**
+
+- `/host` 契约判据 1–8：独立自检 `tests/host_routes_selftest.mjs` **68 通过 / 0 失败**；Lead 抽查 CORS 预检/PNG 魔数/陈旧 409 复现一致。
+- 客户端半边：`tests/client_bundle_selftest.mjs` **29 通过 / 0 失败**（假 `window.__ModuleLoader__` 装载 `lib/client.js`）；6 类蓄意违规 fixture 全部 exit 1。
+- `npm test` **exit 0**；`tests/capability.lock.json` **未变**（28 family / 186 op / 15 工具）。
+- 现场复原：验收造的探针对象全部删除（2256 对象 / 10 材质 / scene `Scene` / 未保存文件）。
+
+**边界与未证实项**（照实登记，**勿当已证实能力**）
+
+1. `conversation.view` 的**实际渲染形态**未在真 GUI 观察：按类型是**对话区的 View 页签**（非常驻侧栏）。要常驻侧栏需换 `main` 或 `sidebar.right`。
+2. `label` thunk → `ViewTab.label`、`InputTriggerCandidate.section` 是否真渲染成分组标题、`codec.serialize` 是否原样进模型文本 —— 均**未实测**。
+3. HTTP 级 `file_mismatch` 未实测（`bpy.data.filepath` 只读，造真实错配需保存/另开 `.blend`，会动用户**未保存**的 2256 对象场景 ⇒ 拒绝做；
+   已在**函数级**用控制组验证，`scene_mismatch` 是 HTTP 级实测）。
+4. 灯光/相机/空物体的屏幕距离兜底**已实现但未触发**（当前场景全为 MESH）。
+5. `document.visibilityState` 在 DSH GUI 里的真实行为未实测（失效方向偏保守）。
+6. **必须重启 DSH 才生效**（客户端半边是启动时装载的模块）；面板在真 GUI 里的最终验证待重启后做。
+
+---
+
+### 修 · 文件级 `restore` 的 filepath 语义（`blender_rt_txn`，TXN_VERSION 3 → 4）
 
 **来源**：外部使用报告（"事务 / 回滚"一节）。原话是"原文件没被动（安全），但之后一保存就会存进快照目录，语义意外"。
 

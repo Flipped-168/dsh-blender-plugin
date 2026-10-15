@@ -110,6 +110,21 @@ blender_rt_see(max_size=560)                           # what the model sees rig
 blender_rt_see(from="9,-9,6", look_at="0,0,1")         # a different angle, user viewport untouched
 ```
 
+### 4.1 Host integration: viewport panel · click-to-message · `@` mentions
+
+Besides the model tools, the package ships a **user-side** half for the DSH UI (its own `/host/*` routes — it does **not** enter the op catalog and adds **no** model tools, so the 15-tool / 186-op capability surface is unchanged):
+
+- **Viewport panel** — a "Blender 视口" tab in the conversation view, showing the latest captured frame (1500 ms polling; 600 ms while the frame is stale).
+- **Click into your message** — click an object, then press "加入消息" to drop the **screenshot + object-name text** into your draft (nothing is sent automatically).
+- **`@` mentions** — type `@` to pick scene objects / materials / collections (refs are prefixed: `object:<name>` / `material:<name>` / `collection:<name>`); the `codec` strips the prefix and serializes to `<blender-object>Cube</blender-object>`, so the model stops guessing object names.
+- Three disciplines: the panel only reads the backend store (**never occupies Blender's main thread**) · file/scene **mismatch is refused** (`*_mismatch`, never re-projected onto the current scene) · the 0.8 s quiet window is a **backend** semantic.
+
+> ⚠ **Stated as-is (unverified)**: the panel is registered on the `conversation.view` slot and is **most likely a View tab in the conversation area**, not a persistent sidebar; `section` grouping headers, `codec.serialize` reaching the model text, the `inject` business-face merge, and quiet-window auto-recapture (**currently manual refresh only**) are all **unverified**. See [操作教程 §9.9](docs/操作教程.md#9-宿主集成) for the itemized list.
+
+> ⚠ **Restart DSH after any change/upgrade**: the client half (`lib/client.js`) is loaded at DSH startup; only a backend-only change can use `blender_viewport(op="restart")`.
+> The panel calls `9877` cross-origin from `http://127.0.0.1:3080`, so the backend only echoes CORS for **loopback** origins (`https://` or a non-loopback hostname is refused).
+> Usage, CORS/port requirements and the **troubleshooting table** live in [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成) (Chinese).
+
 ---
 
 ## 5. What's new in v1.0
@@ -369,6 +384,9 @@ dsh-blender-plugin/
 9. `tests/engine_probe.sh` → **16/16** and `tests/view_diag_selftest.py` → **16/16** · `tests/png_decode.py <png>` confirms byte-exact colours (no double gamma, no vertical flip).
 10. Channel checks: `/health` (backend + provenance) · `/doctor` (`kind=ok`) · `/who` (lease + metrics), plus a 7-request lease walkthrough against `/lease`, `/act`, `/who`, `/release`.
 11. `tests/geo_selftest.py` → **15/15**: box/cyl/tube/loft manifoldness, boolean guard (fires on envelope growth, **no false positive** on a protruding cutter), topology-preserving auto-smooth, mirror/array, mm bbox/tri counts. Run: `blender -b --factory-startup --python tests/geo_selftest.py`.
+12. Host integration (not part of `npm test`; both print **SKIP and exit 0** when unavailable — a SKIP is not a failure):
+    - `node tests/client_bundle_selftest.mjs` — executes `lib/client.js` under a fake `window.__ModuleLoader__` and asserts the registered `id`, `factory(require)` → `apply`/`inject`, and that the bundle contains no top-level `import`/`export` syntax or Node built-ins.
+    - `node tests/host_routes_selftest.mjs` — drives contract §4 criteria 1–8 against `http://127.0.0.1:9877` (CORS preflight, non-loopback origin not echoed, capture → PNG magic, stale seq 409, pick hit/empty/mismatch, scene-items filter + limit).
 
 ---
 

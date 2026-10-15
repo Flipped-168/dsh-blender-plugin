@@ -73,4 +73,14 @@ fi
 
 echo "=== Compiling src → lib ==="
 "$TSC" -p tsconfig.json
+
+# 客户端半边：src/client/index.js（手写 bundle，无打包器）→ lib/client.js
+# 由 package.json 的 dsh.client + exports["./client"] 暴露给 DSH 宿主。
+# 脚本缺失时优雅跳过（便于只改 host 半边的场景），但**存在就必须成功**。
+echo "=== Building client half (src/client → lib/client.js) ==="
+if [ -f "$ROOT/scripts/build-client.mjs" ]; then
+  node "$ROOT/scripts/build-client.mjs"
+else
+  echo "build: scripts/build-client.mjs 不存在 —— 跳过客户端半边（lib/client.js 不会更新）" >&2
+fi
 echo "=== Build complete ==="
