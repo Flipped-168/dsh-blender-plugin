@@ -992,7 +992,7 @@ function registerSchemaDiagnostic(ctx: any): void {
   ].join(String.fromCharCode(10))
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_viewport',
-    description: '仅诊断：本插件降级加载（schemastery 未解析），15 个工具未注册。调用它只回报原因与修法。',
+    description: '仅诊断：本插件降级加载（schemastery 未解析），工具未注册。调用它只回报原因与修法。',
     parameters: { op: { type: 'string', description: '任意值；只用于触发诊断输出' } },
     output: { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] },
     isConcurrencySafe: () => true,
