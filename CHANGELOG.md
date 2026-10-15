@@ -1,5 +1,81 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## 未发布（v1.0.6 待定）—— 修：文件级 `restore` 的 filepath 语义（`blender_rt_txn`，TXN_VERSION 3 → 4）
+
+**来源**：外部使用报告（"事务 / 回滚"一节）。原话是"原文件没被动（安全），但之后一保存就会存进快照目录，语义意外"。
+
+### 现象与成因
+
+`restore` 用 `bpy.ops.wm.open_mainfile(<out_dir>/snapshots/<label>.blend)` 把**整个会话**搬到快照文件上，
+`bpy.data.filepath` 随之变成快照路径 —— 原文件确实一直没动，但**之后任何保存（Ctrl+S / `save_mainfile`）
+都会写进 `snapshots/`**。用户"以为在改自己的工程"，实际写到了插件的临时目录。
+
+### 修法（`runtime/txn.py`）
+
+- **`restore(label, into="auto", backup=True)`**：
+  - `into="auto"`（默认）：载入快照后**把会话放回快照的出处文件**（优先快照记录里的 `filepath`，
+    其次会话当前文件；两者都落在快照目录里时不写）。即"恢复进原文件" —— 保存落回自己的工程。
+  - `into="snapshot"`：**非破坏**模式，只载入、一个字节都不写原文件；回执给 `next_save_goes_to` 明确"现在保存会落哪"。
+  - `into="original"`：要求必须能回写，兜不到目标就 `ok:false`（**不静默降级**）。
+  - `backup=True`（默认）：载入前先存一份 `_pre_restore_<label>_<ts>` 快照（restore 会丢当前未保存状态，
+    这个 undo 点必须留）；会话脏且要覆盖原文件时，再另存一份**原文件的磁盘副本** `_pre_restore_file_*`
+    （内存态 ≠ 磁盘态，覆盖前两份都要有底）。两份都进快照清单，能 `list` 到、能 `restore` 回来。
+- `snapshot` 的记录新增 `filepath` / `unsaved` —— 之后开过别的文件，`restore` 仍认得出"原文件在哪"。
+  （**目标顺序有讲究**：先看快照的出处。用户可能已经开了**别的**工程再 restore，那时写"当前文件"
+  等于毁掉另一个工程。）
+- 回执补 `filepath_before` / `filepath` / `wrote_to_original` / `target` / `target_source` /
+  `next_save_goes_to` / `backup` / `on_disk_backup` / `warning`。
+- `TXN_VERSION` 3 → 4；`t_help` 的 `file_level.restore` 口径同步。
+
+### 测试
+
+- 新增 **`tests/txn_restore_selftest.py`**（headless，自造合成场景，`preload="txn"`）—— **23 项断言**：
+  默认 restore 后会话回到原文件、`into="snapshot"` 时原文件 md5 一个字节没变、会话已漂到快照目录时
+  靠快照记录的 `filepath` 仍兜回原文件、未保存场景不乱写只告警、pre_restore 备份真落盘且能 `list` 到。
+  **先跑红（老代码 14 过 9 失败）再修**，修复后 23/23。
+- 回归：`tests/txn_selftest.py`（含 deliver 交叉断言）**55/55 全绿**（版本号断言同步到 4）。
+
+### 工具面
+
+`blender_rt_txn` 新增参数 `into` / `backup` 并转发到 `/txn`；描述里的旧口径
+"restore 会丢掉当前未保存状态" 改为"默认放回原文件 + 载入前自动备份"。
+`src/index.ts` 已改，**`lib/` 需重建**（工作树里另有未构建的在飞改动）。
+
+## 未发布（v1.0.6 待定）—— S0 草稿评估：参考图还原的第一步改成「先出制作表格，不量尺寸」
+
+**动机（用户口径）**：建模的**评估**阶段一上来就量精确尺寸、统计 mesh 数量，等于在**还没有参考图**的时候
+把编出来的数字当成规格；而这一步本该只是"在脑子里打草稿"——认清是什么 / 大概多大 / 拆成几块 / 谁是主体谁是配件 /
+哪块硬表面哪块曲面 / 哪里镂空·凸起·凹陷，后续返回图片时再慢慢完善。
+
+### 新增 `shape_draft` / `shape_draft_check`（shape 族，只读）
+
+- **`shape_draft(object_class=?)`**：返回**制作表格的字段契约 + 可填骨架**，**不返回任何测量值**。四张表：
+  T1 识别与量级（是什么 / 归哪类 / 量级档 A–F / 对称 / 轴向）、T2 制作单元（每件：role 主体·配件·重复件 /
+  parent / form_class / features / build_path / evidence / to_confirm）、T3 形态（faceted·smooth·organic·
+  rotational·plate·repeats·sweep）、T4 空间特征（镂空·凸起·凹陷·缝·薄壁·格栅）。
+  给了 `object_class` 就附带该类的**关注项名字**（要盯哪些比例 / 走哪条 `section_path`），**不含数字**。
+- **三条硬规则（机检）**：R1 不量精确尺寸（尺寸只能是量级档或 `0.3×` 这类相对比例，出现 mm/cm 即拒收）；
+  R2 不数 mesh（列出本阶段禁止调用的 `audit_scene`/`audit_mesh`/`print_report`/`shape_sections`… 清单）；
+  R3 不定死（每字段带 `confidence` + `source`，判不出写 `unknown`，每件必带 `to_confirm`）。
+- **`shape_draft_check(record=…)`**：把填好的表格机械校验（字段齐不齐 / 枚举对不对 / 主体是否为 0 或 >1 /
+  **有没有偷偷写 mm 级绝对值**），返回 `errors` / `warnings` / `stats`。`ok=true` 只表示"表格合格且没把数据定死"，
+  **不代表尺寸被验证过** —— 数字一律等 S2 标定 / S5 验收。
+- **迭代路径**随回执给出：S0 草稿（无图）→ S1 `img_scan`（像素 ≠ 毫米）→ S2 `img_rectify` 标定（第一次有数字）
+  → S3 站表/截面 → S4 出图对照 → S5 验收（**这一步才**数面数、量间隙）。
+
+### 指引同步（`catalog` / `classes` / 技能文档）
+
+- `catalog` 的 shape 族：`when` 改成「**先 S0 草稿** → `shape_plan` → 放样→特征线→IoU」，`not` 加
+  「**S0 别写 mm、别调 `audit_*` 数面数**」；ops 加 `draft` / `draft_check`（默认页长度门仍通过）。
+- `classes.mjs` 的 `recon` 类：`entry` 改为 `shape_draft`（第一步），chain 前置 `shape_draft → shape_draft_check`，
+  验收门分 S0 / S3 两段；`renderHandoff()` 硬规则 1 同步。
+- 技能侧：`references/参考图通用还原SOP.md` 由「八步」改为「**九步**」（新增 ⓪ 草稿评估 + §1.1 四张表 +
+  §5 草稿→数字的迭代纪律）；`SKILL.md` 新增 §0.5.0「冻结规格之前先打草稿」，并改 §0.7 决策树与四条硬规则第 1 条。
+- 计数：`28 family / 184 → 186 op`（`src/index.ts` 描述与工作区 `AGENTS.md` 经 `scripts/sync_counts.mjs` 刷新；
+  `capability.lock.json` 与 `tests/plan_readonly.baseline.json` 同步更新）。
+- `SHAPE_VERSION` 1 → 2；`shape_selftest` 增补 S0 断言（模板四表齐全 + 合法 record 过 + 写 `450mm` 必须被拒）。
+- 自检：`npm test` 全绿（能力锁 / 单一事实源 / 可发现性 / 指引完整性 / 路由契约等）。
+
 ## v1.0.5（2026-10-07）—— issue #14：悬垂默认不再把「贴床底面」算成需要支撑（+ 两个各向异性缩放的旧账 + `npm test` 在 Windows 上跑不到一半）
 
 ### 修 1（P1 · issue #14）：`print_overhang` / `print_report` 的贴床面口径

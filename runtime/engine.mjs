@@ -117,6 +117,12 @@ export const KERNEL_BOOTSTRAP = [
   '# 传输量不变（本地 socket 可忽略），换来零风险：任何路径都保证 kit 在。',
   'if getattr(K, "dsh_kit", None) is None:',
   ...KIT_SRC.split('\n').map((l) => (l ? '    ' + l : l)),
+  // ---- 几何底座（geo · 机制层：布尔/开孔/开槽/镜像/阵列/拉伸/放样/倒角/自动平滑）----
+  // 与 kit 同等：**任何注入路径都保证在**。不做成"可选 preload"的理由是实测 ——
+  // 最大的失效模式不是报错，是"不知道有这个模块"（两个会话各手写一套 kit 的直接原因）。
+  // 代价：每次 execute_code 传输量 +GEO_SRC（本地 socket，可忽略）；exec 只在首轮（持久内核）。
+  'if getattr(K, "dsh_geo_api", None) is None:',
+  ...GEO_SRC.split('\n').map((l) => (l ? '    ' + l : l)),
 ].join('\n');
 
 /** addon 命令目录：name → { d: 说明, gate: 需要的 scene 开关（null=常驻） } */
@@ -134,7 +140,7 @@ export const KERNEL_BOOTSTRAP = [
  */
 // S3：目录（数据 + 目录逻辑）外移到 catalog.mjs；此处导入并**重导出公开面**，对外面逐字节不变
 // S3-b：路径与常量外移到 paths.mjs；具名导入 + 重导出，对外面不变
-import { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER, KIT_SRC, KIT_HASH, blenderJoin, PIPELINE_PATH } from './paths.mjs';
+import { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER, KIT_SRC, KIT_HASH, GEO_SRC, blenderJoin, PIPELINE_PATH } from './paths.mjs';
 // S8：无头脚本暂存移到 staging.mjs；具名导入 + 重导出，导出面不变
 import { writeHeadlessScript } from './staging.mjs';
 // workdirStagingWarning 也在这个模块里（搬移时一并带过去了）；readJsonSafe 仍是 engine 本地（不进导出面）
@@ -727,7 +733,7 @@ export function createEngine(opts = {}) {
   /** 把 Blender 侧 python 模块注入运行中的 Blender（模块自己把 API 挂到 K 上） */
   const MODULE_ATTR = { RUNNER_READY: 'dsh_loop_api', PERF_READY: 'dsh_perf_api', VIEW_READY: 'dsh_view_api',
                         CONTRACT_READY: 'dsh_contract_api', PLAN_READY: 'dsh_plan_api',
-                        TXN_READY: 'dsh_txn_api', QC_READY: 'dsh_qc_api',
+                        TXN_READY: 'dsh_txn_api', QC_READY: 'dsh_qc_api', GEO_READY: 'dsh_geo_api',
                         QC_RENDER_READY: 'dsh_qc_render_api',
                         PRESET_READY: 'dsh_preset_api',
                         AUDIT_READY: 'dsh_audit_api', MONTAGE_READY: 'dsh_montage_api',

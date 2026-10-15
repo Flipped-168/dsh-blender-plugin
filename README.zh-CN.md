@@ -181,7 +181,8 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 ### `blender_rt_txn` —— 事务 / 回滚
 
 `op=snapshot | restore | list | prune | mark | revert | marks | drop | help`。**文件级**：`snapshot` / `restore`（整场景回退；写 .blend 副本，`copy=True` 所以不改当前 filepath；300 对象工程实测 96.7 MB / 824 ms）；**对象级**：`mark` / `revert`（只记 transform / 材质槽 / 可见性 / 修改器开关，毫秒级、就地回滚）。
-⚠️ 边界：对象级**不含拓扑 / UV / 顶点级改动** —— Boolean、合并、删面之后回不去（`revert` 会跳过并报告），那种回滚请用文件级 `snapshot` / `restore`（`restore` 会丢掉当前未保存状态）。
+`restore(label, into="auto", backup=True)` —— 载入快照后**把会话放回快照的出处文件**（默认 `into="auto"`，即"恢复进原文件"：之后的保存落回自己的工程，不再写进快照目录）；`into="snapshot"` 是**非破坏**模式（只看一眼，一个字节都不写原文件，回执给 `next_save_goes_to`）；`into="original"` 要求必须能回写，否则 `ok:false`。`backup=True`（默认）在载入前自动留一份 `_pre_restore_*` 快照；会话脏且要覆盖原文件时，另留一份原文件的**磁盘副本** `_pre_restore_file_*` —— 两者都能 `list` 到、能 `restore` 回来。
+⚠️ 边界：对象级**不含拓扑 / UV / 顶点级改动** —— Boolean、合并、删面之后回不去（`revert` 会跳过并报告），那种回滚请用文件级 `snapshot` / `restore`（`restore` 会丢掉当前未保存状态，但 v4 起默认替你先备份）。
 
 ### `blender_rt_preset` —— 配方库
 
@@ -225,7 +226,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 5. **对象精简** —— `blender_rt_opt(op="analyze")` 先看候选分组与预计节省 → `blender_rt_opt(op="join", args={dry_run:false, save_before:"D:/.../xxx_before_join.blend"})` 真合并（几何零损失）；合并前后对拍面数 / 顶点数。
 6. **无头成品渲染 / 批量出图** —— `blender_rt_headless(file=…, outdir=…, engine="cycles", timeout_ms=900000, as_job=True, preload="view,perf")`，再用 `blender_rt_job(op="wait", id="job-…", timeout_ms=600000)` 收结果；预期 >100 s 就别赌等待窗口。
 7. **事务 / 回滚** —— 拓扑类改动走文件级 `blender_rt_txn(op="snapshot", label="before_bool")` → 改 → `op="restore"`；只改一处再对比走对象级 `op="mark", objects="Cube"` → `op="revert"`（拓扑改动会被跳过并报告）。
-8. **从参考图到交付** —— 先 `blender_rt_plan(op="shape_plan", args={object_class:"furniture"})` 拿该类别的还原协议（要哪些视图 / 盯哪些比例 / 配哪些算子），再 `op="shape_sections"` → `op="shape_loft"` 放样成壳；验收 `op="qc_render_views", args={ref_path:…}` / `op="qc_compare"`（IoU / 剖面差）；交付 `op="uv_smart_project"` → `op="material_build"` → `op="material_bake"` → `op="deliver_export"` → `op="deliver_verify"`（OBJ/MTL + md5 清单）。
+8. **从参考图到交付** —— **第一步先 S0 草稿**：`op="shape_draft", args={object_class:"furniture"}` 拿「制作表格」的字段契约（是什么 / 量级档 A–F / 几块 / 主体配件 / 什么形 / 哪凸哪凹；**不出 mm、不数 mesh**）→ 填 `record` → `op="shape_draft_check", args={record:…}` 机械校验；**拿到参考图之后**再用 `op="shape_plan"` 拿该类别的还原协议（要哪些视图 / 盯哪些比例 / 配哪些算子），然后 `op="shape_sections"` → `op="shape_loft"` 放样成壳；验收 `op="qc_render_views", args={ref_path:…}` / `op="qc_compare"`（IoU / 剖面差）；交付 `op="uv_smart_project"` → `op="material_build"` → `op="material_bake"` → `op="deliver_export"` → `op="deliver_verify"`（OBJ/MTL + md5 清单）。
 
 ---
 

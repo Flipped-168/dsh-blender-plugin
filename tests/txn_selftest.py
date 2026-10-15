@@ -174,13 +174,13 @@ def main():
                                         "hint": "用 preload='txn' 跑"}, ensure_ascii=False))
         return
     print("TXN_SELFTEST version=%s outdir=%s blender=%s" % (api.get("version"), outdir, bpy.app.version_string))
-    check("TXN_VERSION 已 +1（=3）", int(api.get("version") or 0) == 3, api.get("version"))
+    check("TXN_VERSION 已 +1（=4：restore 的 filepath 语义）", int(api.get("version") or 0) == 4, api.get("version"))
     old_ops = ["snapshot", "restore", "list", "prune", "mark", "revert", "marks", "drop", "help"]
     new_ops = ["edit_begin", "edit_check", "edit_accept", "edit_revert", "edit_status"]
     check("老 API 一个都没丢", all(o in api for o in old_ops), [o for o in old_ops if o not in api])
     check("新 API 都挂上了", all(o in api for o in new_ops), [o for o in new_ops if o not in api])
     h = J(api["help"]())
-    check("t_help 里补了新 op", h.get("version") == 3 and "pending_edit" in h
+    check("t_help 里补了新 op", h.get("version") == 4 and "pending_edit" in h
           and all(o in h["pending_edit"] for o in new_ops), sorted(h))
     check("t_help 写明拓扑边界", "t_snapshot" in str(h.get("boundary")), h.get("boundary"))
 
