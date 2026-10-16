@@ -23,6 +23,11 @@
  *   POST /host/pick/answer   应答（复用 §1.5 的 pick 逻辑；错配不结束请求）
  *   POST /host/pick/cancel   取消（幂等）
  *   GET  /host/pick/result   结果轮询（`expired` 惰性判定）
+ *   ── v2.1（契约 v2.1 增补 §8.2/§8.3）──
+ *   POST /host/pick/remove   多选：从累积里移除一件（保持 pending）
+ *   GET  /host/jobs          headless 作业列表（**只读台账，零 Blender 往返**）
+ *   GET  /host/jobs/log      某作业的 stdout/stderr 尾部（**只读**）
+ *   （多选语义：`request{multi:true}` → `answer` 命中累积、仍 pending；`answer{done:true}` 收单）
  *   POST /headless       body: {script, file, outdir, args, timeoutMs} → 无头 Blender 独立进程跑脚本
  *   GET  /who            JSON：租约持有者 + 通道指标（多会话共存时先看它）
  *   POST /lease          body: {holder, ttlMs, force?, renewOnly?} → 拿写权限租约
@@ -365,7 +370,7 @@ async function handleHost(req, res, url, p) {
     const raw = await readBody(req);
     let payload = {};
     try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const reqObj = pickRequestStore.create({ prompt: payload.prompt, timeout_s: payload.timeout_s });
+    const reqObj = pickRequestStore.create({ prompt: payload.prompt, timeout_s: payload.timeout_s, multi: payload.multi === true });
     stats.pickRequests = (stats.pickRequests || 0) + 1;
     hostJson(res, 200, { ok: true, request: reqObj }, origin);
     return;
@@ -389,13 +394,22 @@ async function handleHost(req, res, url, p) {
       hostJson(res, 200, { ok: false, state: pre.state, error: 'no_such_request' }, origin);
       return;
     }
+    // §8.2 多选：显式收单（`done:true`）是**唯一**能结束多选请求的路径（不做反投影）
+    if (payload.done === true) {
+      hostJson(res, 200, pickRequestStore.answer(requestId, null, { done: true }), origin);
+      return;
+    }
     const r = await hostPickCore(payload);
     if (r.status === 200 && r.body.ok) {
-      // 命中**或点空处**（object:null）→ answered。空处的语义是"用户明确表示没有"
+      // 单选：命中**或点空处**（object:null）→ answered（空处 = "用户明确表示没有"）
+      // 多选：命中 → 累积、**仍 pending**；落空 → ok:false + error:"empty"，**不结束**
       const a = pickRequestStore.answer(requestId, r.body.object);
-      if (!a.ok) { hostJson(res, 200, { ok: false, state: a.state, error: a.error }, origin); return; }
+      if (!a.ok) {
+        hostJson(res, 200, { ok: false, state: a.state, error: a.error, objects: a.objects || [] }, origin);
+        return;
+      }
       stats.hostPicks = (stats.hostPicks || 0) + 1;
-      hostJson(res, 200, { ok: true, state: 'answered', object: r.body.object }, origin);
+      hostJson(res, 200, a, origin);     // 单选 = {ok,state:'answered',object}；多选 = {ok,state:'pending',added,objects}
       return;
     }
     // 失败（错配 / 未知 seq / 通道挂了）→ **请求不结束**，让用户刷新后重试。
@@ -422,6 +436,46 @@ async function handleHost(req, res, url, p) {
   // §7.2 结果轮询（模型工具用；`expired` 惰性判定）
   if (req.method === 'GET' && p === '/host/pick/result') {
     hostJson(res, 200, pickRequestStore.result(url.searchParams.get('requestId')), origin);
+    return;
+  }
+
+  // §8.2 多选：从累积里移除一件（按对象名），**保持 pending**
+  if (req.method === 'POST' && p === '/host/pick/remove') {
+    const raw = await readBody(req);
+    let payload = {};
+    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
+    const rm = pickRequestStore.remove(payload.requestId, payload.name);
+    hostJson(res, rm.ok ? 200 : 200, rm, origin);
+    return;
+  }
+
+  // §8.3 headless 作业区（**只读**：只读后端已有的 engine.job 台账，**零 Blender 往返**）
+  // 为什么面板看不到 headless：它跑的是独立 blender -b 进程（自己的场景），不碰 GUI ⇒ 视口/面板无画面。
+  if (req.method === 'GET' && p === '/host/jobs') {
+    const limit = clampIntParam(url.searchParams.get('limit'), 20, 1, 100);
+    let all = [];
+    try { all = engine.job.list() || []; } catch (e) { all = []; }
+    const trimmed = all.map(trimJob);
+    // running 在前；其余按耗时倒序（契约 §8.3）
+    trimmed.sort((a, b) => ((b.status === 'running' ? 1 : 0) - (a.status === 'running' ? 1 : 0)) || (b.ms - a.ms));
+    const running = trimmed.filter((j) => j.status === 'running').length;
+    hostJson(res, 200, { ok: true, jobs: trimmed.slice(0, limit), running: running, total: trimmed.length }, origin);
+    return;
+  }
+  if (req.method === 'GET' && p === '/host/jobs/log') {
+    const id = String(url.searchParams.get('id') || '');
+    const tail = clampIntParam(url.searchParams.get('tail'), 8000, 1, 200000);
+    let snap = null;
+    try { snap = engine.job.collect(id, tail); } catch (e) { snap = null; }
+    // `engine.job.collect` 对不存在的 id 回 `{status:'unknown', ok:false}`（不是 null）⇒ 这里归一成明确的失败态
+    if (!snap || snap.status === 'unknown' || snap.ok === false) {
+      hostJson(res, 200, { ok: false, id: id, error: 'unknown_job', stdout: null, stderr: null, job: null }, origin);
+      return;
+    }
+    hostJson(res, 200, { ok: true, id: id,
+                         stdout: (snap.stdoutTail === undefined ? null : snap.stdoutTail),
+                         stderr: (snap.stderrTail === undefined ? null : snap.stderrTail),
+                         job: trimJob(snap) }, origin);
     return;
   }
 
@@ -933,7 +987,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /host/ready /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items /host/pick/request /host/pick/answer /host/pick/cancel /host/pick/result)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /job /host/ready /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items /host/pick/request /host/pick/answer /host/pick/cancel /host/pick/result /host/pick/remove /host/jobs /host/jobs/log)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。
@@ -971,3 +1025,56 @@ const shutdown = () => {
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// ---------------------------------------------------------------- v2.1（§8.3）作业区助手
+/**
+ * §8.3 `<trimmed job>`：只留契约点名的字段，**裁掉大字段**（`script`、超长路径串等）。
+ * `resultJson` > 8 KB 截断并置 `resultTruncated:true`（别让一次轮询把面板撑爆）。
+ * **纯函数、零 I/O** —— 这是 `/host/jobs` 能做到"零 Blender 往返"的前提。
+ */
+function trimJob(j) {
+  const src = (j && typeof j === 'object') ? j : {};
+  let resultJson = (src.resultJson === undefined) ? null : src.resultJson;
+  let resultTruncated = false;
+  if (resultJson !== null) {
+    try {
+      const s = JSON.stringify(resultJson);
+      if (s !== undefined && s.length > 8192) {
+        resultJson = { truncated: true, preview: s.slice(0, 8192) };
+        resultTruncated = true;
+      }
+    } catch (e) { resultJson = null; resultTruncated = true; }
+  }
+  return {
+    id: String(src.id === undefined ? '' : src.id),
+    kind: src.kind === undefined ? null : src.kind,
+    status: src.status === undefined ? 'unknown' : src.status,
+    runId: src.runId === undefined ? null : src.runId,
+    pid: src.pid === undefined ? null : src.pid,
+    pidAlive: !!src.pidAlive,
+    ms: Number(src.ms) || 0,
+    timeoutMs: src.timeoutMs === undefined ? null : src.timeoutMs,
+    outdir: src.outdir === undefined ? null : src.outdir,
+    logDir: src.logDir === undefined ? null : src.logDir,
+    exitCode: src.exitCode === undefined ? null : src.exitCode,
+    signal: src.signal === undefined ? null : src.signal,
+    stage: src.stage === undefined ? null : src.stage,
+    stageName: src.stageName === undefined ? null : src.stageName,
+    stageAgoMs: src.stageAgoMs === undefined ? null : src.stageAgoMs,
+    lastOutputAt: src.lastOutputAt === undefined ? null : src.lastOutputAt,
+    idleMs: src.idleMs === undefined ? null : src.idleMs,
+    lines: Number(src.lines) || 0,
+    logBytes: Number(src.logBytes) || 0,
+    resultJson: resultJson,
+    resultTruncated: resultTruncated,
+    fromLedger: !!src.fromLedger,
+  };
+}
+
+/** §8.3 clamp 口径：缺省/非数 → 默认值；给了数 → 夹进 [lo,hi]（**不报错**，照 §1.x 既有口径） */
+function clampIntParam(v, dflt, lo, hi) {
+  if (v === null || v === undefined || v === '') return dflt;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
