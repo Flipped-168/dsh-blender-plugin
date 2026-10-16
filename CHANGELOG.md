@@ -1,5 +1,56 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.1.0（2026-10-16）—— 面板缩放/平移 · 一次多选零件 · headless 作业区
+
+**来源**：用户提问 —— ① 多子代理并行建模用的是 headless，"这怎么看"；② "能一次多选零件吗"；③ "可以在标签页 blender 视口里进行放大缩小移动视角吗" → 裁决"都做"。
+**唯一真源**：`docs/宿主集成-接口契约-v2.1增补.md`（§8.1 缩放/平移 · §8.2 多选 · §8.3 作业区 · §8.4 判据 18–26）。
+
+### 新 · 面板缩放/平移（§8.1，纯客户端）
+
+- `{zoom∈[1,8], tx, ty}`：**滚轮**以光标为锚点缩放、**按住拖拽**平移、**双击或「⟲ N×」**复位
+- **实现要点**：transform 加在**包裹 img 的容器**上，而点击处理器读的是 img 自己的 `getBoundingClientRect()` ——
+  **祖先 transform 会计入该 rect** ⇒ 纯 scale+translate 下 `(clientX-rect.left)/rect.width` **仍精确等于图片内比例**，
+  **无需手写逆变换**（比契约 §8.1 的原公式更省且更不易错）
+- 选物标记与 img 同处一个变换容器 ⇒ 放大后**标记不飘**；拖拽过 3px 即抑制紧随的 click ⇒ "平移一下"不会顺手选走物体
+- 捕获 `AUTO_CAPTURE_MAX_SIZE` **1000 → 1600**：这是缩放**有意义**的前提（否则只是把低清图拉大，点小零件照样点不准）
+
+### 新 · 一次多选零件（§8.2）
+
+- 后端：`request{multi:true}` → `answer` 命中**按名去重累积且仍 pending**（回 `{ok:true,state:"pending",added,objects}`）；
+  落空 `{ok:false,state:"pending",error:"empty"}` **不结束**；`answer{done:true}` 才 `answered`（objects 冻结）；
+  新增 `POST /host/pick/remove`；`GET /host/pick/result` 两种模式都回 `objects`；上限 `PICK_MULTI_MAX=200`
+- 面板：「多选」开关（连续点累积、再点一次取消该件、空点**不清空**）、已选清单（每件「✕」移除）、
+  「**加入消息**」一次插入全部名字；模型发起的多选请求下出现「**完成(N)**」—— **唯一**能结束多选请求的路径
+- 工具：`blender_rt_pick` 新增 `multi` 入参，多选时返回**对象名数组**并逐行列出
+- **单选语义逐字不变**（§7.2）：空点仍 `answered` + `object:null`，回归已验
+
+### 新 · headless 作业区（§8.3）
+
+- **为什么需要**：`blender_rt_headless` / `blender_rt_job` 跑的是**独立 `blender -b` 进程**（自己的场景、不碰 GUI）
+  ⇒ 视口与面板**永远没有画面**（架构必然，非缺陷）。作业注册表在**后端进程**，故加两条**只读** `/host` 路由即可
+- `GET /host/jobs?limit=` → `{ok,jobs,running,total}`（running 在前，其余按耗时倒序）；`GET /host/jobs/log?id=&tail=`
+  → `{ok,id,stdout,stderr,job}`（未知 id → `ok:false,error:"unknown_job"`）
+- 数据源**复用已有** `engine.job.list/status/collect`（不重造）；`trimJob()` 裁大字段、`resultJson` >8 KB 截断并置 `resultTruncated`
+- 面板「作业」区：状态（● 运行中 / ✓ 完成 / ■ 已终止）、阶段、已跑时长、**静默时长**（判"卡住还是在跑"）、行数；
+  点一条展开日志尾部（限高 160px 可滚动）；**只在有 running 时 2 s 轮询，全空闲 10 s**
+
+### 验收（实测，2026-10-16）
+
+- `npm test` **exit 0**；`capability_lock` **PASS**（28 family / 186 op / **16 工具**）；客户端 bundle 自检全绿
+- **描述预算门守住未放宽**：加 `multi` 入参后一度 **12 023 / 12 006 > 12 000** ⇒ **改文案压回**（最终 ≤ 12 000），
+  而非放宽这道门（v1.2 立的规矩）
+- 后端状态机单测 **19/19**：累积 / 按名去重 / `remove` / `done` 冻结 / 上限 200 / superseded 保留已选 / **单选回归 3 条**
+- 真机全链路：`request(multi)` → `answer`(空点，仍 pending) → `remove` → `done` → `answered`；单选空点回执与 v1.2 **逐字一致**
+- `/host/jobs` **零 Blender 往返**：20 次轮询 `metrics.calls` 增量 **0**；clamp `0/-5→1`、`99999→100`、非法→默认 20
+- 版本三处同步 **2.1.0**（`package.json` / `src/index.ts` / 重建后的 `lib/`）
+
+### 未证实（重启 DSH 后由用户确认）
+
+- 面板内缩放/拖拽的**真实手感**、`getBoundingClientRect` 在右侧栏里的**实际值**、作业区在真面板里的**排版**
+- 客户端半边与新增工具面**必须重启 DSH** 才装载
+
+---
+
 ## v2.0.0（2026-10-16）—— 改名：去上游品牌痕迹（addon `MCP for Blender` → `DSH Blender Bridge`）
 
 **来源**：用户裁决 —— ① 插件依赖的 Blender 侧 addon 一并改名（文件名 / 显示名 / 标识前缀）；② 协议判别 id 去上游项目名（`ahujasid` → `flat`）；③ 历史重写 + force-push。

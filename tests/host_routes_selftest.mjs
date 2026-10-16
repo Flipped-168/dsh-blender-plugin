@@ -548,6 +548,7 @@ console.log('[判据 8] @ 数据源（scene-items 过滤 / limit / 排序）');
 }
 
 await v12(blenderUp);
+await v21(blenderUp);
 finish();
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -921,6 +922,153 @@ async function v12(blenderNow) {
     ok('§7 收尾 · 测试结束后不留 pending 点选请求', !!stillPending && stillPending.request === null,
       stillPending && stillPending.request);
   }
+}
+
+// ── §8（v2.1）多选点选协议 + headless 作业只读路由 ────────────────────────────
+/**
+ * 判据 18–20 属**客户端**（缩放/平移的逆变换、捕获分辨率），本文件是 HTTP 自检 ⇒ 不在此覆盖
+ * （客户端行为由 `tests/client_bundle_selftest.mjs` 与独立假宿主探针负责）。
+ * 这里覆盖契约 v2.1 增补 §8.4 的 **判据 21–26**。
+ *
+ * 纪律照 §7 的 v12 段：① 没有路由就 SKIP 不 FAIL；② 已有真人的 pending 请求就**不抢占**；
+ * ③ 判据 24 用 `unknown_seq` 走"出错不结束"的**等价分支**（与 `scene_mismatch` 同一条代码路径），
+ *    这样**不需要写租约**、不动用户的场景名。
+ */
+async function v21(blenderNow) {
+  console.log('');
+  console.log('§8 v2.1：多选点选协议 + headless 作业只读路由（判据 21–26）');
+
+  const probe = await req('GET', '/host/jobs?limit=1', { timeout: 8000 });
+  show(probe, '部署探针 GET /host/jobs');
+  const pj = jbody(probe);
+  if (!probe.ok || (probe.status === 404 && pj && pj.error === 'not found')) {
+    for (const n of ['21', '22', '23', '24', '25', '26']) {
+      doSkip('判据 ' + n, 'v2.1 路由未装载（/host/jobs → '
+        + (probe.ok ? probe.status + ' ' + JSON.stringify(pj) : probe.err) + '）');
+    }
+    return;
+  }
+
+  // ═══ 判据 26 · /host/jobs 便宜（零 Blender 往返）+ clamp ═════════════════
+  await req('GET', '/host/jobs?limit=1', { timeout: 8000 });                 // 预热
+  const who0 = await req('GET', '/who', { timeout: 8000 });
+  for (let i = 0; i < 20; i++) await req('GET', '/host/jobs?limit=5', { timeout: 8000 });
+  const who1 = await req('GET', '/who', { timeout: 8000 });
+  const m0 = (jbody(who0) || {}).metrics || {};
+  const m1 = (jbody(who1) || {}).metrics || {};
+  const d26 = (Number.isInteger(m0.calls) && Number.isInteger(m1.calls)) ? (m1.calls - m0.calls) : null;
+  console.log('      · metrics.calls ' + JSON.stringify(m0.calls) + ' → ' + JSON.stringify(m1.calls) + '（增量 ' + JSON.stringify(d26) + '）');
+  ok('判据 26 · /host/jobs **不碰 Blender**：20 次轮询 metrics.calls 增量 === 0', d26 === 0, { c0: m0.calls, c1: m1.calls, delta: d26 });
+  ok('判据 26 · 回执形状合 §8.3（ok/jobs/running/total）',
+     !!pj && pj.ok === true && Array.isArray(pj.jobs) && Number.isInteger(pj.running) && Number.isInteger(pj.total), pj);
+  const lim = {};
+  for (const q of ['0', '-5', '99999', 'abc']) {
+    const r = await req('GET', '/host/jobs?limit=' + q, { timeout: 8000 });
+    const j = jbody(r);
+    lim[q] = (j && Array.isArray(j.jobs)) ? j.jobs.length : null;
+  }
+  console.log('      · limit clamp: ' + JSON.stringify(lim));
+  ok('判据 26 · limit clamp：0 → 1、-5 → 1、99999 → 100(或总数)、非法 → 默认 20',
+     lim['0'] === 1 && lim['-5'] === 1 && Number.isInteger(lim['99999']) && lim['99999'] >= 1 && lim['abc'] === 20, lim);
+  const lg = await req('GET', '/host/jobs/log?id=__no_such_job__&tail=100', { timeout: 8000 });
+  const lj = jbody(lg);
+  ok('判据 26 · /host/jobs/log 未知 id → ok:false + error:"unknown_job"', !!lj && lj.ok === false && lj.error === 'unknown_job', lj);
+
+  if (!blenderNow) {
+    for (const n of ['21', '22', '23', '24', '25']) doSkip('判据 ' + n, 'Blender 不可达：多选链路需要真帧');
+    return;
+  }
+  const cur0 = await req('GET', '/host/pick/request', { timeout: 8000 });
+  const cj0 = jbody(cur0);
+  if (cj0 && cj0.request) {
+    for (const n of ['21', '22', '23', '24', '25']) doSkip('判据 ' + n, '已有 pending 点选请求（可能来自真人）—— 不抢占');
+    return;
+  }
+
+  /** 探一个能命中的点（与判据 12 同一做法；视口空时返回 hit:false） */
+  async function probeHit(tag) {
+    const cap = await req('POST', '/host/view/capture', { json: { auto: false }, timeout: CAPTURE_TIMEOUT });
+    const c = jbody(cap);
+    if (!c || c.ok !== true || !Number.isInteger(c.seq)) return null;
+    const pts = [[0.5, 0.5]];
+    for (const y of [0.3, 0.5, 0.7]) for (const x of [0.3, 0.5, 0.7]) pts.push([x, y]);
+    for (const [x, y] of pts) {
+      const r = await req('POST', '/host/view/pick', { json: { seq: c.seq, x, y }, timeout: CAPTURE_TIMEOUT });
+      const j = jbody(r);
+      if (j && j.ok === true && j.object && j.object.name) {
+        console.log('      · ' + tag + ' 命中点 (' + x + ',' + y + ') → ' + JSON.stringify(j.object.name));
+        return { hit: true, x, y, name: j.object.name, seq: c.seq };
+      }
+    }
+    console.log('      · ' + tag + ' 无命中点（视口里没有物体）→ 只能验"落空不结束"');
+    return { hit: false, x: 0.5, y: 0.5, name: null, seq: c.seq };
+  }
+
+  // ═══ 判据 25 · 单选零回归（不依赖命中，先做） ═════════════════════════════
+  const rq25 = await req('POST', '/host/pick/request', { json: { prompt: '自检 判据25 单选回归' }, timeout: 10000 });
+  const q25 = jbody(rq25);
+  const id25 = q25 && q25.request ? q25.request.requestId : null;
+  if (!id25) { doSkip('判据 25', 'request 失败：' + JSON.stringify(q25)); }
+  else {
+    const ph = await probeHit('判据 25');
+    if (!ph) { doSkip('判据 25', '捕获失败，拿不到 seq'); }
+    else {
+      const a25 = await req('POST', '/host/pick/answer', { json: { requestId: id25, seq: ph.seq, x: ph.x, y: ph.y }, timeout: CAPTURE_TIMEOUT });
+      const aj = jbody(a25);
+      ok('判据 25 · 单选：命中或空处 → ok:true + state:"answered" + 有 object 字段',
+         !!aj && aj.ok === true && aj.state === 'answered' && ('object' in aj), aj);
+      const rs = await req('GET', '/host/pick/result?requestId=' + encodeURIComponent(id25), { timeout: 8000 });
+      const rj = jbody(rs);
+      ok('判据 25 · 单选 result 也回 objects（§8.2：单选时 objects = object?[object]:[]）',
+         !!rj && Array.isArray(rj.objects), rj);
+    }
+  }
+
+  // ═══ 判据 21/22/23/24 · 多选 ═════════════════════════════════════════════
+  const rq = await req('POST', '/host/pick/request', { json: { prompt: '自检 多选', multi: true, timeout_s: 60 }, timeout: 10000 });
+  const q = jbody(rq);
+  const id = q && q.request ? q.request.requestId : null;
+  ok('判据 22 · request{multi:true} → 回执 multi === true', !!(q && q.request && q.request.multi === true), q && q.request);
+  if (!id) {
+    for (const n of ['21', '22', '23', '24']) doSkip('判据 ' + n, '多选 request 失败：' + JSON.stringify(q));
+    return;
+  }
+  // 24（等价分支）：坏 seq 与 scene_mismatch 同一条"出错不结束"路径，且不需要写租约
+  const bad = await req('POST', '/host/pick/answer', { json: { requestId: id, seq: 999999, x: 0.5, y: 0.5 }, timeout: CAPTURE_TIMEOUT });
+  const bj = jbody(bad);
+  ok('判据 24 · 多选 + 坏 seq → ok:false + state:"pending" + error:"unknown_seq"（**不结束**）',
+     !!bj && bj.ok === false && bj.state === 'pending' && bj.error === 'unknown_seq', bj);
+  const st = await req('GET', '/host/pick/request', { timeout: 8000 });
+  const sj = jbody(st);
+  ok('判据 24 · 出错后请求**仍是**当前 pending（没被偷偷结束）',
+     !!(sj && sj.request && sj.request.requestId === id), sj && sj.request);
+
+  const ph2 = await probeHit('判据 21/23');
+  const ans = await req('POST', '/host/pick/answer', { json: { requestId: id, seq: (ph2 && ph2.seq) || 1, x: (ph2 && ph2.x) || 0.5, y: (ph2 && ph2.y) || 0.5 }, timeout: CAPTURE_TIMEOUT });
+  const aj2 = jbody(ans);
+  if (aj2 && aj2.ok === true && aj2.state === 'pending' && aj2.added) {
+    ok('判据 21 · 多选命中 → state:"pending" + added + objects（**仍不结束**）', Array.isArray(aj2.objects), aj2);
+    const again = await req('POST', '/host/pick/answer', { json: { requestId: id, seq: ph2.seq, x: ph2.x, y: ph2.y }, timeout: CAPTURE_TIMEOUT });
+    const gj = jbody(again);
+    ok('判据 23 · 同一物体再点 → 按名去重（objects 长度不增）',
+       !!gj && gj.state === 'pending' && Array.isArray(gj.objects) && gj.objects.length === 1, gj);
+  } else {
+    ok('判据 21 等价分支 · 多选落空 → ok:false + state:"pending" + error:"empty"（**不结束**）',
+       !!aj2 && aj2.ok === false && aj2.state === 'pending' && aj2.error === 'empty', aj2);
+    doSkip('判据 21', '视口中心/网格内无命中物体（object:null）—— 无法验"累积"；把视口对准一个物体再重跑');
+    doSkip('判据 23', '同上：去重需要真命中才能验');
+  }
+  const before = await req('GET', '/host/pick/result?requestId=' + encodeURIComponent(id), { timeout: 8000 });
+  ok('判据 22 · done 之前 result.state 恒为 "pending"', (jbody(before) || {}).state === 'pending', jbody(before));
+  const done = await req('POST', '/host/pick/answer', { json: { requestId: id, done: true }, timeout: 10000 });
+  const dj = jbody(done);
+  ok('判据 22 · answer{done:true} → state:"answered" + objects 数组',
+     !!dj && dj.ok === true && dj.state === 'answered' && Array.isArray(dj.objects), dj);
+  const after = await req('GET', '/host/pick/result?requestId=' + encodeURIComponent(id), { timeout: 8000 });
+  const afj = jbody(after);
+  ok('判据 22 · done 之后状态冻结（仍 answered，objects 不再变）',
+     !!afj && afj.state === 'answered' && Array.isArray(afj.objects)
+       && afj.objects.length === ((dj && Array.isArray(dj.objects)) ? dj.objects.length : -1), afj);
 }
 
 function finish() {
