@@ -18,10 +18,29 @@
 - 安装指引 / 配置参考 / README ×2 / `llms.txt` / `AGENTS.md` / `SECURITY.md` 全部改用新名；`docs/操作教程.md` §1.1 与 `docs/部署SOP.md` §3 的安装步骤已更新且仍可执行。
 - **保留（用户未选择去署名，MIT 合规）**：`docs/上游整合评估-mcp-for-blender与blend-ai.md`（连文件名）与 `docs/宿主集成层评估-Codex插件与DSH移植.md` 的上游出处 / 对比叙述、本 CHANGELOG 的来源条目、`runtime/viewstore.mjs` 的 MIT 出处注释。
 
-### 验收
+### 验收（实测，2026-10-16）
 
-- 残留判定见 `docs/改名方案-去上游痕迹.md` §4：`git grep -nE "MCP for Blender"` 与 `git grep -nE "ahujasid"` 只允许命中「旧名 / 别名迁移说明」与「上游归属评估」两类。
-- `npm test` 与真机通道验证由维护侧在发布前执行（本条目只记录改名范围，不预先登记实测数字）。
+**addon 侧**（三份：Windows 活文件 / 工作区 v1.6 / 插件 tmp v1.7）
+
+- 三份语法检查通过；Windows 落地件与 `tmp/dsh_blender_bridge.py` **`cmp` 逐字节一致**（md5 `d3197a75…` / v1.6 `6f0d36ef…`）
+- **品牌残留清零**：`blendermcp` / `MCP for Blender` / `BlenderMCP` = **0**；剩余命中 **v1.7 = 11 行、v1.6 = 8 行，100% 是允许位**（9/6 条环境变量兼容回退表 + 署名行）
+- **标识守恒**：v1.7 **34 → 34**、v1.6 **25 → 25**（逐个只差前缀）；变更行数守恒（`modified` == 含关键串行 − 允许位保留行：267 / 190，`deleted = 0`）⇒ 无关行一行未动
+- **署名逐行全等**：v1.7 7 行 / v1.6 5 行（文件头版权、`bl_info["author"]`、`terms_url` 等）
+- **环境变量回退功能实测**（非读码推断）：9 / 6 条全部通过「未设置 → None · 仅新名 → 新值 · 仅旧名 → 回退旧值 · 新旧并存 → 新名优先」
+
+**插件侧**
+
+- `npm test` **exit 0**；`protocol_selftest` **28 → 39 项**全绿（新增别名归一化 / 缓存共用 / 双名回退 / 新名优先断言）；`capability_lock` **PASS**（28 family / 186 op / 16 工具）
+- 真机（Blender 在跑、addon 磁盘已是新名而**运行会话仍是旧标识**）：`/doctor` → `kind=ok`、`protocol=flat`、`protocol_label` 为中性串；`/host/ready` → `{"ok":true,"ready":true,"protocol":11,"backend":"2.0.0"}`
+- **双名回退即生产路径**：`dshbb_use_*` 全缺、`blendermcp_use_*` 全在 ⇒ 回退分支被真实执行；`/commands` 的 gates 已用 `dshbb_use_*` 作键而**行为逐字不变**（19 available / 15 disabled）
+- **名字启发式放宽是必需的**：运行中的模块名已是 `dsh_blender_bridge`，旧的 `"mcp" in name` 过滤会**漏掉它**（真机反证：`dsh_blender_bridge` 在旧口径 `false`、新口径 `true`）
+
+**历史重写**
+
+- main `1875b79…cc79b72` force-push（82 提交全部重写）；**16 个 tag**（v0.4.0–v1.0.5）重写到对应新提交并强推（annotated 保留 tagger 与 message）
+- **核验**：`git rev-list --all` 中含品牌串的提交**只剩 1 个 = HEAD**，且全部落在 §4 允许位（祖先 81 提交：`MCP for Blender` 0 / `blendermcp` 0；16 个 tag：0）
+- HEAD 内容 **tree `baa3d447…` 逐字节未变**（允许位完好）
+- ⚠️ **未清**：GitHub 自管的 `refs/pull/*`（旧 PR #2/#5/#9/#13）仍指向重写前提交 —— push 删不掉，需在 GitHub 上删 PR
 
 ---
 
