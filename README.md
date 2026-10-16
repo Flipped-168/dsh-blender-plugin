@@ -75,6 +75,9 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 
 ## 3. Install (5 steps)
 
+> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.1.0.tgz` (1.3 MB / 144 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`.
+> Full third-party checklist: [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md).
+
 ```bash
 # 1) Build (needs a DSH source checkout to link cordis/schemastery/dsh-tools)
 cd dsh-blender-plugin

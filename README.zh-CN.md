@@ -86,6 +86,9 @@
 
 ## 3. 安装（Install，5 步）
 
+> **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的 `dsh-external-dsh-blender-plugin-2.1.0.tgz`（1.3 MB / 144 文件）：解包后放进 `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。
+> 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
+
 ```bash
 # ① 构建 —— **通常可跳过**：本仓已提交 lib/，克隆下来直接可用
 #    只有你改了 src/ 才需要重建（需指向一个 DSH 源码 checkout，用于链接 cordis/schemastery/dsh-tools）
