@@ -26,7 +26,7 @@
 > 插件管"通道"，skill 管"怎么建、怎么验收"，两个一起用才完整。
 
 > 让 **AI 模型真正驱动 Blender**：不用人点鼠标、不截屏喂图、不装 MCP 服务端，
-> 通过一条 TCP 直连通道拿到 **15 个模型侧工具**：**看视口 / 改场景 / 连续观察 / 内环搜索 / addon 命令面 / 渲染优化 / 对象精简 / 无头跑重活 / 热无头会话 / 作业层 / 事务回滚 / 配方库 / 判定与验收（28 family · 183 op）/ 通道运维**。
+> 通过一条 TCP 直连通道拿到 **16 个模型侧工具**：**看视口 / 改场景 / 连续观察 / 内环搜索 / addon 命令面 / 渲染优化 / 对象精简 / 无头跑重活 / 热无头会话 / 作业层 / 事务回滚 / 配方库 / 判定与验收（28 family · 186 op）/ 通道运维 / 请用户点选（单选或多选）**。
 >
 > **版本 v1.0** —— 自带 runtime（node + python），包内路径全相对，**换机器不用改源码**；配置走 `runtime/config.mjs`（env → 配置文件 → 自动探测 → 默认）。
 > **操作教程：[docs/操作教程.md](docs/操作教程.md) · 配置：[docs/配置参考.md](docs/配置参考.md) · 部署 SOP：[docs/部署SOP.md](docs/部署SOP.md)**
@@ -35,7 +35,7 @@
 
 ## v1.0 亮点（What's new in v1.0）
 
-**1.0 = 能力冻结线**：15 个模型侧工具 + `blender_rt_plan` 的 28 个 family / 183 个 op 是对外稳定面；包版本（`package.json` 的 `1.0.0`）、工具描述前缀（`[v1.0.0] …`）与 npm 包名三者一致。相对上一版，**功能增量只有 macOS 支持**：跨 OS 路径改写退化为恒等（`/Users/…` 不再被拼成 UNC），`/Applications` 下的 `Blender*.app` 自动探测，工作目录默认 `~/.dsh-blender-rt`。
+**1.0 = 能力冻结线**：16 个模型侧工具 + `blender_rt_plan` 的 28 个 family / 186 个 op 是对外稳定面；包版本（`package.json` 的 `1.0.0`）、工具描述前缀（`[v1.0.0] …`）与 npm 包名三者一致。相对上一版，**功能增量只有 macOS 支持**：跨 OS 路径改写退化为恒等（`/Users/…` 不再被拼成 UNC），`/Applications` 下的 `Blender*.app` 自动探测，工作目录默认 `~/.dsh-blender-rt`。
 
 这一版对外承诺的能力面（正文逐条展开）：
 
@@ -72,7 +72,7 @@
 ## 2. 前置条件（Requirements，5 条，缺一不可）
 
 1. **Blender 4.x / 5.x（GUI 模式）** —— 本通道要的是"能看见的 Blender"；后台 `-b` 只用于无头工具那条线。
-2. **Blender 里的 addon：`DSH Blender Bridge`**（**不在本包内**，需自备；**旧名 `MCP for Blender`**，模块名 `blender_mcp`）：它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 34 条（19 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
+2. **Blender 里的 addon**：**两条路任选** —— ① **本仓附带**（推荐）：[`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)（改名版，模块名 `dsh_blender_bridge`，见 [`addon/README.md`](addon/README.md)）；② **上游原版**：`MCP for Blender`（模块名 `blender_mcp`，[ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)）。**两条都能用** —— 插件对 addon 标识做了**双名回退**（新名优先、旧名回退），所以用哪条都连得上。它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 34 条（19 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
    - **也支持 harveyxiacn 增强版 `blender_mcp_addon`**（协议不同，插件侧自动适配，配置项 `addonProtocol`，默认 `auto`；见 `docs/配置参考.md` §6）。该实现没有上面那 5 条资产集成通道，相关命令会明确报错。
    - 装好后：3D 视图按 `N` → 找到「DSH Blender Bridge」面板 → **Connect**；兼容性自检 `node runtime/_probe_tools.mjs`（逐条探测命令，输出 ok / 耗时）；协议自检 `node tests/protocol_selftest.mjs`（不需要 Blender）。
    - ⚠️ **改名迁移（v2.0.0）**：旧版本叫 `MCP for Blender`（模块名 `blender_mcp`）；改名后模块名变了，需在 Blender 偏好设置里**重新启用 `DSH Blender Bridge`**（`Edit ▸ Preferences ▸ Add-ons`）—— 旧的"已启用"记录指向 `blender_mcp`，是**死引用**，可移除。完整迁移要点见 [MIGRATIONS.md](MIGRATIONS.md)。
@@ -87,7 +87,8 @@
 ## 3. 安装（Install，5 步）
 
 ```bash
-# ① 构建（需要指向一个 DSH 源码 checkout，用于链接 cordis/schemastery/dsh-tools）
+# ① 构建 —— **通常可跳过**：本仓已提交 lib/，克隆下来直接可用
+#    只有你改了 src/ 才需要重建（需指向一个 DSH 源码 checkout，用于链接 cordis/schemastery/dsh-tools）
 cd dsh-blender-plugin
 DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh          # 产出 lib/
 
@@ -100,10 +101,14 @@ cp dsh-blender.config.example.json dsh-blender.config.json        # 见 docs/配
 #       dsh.profile.bundles 加 "@dsh-external/dsh-blender-plugin"
 #    c) 预演：dsh --profile <profile> --dump-config → 重启 DSH
 
-# ④ 启动 Blender + Connect addon —— 两条路：
-#    agent / 无人值守：blender_viewport(op="launch")   ← 写 boot 脚本 + spawn + 轮询 9876，幂等
-#    人工：启动 Blender → 按 N →「DSH Blender Bridge」→ Connect
-#    （v2.0.0 改名后：旧的「MCP for Blender」条目是死引用，要在偏好设置里重新启用 `DSH Blender Bridge`；见 MIGRATIONS.md）
+# ④ 装 addon + 启动 Blender + Connect —— **推荐一键**：
+#    blender_viewport(op="launch")  ← 拉起 GUI Blender + **自动扫到并启用** addon
+#      （dsh_blender_bridge 与 blender_mcp 两种名字都能扫到）+ 轮询 9876，幂等；实测约 11 秒连上
+#    人工（三条，缺一不可）：
+#      a) 装 addon：Edit ▸ Preferences ▸ Add-ons ▸ Install... → 选 addon/dsh_blender_bridge.py
+#         （或改用上游原版 MCP for Blender —— 两条都能连，见 §2 第 2 条）
+#      b) 启用它（勾选）；v2.0.0 改名后旧的「MCP for Blender」条目是**死引用**，需重新启用「DSH Blender Bridge」（见 MIGRATIONS.md）
+#      c) 3D 视图按 N → 找到「DSH Blender Bridge」面板 → Connect（端口 9876）
 
 # ⑤ 验证 —— **唯一验收判据：doctor 回 `kind=ok`**（没到 = 没装好，按 §8 排查）
 curl -sS http://127.0.0.1:9877/health      # 后端活着 + 加载版本自证（provenance）
@@ -129,7 +134,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 
 ### 4.1 宿主集成：视口面板 · 点击进消息 · `@` 提及
 
-除模型工具外，本包还给 DSH 界面贡献一个**用户侧**半边（走独立 `/host/*` 路由，**不进** op 目录、**不加**模型工具 ⇒ 15 个工具 / 186 个 op 的能力面零变化）：
+除模型工具外，本包还给 DSH 界面贡献一个**用户侧**半边（走独立 `/host/*` 路由，**不进** op 目录、**不加**模型工具 ⇒ 16 个工具 / 186 个 op 的能力面零变化）：
 
 - **视口面板**：会话视图里的「Blender 视口」tab，显示最新一帧视口（1500 ms 轮询；帧陈旧时 600 ms）。
 - **点击进消息**：点画面里的物体 → 打标记 → 按「加入消息」把**截图 + 对象名文本**放进草稿（**不自动发送**，发不发你决定）。
@@ -146,7 +151,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 
 ---
 
-## 5. 工具参考（Tool reference，15 个工具）
+## 5. 工具参考（Tool reference，16 个工具）
 
 ### `blender_rt_see` —— 看视口
 
@@ -223,7 +228,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 `status`（健康 / 视口区域 / 计数 / 版本）· `doctor`（真跑一次 bpy 往返的三级体检：未连 / 主线程忙 / addon 线程卡死 + 修法）· `start` / `stop` / `restart`（后端进程与 15 s 看护）· `who` / `lease` / `release`（写租约）。
 `launch`：一键拉起 GUI Blender 并自动 Connect addon —— 写 boot 脚本 → detached spawn → **轮询 addon 端口**（唯一可信判据）→ 顺手 doctor；幂等，支持 `wait_ms` / `file` / `exe` / `addon_module` / `addon_file` / `dry_run`。
 
-### 通道语义（15 个工具共用）
+### 通道语义（16 个工具共用）
 
 - **只有一条 TCP 直连通道**：后端 `127.0.0.1:9877` → addon socket `127.0.0.1:9876`；插件加载时自动拉起后端并带 15 秒看护。
 - **持久内核 `K`**：`execute_code` 每次是新命名空间，状态要挂在 `K` 上（`sys.modules["dsh_rt_kernel"]`）。路径助手 `K.win_path / K.wsl_path / K.blend_path / K.out_dir`（GUI 与无头通用），另有 `K.run(path, reload_modules=True)`。
@@ -298,7 +303,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 dsh-blender-plugin/
 ├── package.json · cordis.patch.yml · dsh-blender.config.example.json   # 包定义 / bundle 装配 / 配置样例
 ├── tsconfig.json · scripts/build.sh   # 构建：链接 checkout 依赖 + tsc → lib/
-├── src/index.ts                       # host：15 个工具 + 后端看护 + 租约 + 回执消毒
+├── src/index.ts                       # host：16 个工具 + 后端看护 + 租约 + 回执消毒
 ├── runtime/                           # 自带 runtime（node + python，包内路径全相对）
 │   ├── config.mjs · paths.mjs         # env → 配置文件 → 自动探测 → 默认；跨 OS 路径
 │   ├── engine.mjs · server.mjs        # 直连引擎（addon socket 客户端 + 路由）与后端 HTTP 9877
@@ -329,11 +334,11 @@ dsh-blender-plugin/
 **① 离线回归（一条命令，13 步）**：`npm test` —— 判据是**退出码 0**（别用 grep 判"失败"字样，会漏掉静默失败）。
 单跑入口：`npm run test:discover`（工具可发现性 51 项）· `test:lease` · `test:workdir`（14 项）· `test:provenance`（16 项）· `test:generator`（13 项）· `test:dedupe` · `test:mac`（45 项）· `test:lossless`（回执出口消毒）· `test:routes`（路由契约）。
 
-**② DSH 升级后先跑这三条**（工具是用宿主的 `defineTool` 声明的，契约一变就是"15 个工具整体消失"）：
+**② DSH 升级后先跑这三条**（工具是用宿主的 `defineTool` 声明的，契约一变就是"16 个工具整体消失"）：
 
 ```bash
 node tests/protocol_selftest.mjs         # addon 协议层（28 项，不需要 Blender / DSH）
-node tests/dsh_api_compat_probe.mjs      # 15 个工具 + 15 个静态 timeoutMs + 0 报错
+node tests/dsh_api_compat_probe.mjs      # 16 个工具 + 15 个静态 timeoutMs + 0 报错
 blender_viewport(op="doctor")            # 回执里的「宿主 API：dsh-tools@<版本> @ <路径>」是自证
 ```
 

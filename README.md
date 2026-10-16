@@ -24,10 +24,10 @@ If it saved you some time, you're welcome to support its development on Afdian: 
 >
 > 🧩 **Companion skill: [blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling)** — the process and the acceptance criteria for modeling / assembly (multi-agent division of labour, reference-image-driven shapes, six pitfalls, numeric assembly gates). The plugin owns the *channel*; the skill owns *how to build and how to verify*.
 >
-> 🏷 **Version: v1.0** (package `1.0.0`) — the first stable release. The model-facing surface is frozen at **15 tools**, and the plan channel exposes **28 families · 183 ops**.
+> 🏷 **Version: v2.1.0** (package `2.1.0`) — the first stable release. The model-facing surface is frozen at **16 tools**, and the plan channel exposes **28 families · 186 ops**.
 
 > **Let an AI model actually drive Blender** — no clicking, no screenshots-into-prompt, no MCP server.
-> One direct TCP channel (addon `127.0.0.1:9876` · backend `127.0.0.1:9877`) gives the model 15 tools: **see the viewport · edit the scene · watch a time window · run an inner search loop · profile and fix render perf · decimate objects safely · offload heavy work to a headless process · batch long work as jobs · roll back · store parameter presets · call any addon command · judge / verify / export through the contract layer · operate the channel itself.**
+> One direct TCP channel (addon `127.0.0.1:9876` · backend `127.0.0.1:9877`) gives the model 16 tools: **see the viewport · edit the scene · watch a time window · run an inner search loop · profile and fix render perf · decimate objects safely · offload heavy work to a headless process · batch long work as jobs · roll back · store parameter presets · call any addon command · judge / verify / export through the contract layer · operate the channel itself.**
 >
 > Acceptance is unchanged and unforgiving: `blender_viewport(op="doctor")` must return `kind=ok`. If it does not, it is not installed — walk §9.
 
@@ -46,7 +46,7 @@ If it saved you some time, you're welcome to support its development on Afdian: 
 | Render performance profiling + preset | `blender_rt_perf` | analyze ≈10–20 s |
 | Object decimation (safe join, zero geometry loss) | `blender_rt_opt` | ≈1.4 ms/object |
 | **Headless process** for heavy renders / batch geometry | `blender_rt_headless` | cold start 0.9–1.2 s |
-| **Contract layer + planner + 28 families / 183 ops** | `blender_rt_plan` | AABB sweep 24 ms · BVH 0.17 ms/pair (307 objects) |
+| **Contract layer + planner + 28 families / 186 ops** | `blender_rt_plan` | AABB sweep 24 ms · BVH 0.17 ms/pair (307 objects) |
 | **Hot headless session** (reuse one `blender -b`, `K` persists) | `blender_rt_worker` | pays the 1.1–1.5 s cold start once |
 | **Transactions / rollback** | `blender_rt_txn` | snapshot 96.7 MB / 824 ms (300 objects) · mark→revert verified |
 | **Preset library** (save / apply / export parameter sets) | `blender_rt_preset` | a stored `render.resolution_x` really takes effect |
@@ -60,7 +60,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 ## 2. Requirements
 
 1. **Blender 4.x / 5.x running in GUI mode** — this channel needs a live GUI session (`-b` is only used by the headless tools).
-2. **Blender addon `DSH Blender Bridge`** (**not bundled**; **formerly `MCP for Blender`**, module `blender_mcp`) listening on `127.0.0.1:9876`. It must provide at least:
+2. **Blender addon** — **two options, either works**: ① **bundled in this repo**: [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) (renamed build, module `dsh_blender_bridge`; see [`addon/README.md`](addon/README.md)); ② **upstream original**: `MCP for Blender` (module `blender_mcp`, [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)). The plugin does a **dual-name fallback** on addon identifiers, so both connect. It listens on `127.0.0.1:9876` and must provide at least:
    `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(max_size, filepath, format)`, `execute_code(code)`.
    The **harveyxiacn enhanced `blender_mcp_addon`** is also supported (different wire protocol — the plugin adapts automatically; `addonProtocol`, default `auto`, see [`docs/配置参考.md`](docs/配置参考.md) §6). That implementation has none of the five asset integrations, and the corresponding commands fail loudly instead of pretending.
    Enable it in Blender, then in a 3D viewport press `N` → **DSH Blender Bridge** panel → **Connect**.
@@ -133,12 +133,12 @@ Besides the model tools, the package ships a **user-side** half for the DSH UI (
 
 ## 5. What's new in v1.0
 
-- **First stable release.** The model-facing surface is frozen at **15 tools**; the plan channel is **28 families · 183 ops**. A **capability lock** inside `npm test` pins both numbers and the 15 tool names — losing a family, an op or a tool turns the build red.
+- **First stable release.** The model-facing surface is frozen at **16 tools**; the plan channel is **28 families · 186 ops**. A **capability lock** inside `npm test` pins both numbers and the 16 tool names — losing a family, an op or a tool turns the build red.
 - **macOS is a first-class host**: identity path mapping, `.app` auto-detection, `~/.dsh-blender-rt` working dir, and a `/proc`-free backend kill path. `blender_viewport(op="launch")` cold-starts a connected GUI Blender (measured 2.5 s). `npm run test:mac` = **45 assertions**; `npm run test:gui` = **11/11** on a real machine.
 - **Five capability families landed — 21 ops, zero new tools**: `sculpt_*` (numpy displacement brushes; `bpy.ops.sculpt.brush_stroke` does not work from Python on Blender 5.2 — don't try it), `fix_*` (repair / decimate), `uv_*` (smart project / unwrap / project / pack), `print_*` (wall thickness + overhang, with a `resolution_mm` warning), `sweep_*` (parallel-transport sweep; bend radius computed before building).
 - **Materials and render state**: `material_build` (10 presets) → `material_apply` → `material_bake` (bakes procedural nodes to PNG, engine restored afterwards); `render_state` / `render_wait` / `render_reset` turn "Blender is rendering" into a seconds-level fact instead of a timeout — a write command during a render is refused with `BUSY_RENDER` in ~71 ms.
 - **A discoverability ladder instead of prose**: `blender_rt_plan(op="catalog")` is answered **locally** (no Blender round-trip, works under any lease) — every family says when to use it, when *not* to, and the minimal skeleton; `args={classes:true}` gives the 12 modeling classes; `<family>_help` gives operator detail; `args={handoff:true}` returns a paste-ready handoff block for subagents. Unknown op names answer `did_you_mean` with a skeleton, and a plan op sent to the wrong channel is corrected locally.
-- **Descriptions are on a budget**: the 15 tool schemas stay under 1,600 characters each and 12,000 in total, with the long tail moved into the catalog (three-level progressive disclosure: tool index → family → operator detail).
+- **Descriptions are on a budget**: the 16 tool schemas stay under 1,600 characters each and 12,000 in total, with the long tail moved into the catalog (three-level progressive disclosure: tool index → family → operator detail).
 - **Runtime hardening**: `workDir` probe + fallback (a read-only `/mnt/d` no longer stops the backend), `EADDRINUSE` named for what it is, render-guard stale marks auto-released after 15 minutes, Blender 5.2 compositor tolerance, and full `stdout` / `stderr` / `traceback` on failures.
 - **Offline escape hatch**: `runtime/offline_bootstrap.py` loads runtime modules inside a bare `blender -b` (`kapi(name)` / `install_kernel()`), so the capabilities survive a dead backend — verified: `blender -b --factory-startup --python runtime/offline_bootstrap.py -- vehicle audit` → `OFFLINE_BOOTSTRAP ok · loaded: audit, vehicle`.
 - **Reproducibility as a feature**: capability lock, route contract (`npm run test:routes` — 28/28 static, 70/70 live), provenance self-check (is the running process the disk copy?), and WSL / Windows / macOS regression guards inside `npm test`.
@@ -147,7 +147,7 @@ Besides the model tools, the package ships a **user-side** half for the DSH UI (
 
 ## 6. Tool reference
 
-All 15 tools require the backend to be running (the plugin starts it for you) and the addon to be connected. Parameter names are the schema's own names, identical on WSL, Windows and macOS.
+All 16 tools require the backend to be running (the plugin starts it for you) and the addon to be connected. Parameter names are the schema's own names, identical on WSL, Windows and macOS.
 
 ### `blender_rt_see` — look
 
@@ -224,7 +224,7 @@ The first path for heavy renders, batch geometry and validation: it does not occ
 A script line `print("HEADLESS {json}")` comes back as `result` (single-line JSON). The default prelude injects **EEVEE + ray tracing**; `gpu:"auto"` walks OPTIX→CUDA→HIP→ONEAPI→METAL and every receipt carries a `gpu` field (`before/after/configured/fell_back_to_cpu`) — because headless Cycles used to fall back to CPU **silently** (measured **15.4×** slower).
 **Timeouts never swallow results**: the client wait window (`DSH_HEADLESS_WAIT_MS`, default 100 s) returns `{kind:"promoted", jobId:"run-…"}` instead of failing — collect it with `blender_rt_job`. Expecting >100 s? Pass `as_job=true`. Receipts are a single-line JSON envelope plus a human summary; stdout/stderr land in `logs.*`; results over 4 KB are auto-dumped under `<workdir>/results/`.
 
-### `blender_rt_plan` — judgment, acceptance, export and modeling (28 families · 183 ops)
+### `blender_rt_plan` — judgment, acceptance, export and modeling (28 families · 186 ops)
 
 One tool for everything that has to be *decided*, not just executed. **Not sure which op? Ask the catalog first — it is answered locally, with no Blender round-trip:** `op="catalog"` (all families: when to use / when not to / minimal skeleton), `args={family:"audit"}` (one family), `args={tool:"rt_headless"}` (parameter long tail for a heavy tool), `args={classes:true}` (12 modeling classes), `args={handoff:true}` (paste-ready block for subagents), `args={verify:true}` (disk-vs-loaded catalog self-check). Read-only ops are exempt from the write lease; write ops go through it.
 
@@ -338,12 +338,12 @@ Decoding a failure is a three-level diagnosis: TCP unreachable → Blender/addon
 
 ```text
 dsh-blender-plugin/
-├── src/index.ts                # DSH host: the 15 tools, backend watchdog (15 s), lease heartbeat
+├── src/index.ts                # DSH host: the 16 tools, backend watchdog (15 s), lease heartbeat
 ├── runtime/
 │   ├── config.mjs              # env → config file → auto-detect → defaults (WSL / Windows / macOS)
 │   ├── engine.mjs              # addon socket client, op routing, command catalog, view/headless
 │   ├── server.mjs              # HTTP backend on 127.0.0.1:9877 (+ lease gating, NDJSON streaming)
-│   ├── catalog.mjs             # plan catalog: 28 families · 183 ops, tool details, provenance self-check
+│   ├── catalog.mjs             # plan catalog: 28 families · 186 ops, tool details, provenance self-check
 │   ├── classes.mjs             # 12 modeling classes (first step / chain / forbidden / acceptance gate)
 │   ├── addon-protocol.mjs      # flat vs category/action addon protocol adapter
 │   ├── paths.mjs · launch.mjs · staging.mjs · proc_env.mjs · backend_probe.mjs

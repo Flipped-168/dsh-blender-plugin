@@ -18,6 +18,7 @@
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
+    "addon",
     "lib",
     "runtime",
     "!runtime/ext/venv",
