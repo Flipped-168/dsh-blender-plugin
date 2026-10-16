@@ -1394,6 +1394,8 @@ window.__ModuleLoader__.load({
 		//#endregion
 
 		//#region 右侧栏门控（契约 §7.3："启用才出现"）
+		/** 右侧栏为可选服务：经 ctx.inject 等待后保存引用，不增加硬依赖。 */
+		var injectedRightSidebar = { tabs: null, right: null };
 		/**
 		 * 取 `sidebarRightTabs` / `sidebarRight` 两个服务。
 		 * 旧宿主没有它们 ⇒ `ok:false` ⇒ 走 §7.3.5 的 conversation.view 降级。
@@ -1401,10 +1403,12 @@ window.__ModuleLoader__.load({
 		 * （`ctx.reflect.provide("sidebarRightTabs", tabs)` / `("sidebarRight", controller)`）。
 		 */
 		function sidebarRightServices(ctx) {
-			var tabs = null;
-			var right = null;
-			try { tabs = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRightTabs") : null; } catch (e) { tabs = null; }
-			try { right = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRight") : null; } catch (e) { right = null; }
+			// 探测与注册/打开必须使用同一引用：未声明依赖的父 ctx 可能读不到服务。
+			// 注入回调在服务就绪时触发；保留旧宿主直接暴露服务时的回退读取。
+			var tabs = injectedRightSidebar.tabs || null;
+			var right = injectedRightSidebar.right || null;
+			try { if (!tabs) tabs = ctx && typeof ctx.get === "function" ? (ctx.get("sidebarRightTabs", false) || ctx.sidebarRightTabs) : null; } catch (e) { tabs = tabs || null; }
+			try { if (!right) right = ctx && typeof ctx.get === "function" ? (ctx.get("sidebarRight", false) || ctx.sidebarRight) : null; } catch (e) { right = right || null; }
 			var ok = !!(tabs && typeof tabs.register === "function" && right && typeof right.openTab === "function");
 			return { tabs: tabs, right: right, ok: ok };
 		}
@@ -1414,7 +1418,7 @@ window.__ModuleLoader__.load({
 		 *
 		 * - `ready===true` 且未注册 → 两阶段注册（类型 + 主体）；
 		 *   两个服务缺失 → 降级注册到 `conversation.view`（§7.3.5）
-		 * - `false→true` 边沿 → `openTab(TAB_KIND)`，**每个会话只自动开一次**（§7.3.3）
+		 * - ready 且会话已挂载 → `openTab(TAB_KIND)`；每个会话仅成功自动开一次，失败可重试
 		 * - `true→false` → `dispose()` 注销 + 关掉已开的本 kind 标签页（§7.3.4）
 		 *
 		 * @param ctx  cordis 客户端 ctx
@@ -1425,7 +1429,15 @@ window.__ModuleLoader__.load({
 			var registered = null;      // { mode, dispose } | null
 			var mode = "idle";          // idle | sidebar | fallback
 			var lastReady = null;
-			var openedSessions = {};    // sessionId（或 "__no_session__"）→ 已自动开过
+			var openedSessions = Object.create(null);    // sessionId → 已实际自动打开成功
+			var reportedErrors = Object.create(null);
+			function reportSidebarError(stage, error) {
+				var message = String(error && error.message || error);
+				var key = stage + ":" + message;
+				if (reportedErrors[key]) return;
+				reportedErrors[key] = true;
+				console.warn("[dsh-blender] sidebar " + stage + " failed: " + message);
+			}
 
 			function disposeAll(list) {
 				for (var i = list.length - 1; i >= 0; i--) {
@@ -1434,9 +1446,9 @@ window.__ModuleLoader__.load({
 			}
 
 			/** 当前在屏会话 id；读不到给 null（`openTab` 在没有会话时会 throw，先探再调）。 */
-			function mountedSessionId() {
+			function mountedSessionId(right) {
 				try {
-					var right = ctx && typeof ctx.get === "function" ? ctx.get("sidebarRight") : null;
+					right = right || sidebarRightServices(ctx).right;
 					if (right && right.mounted && typeof right.mounted.getSnapshot === "function") {
 						var sid = right.mounted.getSnapshot();
 						return sid === undefined ? null : sid;
@@ -1447,19 +1459,22 @@ window.__ModuleLoader__.load({
 
 			/** 两阶段注册（契约 §7.3.2）；任一阶段失败都返回 null（调用方转降级）。 */
 			function registerSidebar() {
-				if (!sidebarRightServices(ctx).ok) return null;
+				var services = sidebarRightServices(ctx);
+				if (!services.ok) return null;
+				var sidebarRightTabs = services.tabs;
 				var disposers = [];
 				try {
 					// ① 类型：静态声明，无运行时钩子；返回 disposer。
 					//    下面三处用**契约 §7.3.2 的冻结字面量**逐字写（id / kind / key / openTab 的 kind）——
 					//    tests/client_bundle_selftest.mjs 对它们做静态断言；TAB_ID/TAB_KIND 必须与之保持一致。
-					disposers.push(ctx.sidebarRightTabs.register({
+					disposers.push(sidebarRightTabs.register({
 						id: "@dsh-external/dsh-blender-plugin",
 						kind: "blender-viewport",
 						title: function () { return "Blender 视口"; },
 						guide: [{ id: "viewport", title: "Blender 视口", description: "看 Blender 当前画面，点物体写进消息" }]
 					}));
 				} catch (e) {
+					reportSidebarError("register type", e);
 					return null;
 				}
 				try {
@@ -1470,27 +1485,35 @@ window.__ModuleLoader__.load({
 					}));
 				} catch (e) {
 					disposeAll(disposers);
+					reportSidebarError("register pane", e);
 					return null;
 				}
-				return { mode: "sidebar", dispose: function () { disposeAll(disposers); } };
+				return { mode: "sidebar", tabs: services.tabs, right: services.right, dispose: function () { disposeAll(disposers); } };
 			}
 
-			/** 自动开一次；同一会话只开一次（用户手动关掉后不反复弹，§7.3.3）。 */
+			/** 只在实际打开成功后记账；等待会话挂载期间由 ready 轮询重试。 */
 			function openOnce() {
 				var sid = mountedSessionId();
-				var key = sid === null ? "__no_session__" : String(sid);
+				if (sid === null) return false;
+				var key = String(sid);
 				if (openedSessions[key] === true) return false;
-				openedSessions[key] = true;
-				// 契约 §7.3.3 的冻结字面量（静态断言要求逐字出现；TAB_KIND 必须与之保持一致）
-				try { ctx.sidebarRight.openTab("blender-viewport"); return true; } catch (e) { return false; }
+				try {
+					var right = sidebarRightServices(ctx).right;
+					right.openTab("blender-viewport");
+					openedSessions[key] = true;
+					return true;
+				} catch (e) {
+					reportSidebarError("openTab", e);
+					return false;
+				}
 			}
 
 			/** 关掉本 kind 已开的标签页（否则注销类型后它们会显示"nothing can view this"）。 */
-			function closeOurTabs() {
-				var sid = mountedSessionId();
+			function closeOurTabs(right) {
+				right = right || sidebarRightServices(ctx).right;
+				var sid = mountedSessionId(right);
 				if (sid === null) return;
 				try {
-					var right = ctx.sidebarRight;
 					if (!right || typeof right.tabsIn !== "function" || typeof right.close !== "function") return;
 					var list = right.tabsIn(sid) || [];
 					for (var i = 0; i < list.length; i++) {
@@ -1503,24 +1526,36 @@ window.__ModuleLoader__.load({
 			}
 
 			function applyReady(ready) {
+				var services = sidebarRightServices(ctx);
+				// 可选服务被撤销或替换时，不能让旧注册和旧引用永久占住门控。
+				if (registered && mode === "sidebar" && (registered.tabs !== services.tabs || registered.right !== services.right)) {
+					closeOurTabs(registered.right);
+					registered.dispose();
+					registered = null;
+					mode = "idle";
+					openedSessions = Object.create(null);
+				}
 				var isReady = ready === true;
-				var edge = lastReady !== isReady;
 				lastReady = isReady;
 				if (isReady) {
-					if (!registered) {
+					if (!registered || mode === "fallback") {
 						var r = registerSidebar();
 						if (r) {
+							// 服务晚于 /host/ready 就绪时，从降级座位升级并注销旧注册，
+							// 避免顶页签与右侧栏同时留下两份面板。
+							if (registered && typeof registered.dispose === "function") { try { registered.dispose(); } catch (e) { /* 旧座位注销失败不阻断升级 */ } }
 							registered = r;
 							mode = "sidebar";
-						} else if (typeof opts.fallbackRegister === "function") {
+						} else if (!registered && typeof opts.fallbackRegister === "function") {
 							registered = { mode: "fallback", dispose: opts.fallbackRegister() };
 							mode = "fallback";
 						}
 					}
-					if (edge) openOnce();
+					// 服务晚到、会话晚挂载或首次打开失败：下一次 tick 重试；成功后不再自动弹。
+					if (mode === "sidebar") openOnce();
 				} else {
+					if (mode === "sidebar") closeOurTabs(registered && registered.right);
 					if (registered) { registered.dispose(); registered = null; }
-					if (mode === "sidebar") closeOurTabs();
 					mode = "idle";
 				}
 			}
@@ -1578,6 +1613,25 @@ window.__ModuleLoader__.load({
 			var PanelBody = makePanelBody(ctx);
 			var PaneBody = makeSidebarPane(PanelBody);
 
+			// 可选依赖通过注入作用域读取，不能在父 ctx 上探测成功后又从父 ctx 使用。
+			// 注入回调只在服务就绪时触发 ⇒ 同时解决"sidebar-right 服务晚于本插件加载"的时序竞争。
+			ctx.inject(["sidebarRightTabs", "sidebarRight"], function (scope) {
+				var services = { tabs: null, right: null };
+				try {
+					services.tabs = (typeof scope.get === "function" ? scope.get("sidebarRightTabs") : null) || scope.sidebarRightTabs || null;
+				} catch (e) { /* ignore */ }
+				try {
+					services.right = (typeof scope.get === "function" ? scope.get("sidebarRight") : null) || scope.sidebarRight || null;
+				} catch (e) { /* ignore */ }
+				scope.effect(function () {
+					injectedRightSidebar = services;
+					return function () {
+						// 旧作用域的迟到清理不能清掉后来作用域的新实例。
+						if (injectedRightSidebar === services) injectedRightSidebar = { tabs: null, right: null };
+					};
+				}, "@dsh-external/dsh-blender-plugin: optional sidebar services");
+			});
+
 			// ① 就绪门控（§7.3）：轮询 GET /host/ready；ready===true 才注册右侧栏座位。
 			//    旧宿主（无 sidebarRightTabs/sidebarRight）→ 降级到 conversation.view（§7.3.5）。
 			ctx.effect(function () {
@@ -1630,7 +1684,11 @@ window.__ModuleLoader__.load({
 
 			// ③ 卸载时复位守卫（便于热重载 / 重新 apply）
 			ctx.effect(function () {
-				return function () { started = false; };
+				return function () {
+					started = false;
+					injectedRightSidebar.tabs = null;
+					injectedRightSidebar.right = null;
+				};
 			}, "@dsh-external/dsh-blender-plugin: reset apply guard");
 		}
 
