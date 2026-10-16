@@ -801,6 +801,19 @@ window.__ModuleLoader__.load({
 					return function () { alive = false; if (timer) clearTimeout(timer); };
 				}, []);
 
+				// §8.1 修（用户实测"缩放跟上下晃动冲突"）：React 17+ 对 `wheel` **是 passive 监听**
+				// ⇒ 在 onWheel 里调 preventDefault() 无效，滚轮会**既缩放又滚页面**。
+				// 必须在 DOM 上挂**原生 non-passive** 监听，才能真正吃掉滚轮（图上一滚 = 只缩放，页面不动）。
+				React.useEffect(function () {
+					var el = stageRef.current;
+					if (!el || typeof el.addEventListener !== "function") return undefined;
+					function onWheelNative(ev) { onStageWheel(ev); }   // onStageWheel 内部会 preventDefault
+					el.addEventListener("wheel", onWheelNative, { passive: false });
+					return function () {
+						try { el.removeEventListener("wheel", onWheelNative); } catch (e) { /* 忽略 */ }
+					};
+				}, [view.seq > 0]);
+
 				/** 进入一次在飞请求（自动重拍 / 手动刷新 / pick / 加入消息 共用同一计数）。 */
 				function beginFlight() {
 					inflightRef.current += 1;
@@ -1228,14 +1241,16 @@ window.__ModuleLoader__.load({
 				kids.push(h("div", {
 					key: "stage",
 					ref: stageRef,
-					style: UI.stage,
-					onWheel: onStageWheel,
+					// 拖拽期间禁掉文本选择与触摸滚动（否则纵向拖拽会连带选中文本/滚页面）
+					style: Object.assign({}, UI.stage, { touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }),
+					// ⚠ 这里**故意不挂** onWheel：React 的 wheel 是 passive，preventDefault 无效；
+					// 滚轮改由上面的 useEffect 挂**原生 non-passive** 监听（见那里的注释）
 					onPointerDown: onStageDown,
 					onPointerMove: onStageMove,
 					onPointerUp: onStageUp,
 					onPointerLeave: onStageUp,
 					onDoubleClick: resetTransform,
-					title: "滚轮缩放 · 按住拖拽平移 · 双击复位"
+					title: "在图上滚轮缩放（不会滚页面）· 按住拖拽平移 · 双击复位"
 				}, stageKids));
 
 				if (metaBits.length) kids.push(h("div", { key: "meta", style: UI.meta }, metaBits.join(" · ")));
