@@ -147,7 +147,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 > ⚠ **照实说明（未证实项）**：面板在 `conversation.view` 槽位上，**大概率是对话区的一个 View 页签**而非常驻侧栏；`section` 分组标题、`codec.serialize` 进模型文本、`inject` 业务面合并、以及"静默后自动重拍"（当前**只有手动重拍**）**均未证实**。逐条见 [操作教程 §9.9](docs/操作教程.md#9-宿主集成)。
 
 > ⚠ **改完/升级完必须重启 DSH**：客户端半边（`lib/client.js`）是 DSH 启动时加载的模块；只改了后端才用 `blender_viewport(op="restart")`。
-> 面板从 `http://127.0.0.1:3080` 跨源调 `9877`，所以后端只对 **loopback** Origin 回 CORS（`https://` 或非 loopback 主机名会被拒）。
+> 面板从 HTTP loopback GUI 或官方桌面端 `dsh-app://app` 跨源调 `9877`；后端仅对 **HTTP loopback** 与**精确的 `dsh-app://app`** 回显 CORS Origin，其他来源不带 `Access-Control-Allow-Origin`。这不是请求身份验证或服务端 403 拒绝。
 > 用法、CORS/端口要求与**故障对照表**见 [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成)。
 
 **v1.2 增补**：另有**右侧栏**视口面板（只在 `/host/ready` 为 true 时出现，Blender 关掉就消失）+ **模型请求点选**（第 16 个工具 `blender_rt_pick`，阻塞式：模型请你点物体 → 点完把对象名返回给模型）。用法、横幅应答/取消、故障对照与未证实项见 [操作教程 §10 右侧栏视口面板 + 模型请求点选](docs/操作教程.md#10-右侧栏视口面板--模型请求点选v12)。

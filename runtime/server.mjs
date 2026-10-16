@@ -15,7 +15,7 @@
  *   POST /host/view/capture  抓当前 GUI 视口一帧（唯一会驱动 Blender 取帧的 /host 路由；只读）
  *   POST /host/view/pick     点击反投影 → 对象（先校验 file/scene 错配 → *_mismatch）
  *   GET  /host/scene-items   `@` 提及数据源（objects/materials/collections）
- *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 loopback Origin 回显）
+ *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 HTTP loopback 或精确 dsh-app://app 回显）
  *   ── v1.2（契约 §7.1/§7.2）──
  *   GET  /host/ready         就绪门控（**零 I/O、零 bpy 往返**，面板每 2 s 轮询）
  *   POST /host/pick/request  发起点选请求（模型侧；全局至多一个 pending）
@@ -219,12 +219,15 @@ function readBody(req, limit = 1 << 22) {
 // 这是**用户侧**能力（人点视口 → 进自己的消息），不是模型工具：不进 /plan 的 op 目录、
 // 不加模型工具（capability.lock 的 family/op/工具名一动不动）。三条纪律：
 //   ① 所有 /host/* 响应（含错误）都带 CORS 头，但 `Access-Control-Allow-Origin`
-//      **只对 loopback Origin 回显**（其余站点不回该头）；
+//      **只对 HTTP loopback 或精确 dsh-app://app 回显**（其余来源不回该头）；
 //   ② 面板轮询只读 store（/host/view/latest 与 /host/view.png 一行都不碰 Blender）——
 //      面板开着不能占 Blender 主线程，这是上游 ViewportStore 的核心设计；
 //   ③ pick 先校验 file/scene 错配 → `*_mismatch`，**绝不**降级为"投到当前场景"。
 // 这五条路由都**不改场景**（capture 只是离屏画一帧）→ 不碰写租约（只读语义）。
-const HOST_ORIGIN_RE = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+// DSH 官方 Electron 桌面端使用 dsh-app://app，而不是 HTTP loopback Origin。
+// 只增加这个精确来源，不允许任意 dsh-app: 来源、null 或通配符。
+// CORS 控制浏览器对响应的读取，不是身份验证，也不阻止非浏览器客户端伪造 Origin。
+const HOST_ORIGIN_RE = /^(http:\/\/(127\.0\.0\.1|localhost)(:\d+)?|dsh-app:\/\/app)$/;
 function hostCorsHeaders(origin) {
   const h = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
