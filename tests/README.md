@@ -129,12 +129,13 @@ node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.jso
 node tests/protocol_selftest.mjs      # 或 npm test
 ```
 
-用两个 mock addon（扁平协议 / category-action）把适配层跑一遍，共 28 项断言：
+用两个 mock addon（扁平协议 / category-action）把适配层跑一遍，共 39 项断言：
 
 | 覆盖 | 断言要点 |
 |---|---|
-| 协议探测 | 两种 mock 各判对；死端口 → `null`；**扁平 addon 第一轮没回时按封套形状纠错**回 `ahujasid` |
-| 协议解析 | `auto` 探测出正确结果；显式 `addonProtocol` 不探测、立即返回；未知协议名报错 |
+| 协议探测 | 两种 mock 各判对；死端口 → `null`；**扁平 addon 第一轮没回时按封套形状纠错**回 `flat` |
+| 协议解析 | `auto` 探测出正确结果；显式 `addonProtocol` 不探测、立即返回；未知协议名报错；**已弃用别名** `'ahujasid'` 被接受并归一化为 `'flat'`（旧配置文件不炸） |
+| addon 标识双名探测 | 5 个集成开关在**旧 addon（`blendermcp_use_*`）**与**新 addon（`dshbb_use_*`）**下都读得到；双名都在时**新名优先**；回执键用新名 |
 | 两种协议下的调用 | `ping` / `get_scene_info` / `execute_code`（形状必须是 `{executed,result}`）/ 视口帧 |
 | 错误传播 | 两种协议各自把 addon 的错误变成 reject |
 | 缺能力不假装 | category-action 侧的资产集成命令明确报错；遥测类是本地桩（不占 socket） |

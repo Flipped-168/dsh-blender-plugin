@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CFG, PATHS, winToWsl, wslToWin, describeConfig, IS_WIN, IS_MAC, IS_WSL, PKG_ROOT, wslPathShared } from './config.mjs';
-// 协议适配层：直连通道支持两种 addon 实现（ahujasid 扁平协议 / harveyxiacn category-action），
+// 协议适配层：直连通道支持两种 addon 实现（扁平协议 / harveyxiacn category-action），
 // 由 CFG.addonProtocol 选择，默认 auto 自动探测。差异与映射见 runtime/addon-protocol.mjs。
 import { resolveProtocol, detectProtocol, resetProtocolCache } from './addon-protocol.mjs';
 
@@ -236,6 +236,11 @@ export function catalogPayload(opts) {
   return out;
 }
 
+/**
+ * 5 个资产集成开关的**逻辑名**（= `/commands` 回执里 `gates` 的键，与 COMMAND_CATALOG 的 `gate` 对齐）。
+ * v2.0.0 addon 改名后标识前缀是 `dshbb_`；读取时**先新名、取不到回退旧名 `blendermcp_*`**（旧 addon 回退）。
+ * 注意：结构与这 5 个逻辑名不得变（测试与 handoff 依赖它），只改前缀策略。
+ */
 export const GATE_FLAGS = [
   'dshbb_use_polyhaven',
   'dshbb_use_hyper3d',
@@ -243,6 +248,12 @@ export const GATE_FLAGS = [
   'dshbb_use_polypizza',
   'dshbb_use_hunyuan3d',
 ];
+
+/** 旧 addon（改名前的版本）的开关前缀 —— 只用于**兼容回退读取**，不是本插件的品牌。 */
+const LEGACY_GATE_PREFIX = 'blendermcp_';
+
+/** 把 GATE_FLAGS 的逻辑名映射成旧 addon 的开关名（回退读用） */
+const LEGACY_GATE_FLAGS = GATE_FLAGS.map((n) => n.replace(/^dshbb_/, LEGACY_GATE_PREFIX));
 
 const REGION_CODE = [
   'import bpy, json',
@@ -255,11 +266,24 @@ const REGION_CODE = [
   'print(json.dumps({"window": [w.width, w.height], "views": res}))',
 ].join('\n');
 
-const FLAGS_CODE = [
+/**
+ * 读 5 个集成开关的 python 载荷（`/commands` 用）。
+ * **双名探测**：先读新名 `dshbb_use_*`，取不到（None）再回退旧名 `blendermcp_use_*`
+ * —— addon 未改名（旧 addon 回退）与已改名两种情况下都能读到。
+ * 回执的键用**新名**（与 GATE_FLAGS / COMMAND_CATALOG.gate 对齐）。
+ */
+export const FLAGS_CODE = [
   'import bpy, json',
   's = bpy.context.scene',
-  'flags = "dshbb_use_polyhaven,dshbb_use_hyper3d,dshbb_use_sketchfab,dshbb_use_polypizza,dshbb_use_hunyuan3d".split(",")',
-  'print(json.dumps({"scene": s.name, "file": bpy.data.filepath, "flags": {k: bool(getattr(s, k, None)) for k in flags}}))',
+  'names = ' + JSON.stringify(GATE_FLAGS),
+  'legacy = ' + JSON.stringify(LEGACY_GATE_FLAGS),
+  'flags = {}',
+  'for i, n in enumerate(names):',
+  '    v = getattr(s, n, None)',
+  '    if v is None:',
+  '        v = getattr(s, legacy[i], None)   # 旧 addon 回退（改名前的版本）',
+  '    flags[n] = bool(v)',
+  'print(json.dumps({"scene": s.name, "file": bpy.data.filepath, "flags": flags}))',
 ].join('\n');
 
 function extractTag(out, tag) {
@@ -506,7 +530,7 @@ function pathAudit(stdout, stderr) {
 /* ────────────────────────────────────────────────────────────────────────────
  * v0.9.4（外部反馈《M1A1 分件建模》P1）：**一键拉起 GUI Blender 并自动 Connect addon**
  *
- * 反馈原文：「文档写的是按 N → DSH Blender Bridge → Connect，但 agent 没有人手。
+ * 反馈原文（原文里的 addon 名按 v2.0.0 改名后的叫法改写）：「文档写的是按 N → DSH Blender Bridge → Connect，但 agent 没有人手。
  * 我是自己拼 PowerShell Start-Process + --python-expr 才把 GUI 会话点亮的。」
  * 做法就是把那套自拼流程固化：写一个 boot 脚本（GUI 里 enable addon → 起 socket server），
  * detached spawn blender.exe，然后**轮询 addon 端口**（唯一可信判据，不靠 stdout 文本）。

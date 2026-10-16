@@ -153,7 +153,7 @@ GUI 通道（`rt_do`，`temp_override(window, screen, area=VIEW_3D, region=WINDO
 ## 3. P0：addon 升级（一次升级，白拿三条命令）
 
 实测本机 addon 回执：
-`{"name":"DSH Blender Bridge","addon_version":[1,6],"protocol_version":5,"capabilities":[…9 条…],"blender_version":"5.2.2 LTS"}`
+`{"name":"MCP for Blender","addon_version":[1,6],"protocol_version":5,"capabilities":[…9 条…],"blender_version":"5.2.2 LTS"}`
 `blender_rt_commands` 可用 15 条、被集成开关挡住 15 条（polyhaven/hyper3d/sketchfab/polypizza/hunyuan3d 全 off）。
 
 上游 2.1.0 的 `addon.py` 基线 handler dict 里比 1.6 多出：
@@ -222,7 +222,7 @@ blend-ai 的 `analyze_mesh_quality / repair_mesh / decimate_mesh` 提供了后�
 
 **A. 本机 addon 版本**
 `blender_rt_cmd(name="get_addon_info")` →
-`{"name":"DSH Blender Bridge","addon_version":[1,6],"protocol_version":5,"capabilities":["drain_human_activity","execute_code","get_addon_info","get_object_info","get_scene_info","get_telemetry_consent","get_viewport_screenshot","get_world_state_snapshot","set_telemetry_consent"],"blender_version":"5.2.2 LTS"}`
+`{"name":"MCP for Blender","addon_version":[1,6],"protocol_version":5,"capabilities":["drain_human_activity","execute_code","get_addon_info","get_object_info","get_scene_info","get_telemetry_consent","get_viewport_screenshot","get_world_state_snapshot","set_telemetry_consent"],"blender_version":"5.2.2 LTS"}`
 
 **B. 无头进程（`blender_rt_headless`，factory-startup，engine=none，2.7 s）**
 `{"blender":"5.2.2 LTS","background":true,"ctx_window":true,"ctx_area":false,"ctx_region":false,
@@ -243,7 +243,7 @@ blend-ai 的 `analyze_mesh_quality / repair_mesh / decimate_mesh` 提供了后�
 
 **D. 源码出处**
 - blend-ai：`addon/handlers/sculpting.py:137`（体素预算）、`src/blend_ai/tools/sculpting.py`（参数校验与枚举）、`README.md` Limitations（"Sculpt strokes cannot be simulated"）、`addon/render_guard.py`、`src/blend_ai/strict.py`、`enum_hints.py`、`validators.py`
-- mcp-for-blender：`addon.py`（handler dict：`describe_node_type` / `bpy_api_lookup` / `export_scene`）、`src/dsh_blender_bridge/safe_mode.py`（AST allowlist，opt-in）
+- mcp-for-blender：`addon.py`（handler dict：`describe_node_type` / `bpy_api_lookup` / `export_scene`）、`src/blender_mcp/safe_mode.py`（AST allowlist，opt-in）
 
 **E. 复现命令**
 `bash

@@ -60,11 +60,12 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 ## 2. Requirements
 
 1. **Blender 4.x / 5.x running in GUI mode** — this channel needs a live GUI session (`-b` is only used by the headless tools).
-2. **Blender addon `DSH Blender Bridge`** (**not bundled**) listening on `127.0.0.1:9876`. It must provide at least:
+2. **Blender addon `DSH Blender Bridge`** (**not bundled**; **formerly `MCP for Blender`**, module `blender_mcp`) listening on `127.0.0.1:9876`. It must provide at least:
    `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(max_size, filepath, format)`, `execute_code(code)`.
-   The **harveyxiacn enhanced `dsh_blender_bridge_addon`** is also supported (different wire protocol — the plugin adapts automatically; `addonProtocol`, default `auto`, see [`docs/配置参考.md`](docs/配置参考.md) §6). That implementation has none of the five asset integrations, and the corresponding commands fail loudly instead of pretending.
+   The **harveyxiacn enhanced `blender_mcp_addon`** is also supported (different wire protocol — the plugin adapts automatically; `addonProtocol`, default `auto`, see [`docs/配置参考.md`](docs/配置参考.md) §6). That implementation has none of the five asset integrations, and the corresponding commands fail loudly instead of pretending.
    Enable it in Blender, then in a 3D viewport press `N` → **DSH Blender Bridge** panel → **Connect**.
    Compatibility probe: `node runtime/_probe_tools.mjs`. Protocol self-test (no Blender needed): `node tests/protocol_selftest.mjs`.
+   ⚠️ **Rename migration (v2.0.0)**: older versions were called `MCP for Blender` (module `blender_mcp`). The module name changed, so you must **re-enable `DSH Blender Bridge`** in Blender's preferences (`Edit ▸ Preferences ▸ Add-ons`) — the old "enabled" entry points at `blender_mcp` and is a **dead reference**. Full migration notes: [MIGRATIONS.md](MIGRATIONS.md).
 3. **Node.js ≥ 20**.
 4. **DSH (DeepSeek Harness)** — this package registers tools as a DSH plugin (`inject: ['tools']`).
    Works with DSH in WSL + Blender on Windows (WSL interop is used to spawn `blender.exe`), with DSH and Blender on the same Windows machine (path mapping degrades gracefully), and — as of v1.0.4 — with **native Linux (not WSL)**: host and Blender share one OS, so no cross-OS path rewriting happens (`/home/…` reaches Blender as-is) and `blender_viewport op=doctor` reports your own distro. Blender is found via `which blender`; set `DSH_BLENDER_EXE` if it lives elsewhere. Default working dir: `os.tmpdir()/dsh-blender-rt` (see `docs/配置参考.md` §5).
@@ -91,6 +92,7 @@ cp dsh-blender.config.example.json dsh-blender.config.json
 # 4) Start Blender and connect the addon — two routes:
 #    agent / unattended: blender_viewport(op="launch")   # boot script + spawn + polls 9876, idempotent
 #    manual: start Blender → press N → "DSH Blender Bridge" → Connect (127.0.0.1:9876)
+#    (v2.0.0 rename: the old "MCP for Blender" entry is a dead reference — re-enable `DSH Blender Bridge`; see MIGRATIONS.md)
 
 # 5) Verify — the ONLY acceptance criterion: doctor returns kind=ok (otherwise it is NOT installed; walk §9)
 curl -sS http://127.0.0.1:9877/health    # backend alive + provenance (is this process the disk copy?)
@@ -297,7 +299,7 @@ Resolution order: **environment → config file → auto-detect → default**. N
 | Working dir (frames/scripts) | `DSH_BLENDER_WORKDIR` | `workDir` | `%LOCALAPPDATA%\dsh-blender-rt` (macOS: `~/.dsh-blender-rt`) |
 | Blender executable | `DSH_BLENDER_EXE` | `blenderExe` | auto (Program Files / Steam / `/Applications` / PATH) |
 | Addon host/port | `DSH_BLENDER_ADDON_HOST/PORT` | `addonHost`/`addonPort` | `127.0.0.1:9876` |
-| Addon wire protocol | `DSH_BLENDER_ADDON_PROTOCOL` | `addonProtocol` | `auto` (`ahujasid` / `category-action`) |
+| Addon wire protocol | `DSH_BLENDER_ADDON_PROTOCOL` | `addonProtocol` | `auto` (`flat` / `category-action`; the legacy value `ahujasid` is still accepted as a deprecated alias and normalized to `flat`) |
 | Backend port | `DSH_BLENDER_HTTP_PORT` | `httpPort` | `9877` |
 | Hot-worker port | `DSH_BLENDER_WORKER_PORT` | `workerPort` | `9879` |
 | Blender user config/scripts (GPU prefs) | `DSH_BLENDER_USER_CONFIG` / `DSH_BLENDER_USER_SCRIPTS` | `blenderUserConfig`/`blenderUserScripts` | `null` (headless does not read them) |
@@ -396,7 +398,7 @@ dsh-blender-plugin/
 
 - The HTTP backend binds `127.0.0.1` only — **do not** expose it publicly.
 - `execute_code` is intentionally a universal escape hatch: it runs arbitrary Python inside the Blender process. Use it only in a trusted environment.
-- The `DSH Blender Bridge` addon is **not** included; obtain it separately and respect its license.
+- The `DSH Blender Bridge` addon (formerly `MCP for Blender`) is **not** included; obtain it separately and respect its license.
 - No human-in-the-loop panel, MJPEG streaming or mouse/keyboard injection is included (that route was deliberately dropped: injecting input can leave the system stuck with a held key).
 - License: **BSD-3-Clause** (see `LICENSE`). Copyright holder is set to the repository owner — edit `LICENSE` if you need a different attribution.
 - Measured numbers in this README and in `tests/README.md` come from the author's machine and are meant as a baseline, not a guarantee.

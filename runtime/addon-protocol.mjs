@@ -1,20 +1,20 @@
 /**
  * addon 协议适配层 —— 让直连通道同时支持两种 Blender 侧 addon 实现。
  *
- * 背景：直连通道原先假定 addon 是 ahujasid 血统的 `DSH Blender Bridge`（README §2 的必需项）。
- * 但 Blender 侧实际还存在另一种广泛使用的实现 —— harveyxiacn 增强版 `dsh_blender_bridge_addon`，
+ * 背景：直连通道原先假定 addon 是**扁平协议**血统的「DSH Blender Bridge」（README §2 的必需项）。
+ * 但 Blender 侧实际还存在另一种广泛使用的实现 —— harveyxiacn 增强版 `blender_mcp_addon`，
  * 它的**分帧方式与命令词汇都不同**，直接连会表现为"端口通、addon 也活着，但命令全部超时"，
  * 排查成本很高。本模块把两者的差异收敛成两个协议描述符，由 `addonProtocol` 配置项选择，
  * 默认 `auto` 自动探测。
  *
  * 两种协议的真实差异（实测）：
  *
- *   ahujasid（DSH Blender Bridge 的扁平协议；实测 addon v1.6/protocol 5 与 v1.7/protocol 11 都是这一种）
+ *   flat（扁平协议；实测 addon v1.6/protocol 5 与 v1.7/protocol 11 都是这一种）
  *     请求  {"type":"get_scene_info","params":{}}          ← 无分帧
  *     应答  {"status":"success","result":{…}} / {"status":"error","message":"…"}
  *     词汇  扁平名（ping / execute_code / get_viewport_screenshot …）
  *
- *   category-action（harveyxiacn dsh_blender_bridge_addon）
+ *   category-action（harveyxiacn blender_mcp_addon）
  *     请求  {"id":"1","type":"command","category":"scene","action":"get_info","params":{}}\n
  *     应答  {"id":"1","success":true,"data":{…}}\n
  *     词汇  category.action（system.get_info / utility.execute_python …）
@@ -59,7 +59,7 @@ function planCategoryAction(type, params) {
     case 'get_addon_info':
       return {
         wire: { category: 'system', action: 'get_info', params: {} },
-        post: (d) => ({ name: 'dsh_blender_bridge_addon (harveyxiacn)', protocol: 'category-action', blender: d && d.version_string, filepath: d && d.filepath, scene: d && d.scene }),
+        post: (d) => ({ name: 'blender_mcp_addon (harveyxiacn)', protocol: 'category-action', blender: d && d.version_string, filepath: d && d.filepath, scene: d && d.scene }),
       };
     case 'execute_code': {
       if (typeof p.code !== 'string') throw new Error('execute_code 需要 code 参数');
@@ -109,9 +109,9 @@ function planCategoryAction(type, params) {
 
 /** 协议描述符：encode/decode/plan 三件事，AddonClient 与 freshPing 共用 */
 export const PROTOCOLS = {
-  ahujasid: {
-    id: 'ahujasid',
-    label: 'ahujasid / DSH Blender Bridge（扁平协议，无分帧；实测 v1.6/protocol5 与 v1.7/protocol11 都通 —— 活版本看 rt_cmd get_addon_info）',
+  flat: {
+    id: 'flat',
+    label: '直连 addon · 扁平协议（无分帧；实测 v1.6/protocol5 与 v1.7/protocol11 都通 —— 活版本看 rt_cmd get_addon_info）',
     framing: 'none',
     panelHint: '「DSH Blender Bridge」面板 → Connect',
     plan(type, params) { return { wire: { type: type, params: params || {} } }; },
@@ -124,7 +124,7 @@ export const PROTOCOLS = {
   },
   'category-action': {
     id: 'category-action',
-    label: 'harveyxiacn dsh_blender_bridge_addon（category/action，换行分帧）',
+    label: '直连 addon · category-action（换行分帧）',
     framing: 'newline',
     panelHint: '「DSH Blender Bridge」/ 该 addon 自己的面板 → Connect（两者监听同一端口，注意别同时开两个 addon）',
     plan: planCategoryAction,
@@ -152,9 +152,16 @@ export const PROTOCOLS = {
 export const PROTOCOL_IDS = Object.keys(PROTOCOLS);
 
 /**
+ * 已弃用别名（兼容，不是痕迹）：v2.0.0 起协议判别 id `'ahujasid'` 改名为 `'flat'`。
+ * 旧配置文件（`dsh-blender.config.json` 的 `addonProtocol`）里写 `'ahujasid'` 时**不报错**，
+ * 由 `resolveProtocol` 归一化成 `'flat'`（见契约 §1.2 的"已弃用别名"）。
+ */
+export const PROTOCOL_ALIASES = { ahujasid: 'flat' };
+
+/**
  * 探测一次：发一条 ping，只看"有没有回包"，回复内容交给调用方判形状。
  * 判据故意放宽成"回什么都不重要"——对面只要能解析我们的 JSON 并回一个 JSON，就证明它用的是这套协议
- * （例如 ahujasid 侧不一定有 ping 这个命令名，它会回 {"status":"error","message":"Unknown command type: ping"}，
+ * （例如扁平协议侧不一定有 ping 这个命令名，它会回 {"status":"error","message":"Unknown command type: ping"}，
  *  这同样是"讲扁平协议"的确证）。
  * @returns {Promise<object|null>} 解析出来的回包；没回包 → null
  */
@@ -188,16 +195,16 @@ function isFlatEnvelope(o) {
  * 自动探测 addon 用哪种协议。
  *   ① 先发**不带换行**的扁平 ping：category-action 的 addon 等不到换行，必然静默 → 有回包就一定是扁平 addon；
  *   ② 再发带换行的 category/action ping —— 若对面其实是"上一轮忙没回"的扁平 addon，它会回扁平封套，
- *      按封套形状仍能纠正回 ahujasid（不让一次忙导致的超时把协议判错）。
+ *      按封套形状仍能纠正回 flat（不让一次忙导致的超时把协议判错）。
  * @returns {Promise<{id:string, ms:number}|null>} null = 两种都没回包（addon 不在/不可用）
  */
 export async function detectProtocol(host, port, timeoutMs = 1000) {
   const t0 = Date.now();
-  const flatReply = await probeOnce(PROTOCOLS.ahujasid, host, port, timeoutMs);
-  if (flatReply) return { id: 'ahujasid', ms: Date.now() - t0, via: 'flat-probe' };
+  const flatReply = await probeOnce(PROTOCOLS.flat, host, port, timeoutMs);
+  if (flatReply) return { id: 'flat', ms: Date.now() - t0, via: 'flat-probe' };
   const caReply = await probeOnce(PROTOCOLS['category-action'], host, port, timeoutMs);
   if (!caReply) return null;
-  if (isFlatEnvelope(caReply)) return { id: 'ahujasid', ms: Date.now() - t0, via: 'native-probe-flat-envelope' };
+  if (isFlatEnvelope(caReply)) return { id: 'flat', ms: Date.now() - t0, via: 'native-probe-flat-envelope' };
   return { id: 'category-action', ms: Date.now() - t0, via: 'native-probe' };
 }
 
@@ -210,20 +217,22 @@ export function resetProtocolCache() { cache.clear(); }
 /**
  * 得到实际要用的协议描述符。
  * @param {{host:string, port:number, prefer?:string, timeoutMs?:number}} opts
- *        prefer = 'auto' | 'ahujasid' | 'category-action'（通常来自 CFG.addonProtocol）
+ *        prefer = 'auto' | 'flat' | 'category-action'（通常来自 CFG.addonProtocol）。
+ *        已弃用别名 `'ahujasid'` 仍被接受，归一化为 `'flat'`（旧配置文件不炸）。
  * @returns {Promise<{proto:object, from:'config'|'auto'|'fallback', detected?:object}>}
  */
 export async function resolveProtocol(opts = {}) {
   const host = opts.host || '127.0.0.1';
   const port = Number(opts.port) || 9876;
-  const prefer = opts.prefer || 'auto';
+  // 已弃用别名归一化：'ahujasid' → 'flat'（放在算 cache key 之前，别名与正名共用同一条缓存）
+  const prefer = PROTOCOL_ALIASES[opts.prefer] || opts.prefer || 'auto';
   const key = host + ':' + port + '/' + prefer;
   if (cache.has(key)) return cache.get(key);
 
   // 显式指定：不探测，直接信任（探测失败也不回退，否则用户无法强制某一种）
   if (prefer !== 'auto') {
     const proto = PROTOCOLS[prefer];
-    if (!proto) throw new Error('未知 addonProtocol: ' + prefer + '（可选 ' + PROTOCOL_IDS.join(' / ') + ' / auto）');
+    if (!proto) throw new Error('未知 addonProtocol: ' + prefer + '（可选 ' + PROTOCOL_IDS.join(' / ') + ' / auto；已弃用别名 ahujasid 仍被接受）');
     const r = { proto: proto, from: 'config' };
     cache.set(key, r);
     return r;
@@ -232,7 +241,7 @@ export async function resolveProtocol(opts = {}) {
   const detected = await detectProtocol(host, port, opts.timeoutMs || 1000);
   const r = detected
     ? { proto: PROTOCOLS[detected.id], from: 'auto', detected: detected }
-    : { proto: PROTOCOLS.ahujasid, from: 'fallback' };   // 没探到：按默认协议走，让后续报错保持原样
+    : { proto: PROTOCOLS.flat, from: 'fallback' };   // 没探到：按默认协议走，让后续报错保持原样
   cache.set(key, r);
   return r;
 }

@@ -315,11 +315,13 @@ export const CFG = {
   // 通道
   addonHost: process.env.DSH_BLENDER_ADDON_HOST || FILE.cfg.addonHost || '127.0.0.1',
   addonPort: num(process.env.DSH_BLENDER_ADDON_PORT || FILE.cfg.addonPort, 9876),
-  // Blender 侧 addon 的线上协议：auto（默认，探测一次）/ ahujasid / category-action。
+  // Blender 侧 addon 的线上协议：auto（默认，探测一次）/ flat / category-action。
   // 见 runtime/addon-protocol.mjs；探测结果会出现在 /doctor 与 /who 里。
+  // 旧值 'ahujasid' 是**已弃用别名**（v2.0.0 协议判别 id 改名 'flat'）：归一化为 'flat'，旧配置文件不炸。
   addonProtocol: (function () {
     const v = String(process.env.DSH_BLENDER_ADDON_PROTOCOL || FILE.cfg.addonProtocol || 'auto').trim().toLowerCase();
-    return v === 'ahujasid' || v === 'category-action' ? v : 'auto';
+    if (v === 'ahujasid') return 'flat';   // 已弃用别名（兼容，不是痕迹）
+    return v === 'flat' || v === 'category-action' ? v : 'auto';
   })(),
   httpPort: num(process.env.DSH_BLENDER_HTTP_PORT || FILE.cfg.httpPort, 9877),
   /**

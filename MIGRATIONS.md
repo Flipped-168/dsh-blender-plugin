@@ -2,6 +2,33 @@
 
 > 若你的环境基线文档里出现"旧路径"，对照本表。**旧路径均已删除**，只在原址留指路 README。
 
+## v2.0.0 改名迁移（去上游痕迹，2026-10-16）
+
+> 本插件与它依赖的 Blender 侧 addon **一起改名**。**旧名仍被兼容读取**，但用户侧有一件必须做的事（见下）。
+> 改名方案与逐字命名映射（唯一真源）：[`docs/改名方案-去上游痕迹.md`](docs/改名方案-去上游痕迹.md)。
+
+### 改了什么
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| Blender addon 文件名 / 模块名 | `blender_mcp.py` / `blender_mcp` | **`dsh_blender_bridge.py`** / **`dsh_blender_bridge`** |
+| addon 显示名（UI / 面板 / 日志） | `MCP for Blender` | **`DSH Blender Bridge`** |
+| addon 标识前缀（属性 / prefs / handler / timer，34 个） | `blendermcp_` | **`dshbb_`** |
+| 注册类 | `bpy.types.blendermcp_server` | **`bpy.types.dshbb_server`** |
+| 5 个集成开关 | `blendermcp_use_polyhaven` 等 | **`dshbb_use_polyhaven`** 等 |
+| 协议判别 id（`addonProtocol`） | `ahujasid` | **`flat`**（`ahujasid` 为**已弃用别名**，仍被接受） |
+| 协议显示标签 | `ahujasid / MCP for Blender（…）` | **`直连 addon · 扁平协议（无分帧）`** |
+
+### 用户要做的三件事
+
+1. **在 Blender 偏好设置里重新启用 addon**：模块名从 `blender_mcp` 变成 `dsh_blender_bridge` ⇒ Blender 旧的"已启用插件"记录是**死引用**（可顺手移除）。到 `Edit ▸ Preferences ▸ Add-ons` 里重新启用 **`DSH Blender Bridge`**，然后 3D 视图按 `N` →「DSH Blender Bridge」→ **Connect**。
+2. **旧配置不用改**：`addonProtocol: "ahujasid"` 仍被接受（`resolveProtocol` 归一化为 `flat`，不报错）。addon 侧标识按兼容契约做**双名探测**（先读 `dshbb_*`，取不到再回退 `blendermcp_*`；`bpy.types` 同理），所以**改名前后都能连**。
+3. **以后升级上游 addon 会打回原形**：上游仍用 `blendermcp_*` 与 `MCP for Blender`。届时 addon 显示名会变回 `MCP for Blender`、标识回到 `blendermcp_*` —— **插件的双名回退仍能让通道继续工作**（不需要改配置）；想保持新名字就按 [`docs/改名方案-去上游痕迹.md`](docs/改名方案-去上游痕迹.md) §1.1 自行做机械替换。
+
+> **归属与许可保留**：改名只动**显示名与标识**，不动 addon 源码里的版权声明与 MIT 许可证文本。上游归属/对比叙述保留在 [`docs/上游整合评估-mcp-for-blender与blend-ai.md`](docs/上游整合评估-mcp-for-blender与blend-ai.md)、[`docs/宿主集成层评估-Codex插件与DSH移植.md`](docs/宿主集成层评估-Codex插件与DSH移植.md) 与 [`CHANGELOG.md`](CHANGELOG.md) 的来源条目里。
+
+## 历史：路径 / 通道变更（2026-09）
+
 | 时间 | 变更 | 旧 | 新 |
 |---|---|---|---|
 | 2026-09-13 | 插件独立成包并改名 | `plugins/dsh-blender-viewport/`（包名 `@dsh-external/dsh-blender-viewport`） | **`dsh-blender-plugin/`**（包名 **`@dsh-external/dsh-blender-plugin`**）；运行时从 `blender/viewport/` 迁到 **`dsh-blender-plugin/runtime/`** |

@@ -72,9 +72,32 @@ async function tryLaunchAgent(opts, addonPort, steps, base) {
 
 
 
-const LAUNCH_BOOT_PY = [
-  '"""DSH launch boot (v0.9.4): enable the Blender MCP addon and start its socket server (GUI only)."""',
+/**
+ * addon 自动探测的**名字提示**（旧名与新名都要命中）：
+ *   · 旧 addon 回退（改名前的版本）：`MCP for Blender`（模块 `blender_mcp`、标识前缀 `blendermcp_*`）
+ *   · 新名：`DSH Blender Bridge`（模块 `dsh_blender_bridge`、标识前缀 `dshbb_*`）
+ * 只按 "mcp" 匹配的话，addon 改名后（`dsh_blender_bridge.py`）启动器的自动探测就扫不到 ⇒ 通道起不来。
+ * LAUNCH_BOOT_PY 里由 JSON.stringify 内联成**同一个**列表，`addonNameHit()` 是它的 JS 同口径镜像（测试用）。
+ */
+export const ADDON_NAME_HINTS = ['mcp', 'blender_bridge', 'dshbb', 'dsh_blender_bridge'];
+
+/** 与 LAUNCH_BOOT_PY 里 `_name_hit()` 同口径的 JS 判定（小写子串命中）——测试用 */
+export function addonNameHit(name) {
+  const n = String(name || '').toLowerCase();
+  return ADDON_NAME_HINTS.some((k) => n.includes(k));
+}
+
+/** 注进 Blender 的启动脚本源码（导出供自检断言"落盘的那份 Python 真的双名命中"） */
+export const LAUNCH_BOOT_PY = [
+  '"""DSH launch boot (v0.9.4): enable the Blender addon and start its socket server (GUI only)."""',
   'import importlib.util, json, os, sys',
+  '',
+  '# ---- DSH addon 名字提示：旧名/新名都命中（addon_utils 扫描与目录扫描共用）----',
+  '_HINTS = ' + JSON.stringify(ADDON_NAME_HINTS),
+  'def _name_hit(name):',
+  '    n = (name or "").lower()',
+  '    return any(k in n for k in _HINTS)',
+  '# ---- /DSH addon 名字提示 ----',
   '',
   '_res = {',
   '    "ok": False, "background": None, "enabled": [], "loaded_by": None, "server_running": False,',
@@ -106,8 +129,16 @@ const LAUNCH_BOOT_PY = [
   '    print("DSH_LAUNCH " + json.dumps(_res, ensure_ascii=False), flush=True)',
   '',
   '',
-  'def _server_running():',
+  'def _server_cls():',
+  '    # 双名探测：先新名 dshbb_server，再回退旧名 blendermcp_server（旧 addon 回退，改名前的版本）',
   '    t = getattr(bpy.types, "dshbb_server", None)',
+  '    if t is None:',
+  '        t = getattr(bpy.types, "blendermcp_server", None)',
+  '    return t',
+  '',
+  '',
+  'def _server_running():',
+  '    t = _server_cls()',
   '    try:',
   '        return bool(t and getattr(t, "running", False))',
   '    except Exception:',
@@ -124,7 +155,7 @@ const LAUNCH_BOOT_PY = [
   '        import addon_utils',
   '        mods = list(addon_utils.modules())',
   '        _res["addon_modules_seen"] = [getattr(m, "__name__", "") for m in mods][:60]',
-  '        names = want or [getattr(m, "__name__", "") for m in mods if "mcp" in getattr(m, "__name__", "").lower()]',
+  '        names = want or [getattr(m, "__name__", "") for m in mods if _name_hit(getattr(m, "__name__", ""))]',
   '        for n in names:',
   '            try:',
   '                addon_utils.enable(n, default_set=True, persistent=True)',
@@ -145,7 +176,7 @@ const LAUNCH_BOOT_PY = [
   '    addons_dir = os.path.join(os.environ.get("BLENDER_USER_SCRIPTS", ""), "addons")',
   '    try:',
   '        for f in sorted(os.listdir(addons_dir)):',
-  '            if f.lower().endswith(".py") and "mcp" in f.lower():',
+  '            if f.lower().endswith(".py") and _name_hit(f):',
   '                cands.append(os.path.join(addons_dir, f))',
   '    except Exception:',
   '        pass',
@@ -155,7 +186,7 @@ const LAUNCH_BOOT_PY = [
   '            mod = importlib.util.module_from_spec(spec)',
   '            sys.modules[spec.name] = mod',
   '            spec.loader.exec_module(mod)',
-  '            if not getattr(bpy.types, "dshbb_server", None) and hasattr(mod, "register"):',
+  '            if not _server_cls() and hasattr(mod, "register"):',
   '                mod.register()',
   '            _res["addon_file"] = p',
   '            _res["loaded_by"] = "direct-import:" + os.path.basename(p)',

@@ -9,7 +9,7 @@
 
 | 读哪节 | 为什么 |
 |---|---|
-| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧的 addon `DSH Blender Bridge` **不在本包内**，必须用户自备并在 Blender 里 Connect |
+| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧的 addon `DSH Blender Bridge`（**旧名 `MCP for Blender`**，模块名 `blender_mcp`）**不在本包内**，必须用户自备并在 Blender 里 Connect；v2.0.0 改名后模块名变了，需在 Blender 偏好设置里**重新启用**（旧条目是死引用，见 [MIGRATIONS.md](MIGRATIONS.md)） |
 | **§3 安装（5 步）** | 构建 → 配置 → 装进 profile → 起 Blender → 验证 |
 | **§8 常见故障**（英文 README 为 §9） | 报错先查表，别自己发明修法 |
 

@@ -1,5 +1,30 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.0.0（2026-10-16）—— 改名：去上游品牌痕迹（addon `MCP for Blender` → `DSH Blender Bridge`）
+
+**来源**：用户裁决 —— ① 插件依赖的 Blender 侧 addon 一并改名（文件名 / 显示名 / 标识前缀）；② 协议判别 id 去上游项目名（`ahujasid` → `flat`）；③ 历史重写 + force-push。
+**唯一真源**：`docs/改名方案-去上游痕迹.md`（逐字命名映射）。
+
+### 改名面
+
+- **Blender 侧 addon**：`blender_mcp.py` → **`dsh_blender_bridge.py`**；`bl_info["name"]` `MCP for Blender` → **`DSH Blender Bridge`**；标识前缀 `blendermcp_` → **`dshbb_`**（34 个去重标识，含注册类 `bpy.types.dshbb_server` 与 5 个集成开关）。**版权声明与 MIT 许可证文本原样保留**（只改显示名与标识）。
+- **插件侧协议 id**：`'ahujasid'` → **`'flat'`**；`addonProtocol` 合法值 `auto｜flat｜category-action`，**`ahujasid` 保留为已弃用别名**（归一化为 `flat`，旧配置不炸）。
+- **协议显示标签中性化**：`ahujasid / MCP for Blender（…）` → `直连 addon · 扁平协议（无分帧）`；`harveyxiacn blender_mcp_addon（…）` → `直连 addon · category-action（换行分帧）`。
+- **兼容（强制）**：插件对 addon 标识做**双名探测**（先 `dshbb_*`，取不到回退 `blendermcp_*`；`bpy.types` 同理）⇒ addon 改名前后都能连。
+
+### 文档与迁移
+
+- 新增 **v2.0.0 迁移说明**（见 [`MIGRATIONS.md`](MIGRATIONS.md)）：改名要点 · 需在 Blender 偏好设置里**重新启用 `DSH Blender Bridge`**（旧 `blender_mcp` 记录是死引用）· 旧配置 `ahujasid` 仍可用 · 以后升级上游 addon 会打回原形但**插件双名回退仍能工作**。
+- 安装指引 / 配置参考 / README ×2 / `llms.txt` / `AGENTS.md` / `SECURITY.md` 全部改用新名；`docs/操作教程.md` §1.1 与 `docs/部署SOP.md` §3 的安装步骤已更新且仍可执行。
+- **保留（用户未选择去署名，MIT 合规）**：`docs/上游整合评估-mcp-for-blender与blend-ai.md`（连文件名）与 `docs/宿主集成层评估-Codex插件与DSH移植.md` 的上游出处 / 对比叙述、本 CHANGELOG 的来源条目、`runtime/viewstore.mjs` 的 MIT 出处注释。
+
+### 验收
+
+- 残留判定见 `docs/改名方案-去上游痕迹.md` §4：`git grep -nE "MCP for Blender"` 与 `git grep -nE "ahujasid"` 只允许命中「旧名 / 别名迁移说明」与「上游归属评估」两类。
+- `npm test` 与真机通道验证由维护侧在发布前执行（本条目只记录改名范围，不预先登记实测数字）。
+
+---
+
 ## v1.2.0（2026-10-16）—— 新：右侧栏视口面板（**通道可用才出现**）· 模型请用户点选（`blender_rt_pick`）
 
 **来源**：用户裁决 —— ① 面板不该常驻（不建模时别占地方），改成"启用了才出现"；② 模型要能主动问"是哪一个，点一下"。
@@ -600,11 +625,11 @@ GUI 通道（`npm run test:gui`，需真机 + addon）—— **11/11 通过**：
 
 ### addon 升级：v1.6（protocol 5）→ v1.7（protocol 11）
 
-- **落地**：替换 @@C:\Users\<用户>\AppData\Roaming\Blender Foundation\Blender\5.2\scripts\addons\dsh_blender_bridge.py@@
-  （模块名保持 @@dsh_blender_bridge@@ 不变 ⇒ Blender 偏好设置里不会出现重复条目），源文件取自 PyPI sdist
-  @@mcp-for-blender-2.1.0@@ 的 @@src/dsh_blender_bridge/bundled/addon.py@@（sha 校验一致）。
+- **落地**：替换 @@C:\Users\<用户>\AppData\Roaming\Blender Foundation\Blender\5.2\scripts\addons\blender_mcp.py@@
+  （模块名保持 @@blender_mcp@@ 不变 ⇒ Blender 偏好设置里不会出现重复条目），源文件取自 PyPI sdist
+  @@mcp-for-blender-2.1.0@@ 的 @@src/blender_mcp/bundled/addon.py@@（sha 校验一致）。
 - **回退点**（两份，md5 已对拍 @@50dfd58290e5eb34c2a2fd9fae3f6f23@@）：
-  同目录 @@dsh_blender_bridge.py.v16.bak@@ 与 @@dsh-blender-plugin/tmp/backup/dsh_blender_bridge_v16.py@@。
+  同目录 @@blender_mcp.py.v16.bak@@ 与 @@dsh-blender-plugin/tmp/backup/blender_mcp_v16.py@@。
 - **重启**：@@Stop-Process blender -Force@@ → @@blender_viewport(op="launch")@@（5.7 s 起监听 9876、doctor 随即健康）。
   ⚠ 升级后必须**完全重启 Blender**（脚本 reload 会留下旧 socket 线程），与上游说明一致。
 - **新增能力（实测）**：@@get_addon_info@@ 回 @@addon_version":[1,7],"protocol_version":11@@、capabilities 9 → 11 条；
@@ -1973,8 +1998,10 @@ engine.act 在 v0.7.0 改成返回结构化对象（stdout/stderr/error/tracebac
 
 ## v0.4.1（2026-09-14）—— addon 协议适配：同时支持 ahujasid 与 harveyxiacn 两种 addon
 
+> ⚠️ **本节的 `ahujasid` 是改名前的历史称谓**：v2.0.0 起协议判别 id 改称 **`flat`**，`ahujasid` 保留为**已弃用别名**（旧配置仍被接受，`resolveProtocol` 归一化为 `flat`）。本节文字按改名前的原文保留。
+
 > 来源：外部贡献 [PR #2](https://github.com/sixtysevenlf/dsh-blender-plugin/pull/2)（[@yihefeikong-rgb](https://github.com/yihefeikong-rgb)，对应 issue #1），**已合并**（merge commit `b0a04b3`）。
-> 状态：作者在 Windows 11 + Blender 5.2.1 LTS + harveyxiacn `dsh_blender_bridge_addon` 实测；维护侧合并前独立复核：`node tests/protocol_selftest.mjs` → **28/28 通过**，并用官方 addon 真机验证无回归（`/doctor` → `protocol=ahujasid from=auto`，`execute_code` 与自定义视角取帧正常）。
+> 状态：作者在 Windows 11 + Blender 5.2.1 LTS + harveyxiacn `blender_mcp_addon` 实测；维护侧合并前独立复核：`node tests/protocol_selftest.mjs` → **28/28 通过**，并用官方 addon 真机验证无回归（`/doctor` → `protocol=ahujasid from=auto`，`execute_code` 与自定义视角取帧正常）。
 > 新增 `addonProtocol` 配置项，默认 `auto`。**不改变既有行为**：仍然是扁平协议优先，装官方 addon 的机器零配置。
 
 - **新增 `runtime/addon-protocol.mjs`**：把两种 addon 的差异（分帧方式 / 命令词汇 / 应答封套）收敛成协议描述符，`AddonClient` 与 `freshPing` 共用同一套 `plan / encode / decode`。

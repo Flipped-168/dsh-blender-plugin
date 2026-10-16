@@ -72,9 +72,10 @@
 ## 2. 前置条件（Requirements，5 条，缺一不可）
 
 1. **Blender 4.x / 5.x（GUI 模式）** —— 本通道要的是"能看见的 Blender"；后台 `-b` 只用于无头工具那条线。
-2. **Blender 里的 addon：`DSH Blender Bridge`**（**不在本包内**，需自备）：它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 34 条（19 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
-   - **也支持 harveyxiacn 增强版 `dsh_blender_bridge_addon`**（协议不同，插件侧自动适配，配置项 `addonProtocol`，默认 `auto`；见 `docs/配置参考.md` §6）。该实现没有上面那 5 条资产集成通道，相关命令会明确报错。
+2. **Blender 里的 addon：`DSH Blender Bridge`**（**不在本包内**，需自备；**旧名 `MCP for Blender`**，模块名 `blender_mcp`）：它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 34 条（19 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
+   - **也支持 harveyxiacn 增强版 `blender_mcp_addon`**（协议不同，插件侧自动适配，配置项 `addonProtocol`，默认 `auto`；见 `docs/配置参考.md` §6）。该实现没有上面那 5 条资产集成通道，相关命令会明确报错。
    - 装好后：3D 视图按 `N` → 找到「DSH Blender Bridge」面板 → **Connect**；兼容性自检 `node runtime/_probe_tools.mjs`（逐条探测命令，输出 ok / 耗时）；协议自检 `node tests/protocol_selftest.mjs`（不需要 Blender）。
+   - ⚠️ **改名迁移（v2.0.0）**：旧版本叫 `MCP for Blender`（模块名 `blender_mcp`）；改名后模块名变了，需在 Blender 偏好设置里**重新启用 `DSH Blender Bridge`**（`Edit ▸ Preferences ▸ Add-ons`）—— 旧的"已启用"记录指向 `blender_mcp`，是**死引用**，可移除。完整迁移要点见 [MIGRATIONS.md](MIGRATIONS.md)。
 3. **Node.js ≥ 20**（跑后端与插件宿主）。
 4. **DSH（DeepSeek Harness）**：本包以 DSH 插件形态提供工具（`inject: ['tools']`），并按 `dsh.bundle` 约定声明装配（`cordis.patch.yml`）。
    - WSL 里跑 DSH、Blender 在 Windows：需要 WSL 互操作开启（默认开），`spawn` 才能直接起 `blender.exe`；两者同在 Windows：把 `blenderExe` 配成 `D:\...\blender.exe` 即可，路径映射自动退化。
@@ -102,6 +103,7 @@ cp dsh-blender.config.example.json dsh-blender.config.json        # 见 docs/配
 # ④ 启动 Blender + Connect addon —— 两条路：
 #    agent / 无人值守：blender_viewport(op="launch")   ← 写 boot 脚本 + spawn + 轮询 9876，幂等
 #    人工：启动 Blender → 按 N →「DSH Blender Bridge」→ Connect
+#    （v2.0.0 改名后：旧的「MCP for Blender」条目是死引用，要在偏好设置里重新启用 `DSH Blender Bridge`；见 MIGRATIONS.md）
 
 # ⑤ 验证 —— **唯一验收判据：doctor 回 `kind=ok`**（没到 = 没装好，按 §8 排查）
 curl -sS http://127.0.0.1:9877/health      # 后端活着 + 加载版本自证（provenance）
@@ -256,7 +258,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 | 工作目录（帧 / 脚本 / 台账 / results） | `DSH_BLENDER_WORKDIR` | `workDir` | `%LOCALAPPDATA%\dsh-blender-rt`（macOS `~/.dsh-blender-rt`；WSL 下映射成 `/mnt/c/…`） |
 | Blender 可执行文件 | `DSH_BLENDER_EXE` | `blenderExe` | 自动（Program Files / Steam / `/Applications` / `PATH`） |
 | addon 地址 / 端口 | `DSH_BLENDER_ADDON_HOST` / `DSH_BLENDER_ADDON_PORT` | `addonHost` / `addonPort` | `127.0.0.1` / `9876` |
-| addon 协议 | `DSH_BLENDER_ADDON_PROTOCOL` | `addonProtocol` | `auto`（可显式 `ahujasid` / `category-action`） |
+| addon 协议 | `DSH_BLENDER_ADDON_PROTOCOL` | `addonProtocol` | `auto`（可显式 `flat` / `category-action`；旧值 `ahujasid` 仍被接受为已弃用别名，归一化为 `flat`） |
 | 后端端口 | `DSH_BLENDER_HTTP_PORT` | `httpPort` | `9877` |
 | 写租约身份 / TTL | `DSH_BLENDER_HOLDER` / `DSH_BLENDER_LEASE_TTL_MS` | `holder` / `leaseTtlMs` | `plugin-pid-<pid>` / 600000 ms |
 | 热无头 worker 端口 | `DSH_BLENDER_WORKER_PORT` | `workerPort` | `9879` |
@@ -354,7 +356,7 @@ node tests/host_routes_selftest.mjs      # 打契约 §4 判据 1–8（CORS / P
 
 ## 11. 安全、许可与致谢（Security, license, credits）
 
-- 本包**不含** Blender addon 本体（`DSH Blender Bridge`），也不含任何模型 / 贴图资源；addon 需自备并遵守其自身许可。
+- 本包**不含** Blender addon 本体（`DSH Blender Bridge`，旧名 `MCP for Blender`），也不含任何模型 / 贴图资源；addon 需自备并遵守其自身许可。
 - 通道只监听 `127.0.0.1`（默认），**不要**对外网开放；`execute_code` 是有意留下的"万能通道"—— 它会在 Blender 进程里跑任意 Python，请只在可信环境使用。
 - 不含人肉面板 / MJPEG 推流 / 鼠标键盘注入（这条路线已明确移除：注入输入容易把系统按键状态搞坏）。
 - 写通道有租约保护：别的会话持有时写路由返回 409（只读 op 豁免），`force=true` 才抢。
@@ -364,5 +366,5 @@ node tests/host_routes_selftest.mjs      # 打契约 §4 判据 1–8（CORS / P
 ### 致谢 / Credits
 
 - **@lurenjia-l** — [dsh-blender-stylized-shading](https://github.com/lurenjia-l/dsh-blender-stylized-shading)：其 `material_pipeline.md` 的 EEVEE 实测踩坑（Shader to RGB 只含直接光、漫射拓展光源压暗、渐变组控制器绑定）已并入本插件 `docs/EEVEE-工作要点.md`；其 `stylized-shading` 技能已适配本插件直连通道（见 `~/.dsh/skills/stylized-shading/`）。
-- **@yihefeikong-rgb** — addon 协议适配（`addonProtocol`，默认 `auto`）：扁平协议的官方 `DSH Blender Bridge` 与 `harveyxiacn/blender-mcp` 的 category/action addon 都能用（PR #2）。
+- **@yihefeikong-rgb** — addon 协议适配（`addonProtocol`，默认 `auto`）：扁平协议的 `DSH Blender Bridge`（旧名 `MCP for Blender`）与 `harveyxiacn/blender-mcp` 的 category/action addon 都能用（PR #2）。
 - 契约层与判定口径的移植评估参考 [SpatiaOS/Procedura](https://github.com/SpatiaOS/Procedura)（MIT）—— 只搬判据与算法，不搬技术栈；见 `docs/Procedura-融合分析.md`。

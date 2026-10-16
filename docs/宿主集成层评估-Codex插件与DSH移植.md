@@ -60,10 +60,10 @@
 | 宿主依赖 | `peerDependencies`: `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-tools`、`cordis`、`schemastery` | `package.json` |
 | **图片回传** | **已有**：`toAttachment()` → `ctx.get('attachments')` → `attachments.saveImage()`；`renderOne()` 塞 `{type:'image', attachment}` 进 ContentBlock[] | `src/index.ts:653-670`、`:672-679`；调用点 `:1127/:1140/:1193/:1263` |
 | **人肉面板** | **曾有过、已移除**（"网页 UI + Windows 输入注入"） | `src/index.ts:16-17` 注释 |
-| addon 命令面 | 两份 addon 均**无** `pick_viewport_object` / `list_scene_items`（grep 命中 0） | `blender/scripts/addons/dsh_blender_bridge.py`=v1.6/protocol **5**；`tmp/addon_v210.py`=v1.7/protocol **11** |
+| addon 命令面 | 两份 addon 均**无** `pick_viewport_object` / `list_scene_items`（grep 命中 0） | `blender/scripts/addons/blender_mcp.py`=v1.6/protocol **5**；`tmp/addon_v210.py`=v1.7/protocol **11** |
 | **后端 CORS** | **无任何 CORS 头**（grep 无命中） | `runtime/server.mjs:195`（`http.createServer`） |
 
-> ⚠️ **文档与文件不一致**：`AGENTS.md` §2 写"addon 已升到 v1.7/protocol 11"，但仓库里 `blender/scripts/addons/dsh_blender_bridge.py` 实际是 **v1.6/protocol 5**。真正在跑的可能是 Blender 用户目录那份。建议以 `blender_rt_cmd get_name_info`（`get_addon_info`）**现场回执**为准并回头校文档。
+> ⚠️ **文档与文件不一致**：`AGENTS.md` §2 写"addon 已升到 v1.7/protocol 11"，但仓库里 `blender/scripts/addons/blender_mcp.py` 实际是 **v1.6/protocol 5**。真正在跑的可能是 Blender 用户目录那份。建议以 `blender_rt_cmd get_name_info`（`get_addon_info`）**现场回执**为准并回头校文档。
 
 ---
 
@@ -218,9 +218,9 @@ ctx.slots.inject("conversation.view", () => ctx.slots.register({
 ## 8. 附录：本次证据出处
 
 **上游（读码，GitHub API 取 raw）**
-- `src/dsh_blender_bridge/openai_apps.py`（338 行）：`:36-102` 能力探测/env 强制、`:105` `is_app_only`、`:121-188` 缩略图选择器、`:207` `VIEWPORT_URI`、`:215-232` 图标与 HTML、`:238-251` 场景变更命令集与 0.8 s 静默、`:254-338` `ViewportStore`
-- `src/dsh_blender_bridge/apps/viewport.html`（17 298 B）：`:78` `data-clickable`、`:148-149` `canAttach/picks`、`:199-207` `openai/modelContext` 同步、`:287-295` 交互文案、`:358-393` 点击→pick→attach、`:394-417` `ui/update-model-context`
-- `src/dsh_blender_bridge/server.py`（2 224 行）：`:1559` `look`、`:1992-1997` `search_mentions`、`:2044` viewport resource、`:2082-2121` `open_viewport`/`viewport_latest`/`viewport_capture`/`viewport_pick`、`:2176` `_list_tools_for_client`
+- `src/blender_mcp/openai_apps.py`（338 行）：`:36-102` 能力探测/env 强制、`:105` `is_app_only`、`:121-188` 缩略图选择器、`:207` `VIEWPORT_URI`、`:215-232` 图标与 HTML、`:238-251` 场景变更命令集与 0.8 s 静默、`:254-338` `ViewportStore`
+- `src/blender_mcp/apps/viewport.html`（17 298 B）：`:78` `data-clickable`、`:148-149` `canAttach/picks`、`:199-207` `openai/modelContext` 同步、`:287-295` 交互文案、`:358-393` 点击→pick→attach、`:394-417` `ui/update-model-context`
+- `src/blender_mcp/server.py`（2 224 行）：`:1559` `look`、`:1992-1997` `search_mentions`、`:2044` viewport resource、`:2082-2121` `open_viewport`/`viewport_latest`/`viewport_capture`/`viewport_pick`、`:2176` `_list_tools_for_client`
 - `addon.py`（270 889 B，protocol 13）：`:1508` handler dict、`:2137-2160` 捕获留存相机矩阵、`:2178-2245` `pick_viewport_object`
 - `addon_manager.py:23`（`EXPECTED_ADDON_PROTOCOL_VERSION=13`）、`setup_cli.py`、`safe_mode.py`、`trajectory.py`、`guides/*.md`
 
@@ -241,5 +241,5 @@ ctx.slots.inject("conversation.view", () => ctx.slots.register({
 - `~/.dsh/profiles/web/cordis.yml:1500-1502`：生效组合继承同一门控表达式
 - `src/index.ts:653-679`（`toAttachment`/`renderOne`）、`:1127/:1140/:1193/:1263`（调用点）、`:16-17`（人肉面板已移除）
 - `package.json`（无 `dsh.client`、无 `"./client"`）
-- `blender/scripts/addons/dsh_blender_bridge.py`（v1.6/p5）、`tmp/addon_v210.py`（v1.7/p11）：`pick_viewport_object`/`list_scene_items` 命中 **0**
+- `blender/scripts/addons/blender_mcp.py`（v1.6/p5）、`tmp/addon_v210.py`（v1.7/p11）：`pick_viewport_object`/`list_scene_items` 命中 **0**
 - `runtime/server.mjs:195`（`http.createServer`，**无 CORS 头**）

@@ -1,7 +1,7 @@
 # DSH × Blender 直连实时插件
 
 > DSH（DeepSeek Harness）插件：让 AI 模型通过一条 TCP 直连通道驱动 **GUI Blender** —— 看视口 / 改场景 / 连续观察 / 内环搜索 / 渲染性能 / 对象精简 / 无头跑重活 / 事务回滚 / 契约层与规划器，共 15 个工具。
-> 本包**不含** Blender addon（`DSH Blender Bridge`），需用户自备。
+> 本包**不含** Blender addon（`DSH Blender Bridge`，旧名 `MCP for Blender`），需用户自备；v2.0.0 改名后模块名变了，需在 Blender 偏好设置里重新启用（见 MIGRATIONS.md）。
 
 ## 安装（先读，别猜）
 

@@ -6,14 +6,18 @@
  * 覆盖：
  *   1. detectProtocol() 能分辨两种 addon（扁平 / category-action）
  *   2. resolveProtocol() 的 auto 与显式配置两条路径
+ *   2b. **已弃用别名**：prefer:'ahujasid'（v2.0.0 前的协议 id）被接受并归一化为 'flat'
  *   3. AddonClient 走两种协议时的请求封套与回包解包（含 execute_code 的 {executed,result} 形状）
  *   4. get_viewport_screenshot 的 python 载荷在 category-action 侧的后处理
  *   5. 错误传播（两种协议各一次）
  *   6. category-action 侧缺失命令的明确报错（不假装成功）
+ *   7. addon 标识**双名探测**：5 个集成开关在旧名(blendermcp_*)/新名(dshbb_*)两种 addon 下都读得到
+ *      （用 FLAGS_CODE 那段真 Python 跑一个假 bpy，不碰 Blender、不占端口）
  */
+import { execFileSync } from 'node:child_process';
 import net from 'node:net';
-import { AddonClient } from '../runtime/engine.mjs';
-import { detectProtocol, resolveProtocol, resetProtocolCache } from '../runtime/addon-protocol.mjs';
+import { AddonClient, GATE_FLAGS, FLAGS_CODE } from '../runtime/engine.mjs';
+import { detectProtocol, resolveProtocol, resetProtocolCache, PROTOCOL_ALIASES } from '../runtime/addon-protocol.mjs';
 
 let pass = 0;
 const fails = [];
@@ -25,7 +29,7 @@ function eq(label, got, want) {
   ok(label, JSON.stringify(got) === JSON.stringify(want), 'got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want));
 }
 
-/* ───────── mock 1：ahujasid 扁平协议（无分帧，{status,result}） ───────── */
+/* ───────── mock 1：扁平协议（判别 id = 'flat'；无分帧，{status,result}） ───────── */
 function mockFlat() {
   const srv = net.createServer((sock) => {
     let buf = '';
@@ -103,7 +107,7 @@ const freePort = () => new Promise((res, rej) => {
 
 /* ───────── mock 3：扁平 addon，但只在收到换行分帧后才回（模拟"第一次探测时 addon 正忙"） ─────────
    用来验证探测的纠错分支：第一轮扁平探测超时 → 第二轮 category/action 探测发出后，
-   它回的其实是**扁平封套**（{status,result}）→ 应当据此纠正回 ahujasid，而不是误判成 category-action。 */
+   它回的其实是**扁平封套**（{status,result}）→ 应当据此纠正回 flat，而不是误判成 category-action。 */
 function mockFlatLateReply() {
   const srv = net.createServer((sock) => {
     let buf = Buffer.from('');
@@ -138,28 +142,37 @@ ok('死端口与三个 mock 端口互不相同',
   Number.isInteger(deadPort) && deadPort !== flatPort && deadPort !== caPort && deadPort !== latePort, deadPort);
 
 /* 1. 探测 */
-eq('detectProtocol(flat) → ahujasid', (await detectProtocol('127.0.0.1', flatPort, 800))?.id, 'ahujasid');
+eq('detectProtocol(flat) → flat', (await detectProtocol('127.0.0.1', flatPort, 800))?.id, 'flat');
 eq('detectProtocol(category-action) → category-action', (await detectProtocol('127.0.0.1', caPort, 800))?.id, 'category-action');
 if (deadPort === null) ok('detectProtocol(死端口) → null', false, '拿不到死端口');
 else eq('detectProtocol(死端口) → null', await detectProtocol('127.0.0.1', deadPort, 300), null);
-eq('detectProtocol(扁平 addon 第一轮没回) → 按封套形状纠正回 ahujasid', (await detectProtocol('127.0.0.1', latePort, 500))?.id, 'ahujasid');
+eq('detectProtocol(扁平 addon 第一轮没回) → 按封套形状纠正回 flat', (await detectProtocol('127.0.0.1', latePort, 500))?.id, 'flat');
 
 /* 2. 解析（auto / 显式） */
 resetProtocolCache();
 const rFlat = await resolveProtocol({ host: '127.0.0.1', port: flatPort, prefer: 'auto', timeoutMs: 800 });
-eq('resolveProtocol auto(flat)', { id: rFlat.proto.id, from: rFlat.from }, { id: 'ahujasid', from: 'auto' });
+eq('resolveProtocol auto(flat)', { id: rFlat.proto.id, from: rFlat.from }, { id: 'flat', from: 'auto' });
 resetProtocolCache();
 const rCa = await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'auto', timeoutMs: 800 });
 eq('resolveProtocol auto(category-action)', { id: rCa.proto.id, from: rCa.from }, { id: 'category-action', from: 'auto' });
 resetProtocolCache();
 const t0 = Date.now();
-const rForced = await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'ahujasid' });
-eq('显式配置不探测（from=config）', { id: rForced.proto.id, from: rForced.from }, { id: 'ahujasid', from: 'config' });
+const rForced = await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'flat' });
+eq('显式配置不探测（from=config）', { id: rForced.proto.id, from: rForced.from }, { id: 'flat', from: 'config' });
 ok('显式配置立即返回（<50ms）', Date.now() - t0 < 50, String(Date.now() - t0) + 'ms');
 await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'nope' }).catch((e) => ok('未知协议名报错', /未知 addonProtocol/.test(String(e.message))));
 
+/* 2b. 已弃用别名：'ahujasid'（v2.0.0 前的协议判别 id）必须被接受并归一化为 'flat' —— 防别名回退失效 */
+eq("别名表：'ahujasid' → 'flat'", PROTOCOL_ALIASES.ahujasid, 'flat');
+resetProtocolCache();
+const rAlias = await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'ahujasid' });
+eq("resolveProtocol(prefer:'ahujasid') 归一化为 id 'flat'（from=config）",
+  { id: rAlias.proto.id, from: rAlias.from }, { id: 'flat', from: 'config' });
+ok('别名与正名共用同一条解析缓存（归一化发生在算 cache key 之前，不重复探测）',
+  (await resolveProtocol({ host: '127.0.0.1', port: caPort, prefer: 'flat' })) === rAlias);
+
 /* 3 + 5. 两种协议下的实际调用 */
-for (const [name, port] of [['ahujasid', flatPort], ['category-action', caPort]]) {
+for (const [name, port] of [['flat', flatPort], ['category-action', caPort]]) {
   resetProtocolCache();
   const c = new AddonClient({ host: '127.0.0.1', port: port });
   const info = await c.protocol();
@@ -204,12 +217,12 @@ for (const [name, port] of [['ahujasid', flatPort], ['category-action', caPort]]
   c.close();
 }
 
-/* 7. ahujasid 模式下的透传不受映射层干扰（未知命令原样发给 addon） */
+/* 7. flat 模式下的透传不受映射层干扰（未知命令原样发给 addon） */
 {
   resetProtocolCache();
   const c = new AddonClient({ host: '127.0.0.1', port: flatPort });
   const e = await c.send('some_vendor_cmd', {}, 3000).then(() => null, (err) => err);
-  ok('[ahujasid] 未知命令透传给 addon 并回传其错误', !!e && /unknown command type/.test(String(e.message)), e && e.message);
+  ok('[flat] 未知命令透传给 addon 并回传其错误', !!e && /unknown command type/.test(String(e.message)), e && e.message);
   c.close();
 }
 
@@ -224,6 +237,64 @@ for (const [name, port] of [['ahujasid', flatPort], ['category-action', caPort]]
     s.on('close', () => { clearTimeout(t); resolve(got); });
   });
   eq('mock 侧：无换行的扁平报文确实不回（探测判据的前提）', raw, '');
+}
+
+/* 9. addon 标识**双名探测**：5 个集成开关在"旧 addon（blendermcp_*）"与"新 addon（dshbb_*）"下都读得到
+      —— 直接跑 FLAGS_CODE 那段**真 Python**，只把 bpy 换成一个假模块（不碰 Blender、不占端口）。
+      这也是"addon 改名后用户重启 Blender 之前，插件仍要能工作"的回归网。 */
+{
+  const LEGACY = GATE_FLAGS.map((n) => n.replace(/^dshbb_/, 'blendermcp_'));
+  const runFlags = (attrs) => {
+    const py = [
+      'import sys, types, json, io, contextlib',
+      'class _S:',
+      '    def __init__(self, a):',
+      '        self.name = "Scene"',
+      '        for k, v in a.items(): setattr(self, k, v)',
+      'class _D:',
+      '    filepath = "/tmp/fake.blend"',
+      'bpy = types.ModuleType("bpy")',
+      'bpy.context = types.SimpleNamespace(scene=_S(json.loads(' + JSON.stringify(JSON.stringify(attrs)) + ')))',
+      'bpy.data = _D()',
+      'sys.modules["bpy"] = bpy',
+      'CODE = ' + JSON.stringify(FLAGS_CODE),
+      'buf = io.StringIO()',
+      'with contextlib.redirect_stdout(buf):',
+      '    exec(CODE, {})',
+      'print(buf.getvalue().strip())',
+    ].join('\n');
+    return JSON.parse(execFileSync('python3', ['-c', py], { encoding: 'utf8' }).trim());
+  };
+  const truthy = (o) => GATE_FLAGS.every((n) => o.flags[n] === true);
+  const allFalse = (o) => GATE_FLAGS.every((n) => o.flags[n] === false);
+  let canRun = true;
+  try { execFileSync('python3', ['-c', 'pass'], { stdio: 'ignore' }); } catch (e) { canRun = false; }
+  if (!canRun) {
+    console.log('  · SKIP addon 标识双名探测（本机没有 python3）');
+  } else {
+    eq('GATE_FLAGS 是 5 个新名（同序、同后缀；结构与元素数不变）', GATE_FLAGS,
+      ['dshbb_use_polyhaven', 'dshbb_use_hyper3d', 'dshbb_use_sketchfab', 'dshbb_use_polypizza', 'dshbb_use_hunyuan3d']);
+
+    const oldOnly = Object.fromEntries(LEGACY.map((n) => [n, true]));
+    const rOld = runFlags(oldOnly);
+    ok('旧 addon 在场（只有 blendermcp_use_*）→ 5 个开关**全部读得到**（回退生效）', truthy(rOld), JSON.stringify(rOld.flags));
+
+    const newOnly = Object.fromEntries(GATE_FLAGS.map((n) => [n, true]));
+    const rNew = runFlags(newOnly);
+    ok('新 addon 在场（只有 dshbb_use_*）→ 5 个开关全部读得到（新名生效）', truthy(rNew), JSON.stringify(rNew.flags));
+
+    // 双名都在、且新名 = False、旧名 = True → 必须取**新名**（证明"新名优先"，不是"旧名优先"）
+    const both = Object.assign({}, oldOnly, Object.fromEntries(GATE_FLAGS.map((n) => [n, false])));
+    const rBoth = runFlags(both);
+    ok('新旧名都在且新名=False/旧名=True → 取新名（新名优先，不回退）', allFalse(rBoth), JSON.stringify(rBoth.flags));
+
+    const rNone = runFlags({});
+    ok('两种名字都没有 → 5 个开关都是 false（不假装有）', allFalse(rNone), JSON.stringify(rNone.flags));
+
+    ok('回执的键是新名（/commands 的 gates 不再带上游前缀）',
+      GATE_FLAGS.every((n) => Object.prototype.hasOwnProperty.call(rOld.flags, n))
+        && Object.keys(rOld.flags).every((k) => !k.startsWith('blendermcp_')), JSON.stringify(Object.keys(rOld.flags)));
+  }
 }
 
 flatSrv.close(); caSrv.close();

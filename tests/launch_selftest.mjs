@@ -7,14 +7,18 @@
  *   spawn exe → 轮询端口 → already 幂等 → dryRun → 失败路径（exe 不存在/端口始终不开）
  * 全程**不碰用户真正开着的那个 Blender**（独立后端 + 独立端口 + 独立工作目录 + 假 exe）。
  *
+ * 另钉 v2.0.0 改名兼容：addon 名字提示要**旧名/新名都命中**（`blender_mcp` 与 `dsh_blender_bridge`），
+ * 否则 addon 改名后启动器的自动探测扫不到 ⇒ 通道起不来。
+ *
  * 用法：node tests/launch_selftest.mjs
  */
-import { execSync, spawn } from 'node:child_process'
+import { execSync, execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ADDON_NAME_HINTS, addonNameHit, LAUNCH_BOOT_PY } from '../runtime/launch.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PKG = path.join(HERE, '..')
@@ -70,6 +74,16 @@ fs.writeFileSync(MOCK, [
 fs.chmodSync(MOCK, 0o755)
 
 console.log('== 启动器集成自检 ==')
+
+// ⓪ v2.0.0 改名兼容：addon 名字提示必须**旧名与新名都命中**（addon 改名后自动探测不能瞎）
+ok('名字提示含旧名标记 "mcp" 与新名标记 "blender_bridge"/"dshbb"',
+  ['mcp', 'blender_bridge', 'dshbb'].every((k) => ADDON_NAME_HINTS.indexOf(k) >= 0), JSON.stringify(ADDON_NAME_HINTS))
+ok('候选名 "dsh_blender_bridge" 命中（新名）', addonNameHit('dsh_blender_bridge') === true)
+ok('候选名 "blender_mcp" 命中（旧 addon 回退）', addonNameHit('blender_mcp') === true)
+ok('候选名 "dshbb_server" 命中（新标识前缀）', addonNameHit('dshbb_server') === true)
+ok('候选名 "blendermcp_server" 命中（旧标识前缀）', addonNameHit('blendermcp_server') === true)
+ok('无关名 "polyhaven" 不命中（负对照）', addonNameHit('polyhaven') === false)
+
 console.log('假 blender：' + MOCK)
 console.log('隔离后端：http://127.0.0.1:' + String(HTTP_PORT) + ' · addon 端口 ' + String(ADDON_PORT) + ' · 工作目录 ' + TMP)
 
@@ -122,14 +136,46 @@ ok('launch 在端口开了之后顺手跑了 doctor', !!r1 && 'doctor' in r1)
 const bootFile = r1 && r1.bootScript
 ok('回执给出 boot 脚本路径', typeof bootFile === 'string' && bootFile.length > 0, String(bootFile))
 let bootSrc = ''
+let bootWslPath = ''
 try {
-  const bootWsl = path.join(TMP, String(bootFile).split(/[\\/]/).pop())
-  bootSrc = fs.readFileSync(bootWsl, 'utf8')
+  bootWslPath = path.join(TMP, String(bootFile).split(/[\\/]/).pop())
+  bootSrc = fs.readFileSync(bootWslPath, 'utf8')
 } catch (e) { bootSrc = '' }
 ok('boot 脚本已写入工作目录', bootSrc.length > 200, 'bytes=' + String(bootSrc.length))
 ok('boot 脚本会 enable addon', bootSrc.indexOf('addon_utils.enable') >= 0)
 ok('boot 脚本带直接 import 兜底（Blender 5.x extension 布局）', bootSrc.indexOf('spec_from_file_location') >= 0)
 ok('boot 脚本把结论写进 launch-status.json', bootSrc.indexOf('DSH_BLENDER_LAUNCH_STATUS') >= 0)
+// v2.0.0 改名兼容：启动脚本的 Python 必须用名字提示筛 addon（旧名/新名都命中），且 server 类双名探测。
+// 注：某些沙箱里后端进程与测试进程的 /tmp 不是同一个命名空间 ⇒ 上面"落盘 boot 脚本"读不到（既有问题，
+//     与本改动无关）。所以这几条**断言写盘的那份源码常量** LAUNCH_BOOT_PY；能读到落盘文件时优先用它（更强）。
+const BOOT = bootSrc.length > 0 ? bootSrc : LAUNCH_BOOT_PY
+if (bootSrc.length === 0) {
+  console.log('  · 注：落盘 boot 脚本读不到（跨命名空间），下面改用 LAUNCH_BOOT_PY（= 写盘的那份源码）')
+}
+ok('boot 脚本用名字提示筛 addon（含旧名标记 mcp 与新名标记 blender_bridge/dshbb）',
+  BOOT.indexOf('_name_hit') >= 0 && ADDON_NAME_HINTS.every((k) => BOOT.indexOf('"' + k + '"') >= 0),
+  JSON.stringify(ADDON_NAME_HINTS))
+ok('boot 脚本 server 类双名探测：dshbb_server 在前、blendermcp_server 回退在后',
+  BOOT.indexOf('dshbb_server') >= 0 && BOOT.indexOf('blendermcp_server') > BOOT.indexOf('dshbb_server'))
+ok('boot 脚本不再用裸 "mcp" 子串匹配（改名后会瞎）',
+  BOOT.indexOf('"mcp" in') < 0 && BOOT.indexOf("'mcp' in") < 0)
+// 用 python3 跑**那份 Python 里**的 _name_hit（不是重写一遍），证明旧名/新名都命中、无关名不命中
+let hintOut = null
+try {
+  const py = [
+    'src = ' + JSON.stringify(BOOT),
+    'a = src.index("# ---- DSH addon")',
+    'b = src.index("# ---- /DSH addon")',
+    'ns = {}',
+    'exec(src[a:b], ns)',
+    'h = ns["_name_hit"]',
+    'print(h("dsh_blender_bridge"), h("blender_mcp"), h("dshbb_server"), h("blendermcp_server"), h("polyhaven"))',
+  ].join('\n')
+  hintOut = execFileSync('python3', ['-c', py], { encoding: 'utf8' }).trim()
+} catch (e) { hintOut = null }
+if (hintOut === null) console.log('  · SKIP 用 python3 跑 boot 脚本的 _name_hit（python3 不可用）')
+else ok('boot 脚本的 _name_hit：新名/旧名/两个前缀都命中，无关名不命中',
+  hintOut === 'True True True True False', hintOut)
 
 // ③ 假 blender 收到了 --python <boot>（启动参数连接得上）
 let mockArgs = ''

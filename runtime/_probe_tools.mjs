@@ -1,4 +1,4 @@
-import { AddonClient } from './engine.mjs';
+import { AddonClient, GATE_FLAGS } from './engine.mjs';
 const a = new AddonClient();
 const out = {};
 const tryCall = async (name, params = {}, timeout = 20000) => {
@@ -22,11 +22,21 @@ await tryCall('get_sketchfab_status');
 await tryCall('get_polypizza_status');
 await tryCall('get_hunyuan3d_status');
 await tryCall('get_polyhaven_categories', { asset_type: 'hdris' }, 25000);
+// 5 个集成开关：**双名探测**（先新名 dshbb_use_*，取不到回退旧名 blendermcp_use_*）——
+// 与 engine.mjs 的 FLAGS_CODE 同口径；回执键用新名。
+const LEGACY_GATE_FLAGS = GATE_FLAGS.map((n) => n.replace(/^dshbb_/, 'blendermcp_'));
 const code = [
   'import bpy, json',
   's = bpy.context.scene',
-  'keys = ("dshbb_use_polyhaven","dshbb_use_hyper3d","dshbb_use_sketchfab","dshbb_use_polypizza","dshbb_use_hunyuan3d")',
-  'print(json.dumps({k: getattr(s, k, None) for k in keys}))',
+  'names = ' + JSON.stringify(GATE_FLAGS),
+  'legacy = ' + JSON.stringify(LEGACY_GATE_FLAGS),
+  'out = {}',
+  'for i, n in enumerate(names):',
+  '    v = getattr(s, n, None)',
+  '    if v is None:',
+  '        v = getattr(s, legacy[i], None)   # 旧 addon 回退（改名前的版本）',
+  '    out[n] = v',
+  'print(json.dumps(out))',
 ].join('\n');
 await tryCall('execute_code', { code });
 console.log(JSON.stringify(out, null, 1));
