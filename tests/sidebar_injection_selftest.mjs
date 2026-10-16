@@ -36,6 +36,21 @@ function fixture() {
     register(definition) {
       assert.equal(definition.kind, 'blender-viewport');
       assert.equal(definition.id, '@dsh-external/dsh-blender-plugin');
+      // Host contract (dsh-client-ui-sidebar-right/lib/client.js:512-521): the type title and every
+      // guide entry's title/description are CALLED, not read. Strings throw at render time and the
+      // slot error boundary blanks the whole right column.
+      assert.equal(typeof definition.title, 'function', 'type title must be a function: host calls title()');
+      assert.ok(Array.isArray(definition.guide) && definition.guide.length > 0, 'guide must list at least one entry');
+      const seen = new Set();
+      for (const entry of definition.guide) {
+        assert.equal(typeof entry.id, 'string', 'guide entry id must be a string');
+        assert.ok(!seen.has(entry.id), 'guide entry ids must be unique');
+        seen.add(entry.id);
+        assert.equal(typeof entry.title, 'function', 'guide entry title must be a function: host calls title()');
+        assert.ok(entry.description === undefined || typeof entry.description === 'function',
+          'guide entry description must be a function when present: host calls description?.()');
+        assert.equal(typeof entry.order, 'number', 'guide entry order must be numeric so the host sort is deterministic');
+      }
       state.registers++;
       return () => { state.typeDisposed++; };
     }
