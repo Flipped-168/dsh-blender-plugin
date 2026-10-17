@@ -117,7 +117,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")         # a different angle, user
 
 ### 4.1 Host integration: viewport panel · click-to-message · `@` mentions
 
-Besides the model tools, the package ships a **user-side** half for the DSH UI (its own `/host/*` routes — it does **not** enter the op catalog and adds **no** model tools, so the 15-tool / 186-op capability surface is unchanged):
+Besides the model tools, the package ships a **user-side** half for the DSH UI (its own `/host/*` routes — it does **not** enter the op catalog and adds **no** model tools, so the 16-tool / 186-op capability surface is unchanged):
 
 - **Viewport panel** — a "Blender 视口" tab in the conversation view, showing the latest captured frame (1500 ms polling; 600 ms while the frame is stale).
 - **Click into your message** — click an object, then press "加入消息" to drop the **screenshot + object-name text** into your draft (nothing is sent automatically).
