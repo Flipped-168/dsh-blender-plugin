@@ -2091,9 +2091,11 @@ export function apply(ctx: any, config: Config): void {
           lines.push('宿主 API：' + HOST_API)                      // v0.9.2（R2）：DSH 升级后一眼看出插件挂的是哪份 dsh-tools
           lines.push('插件：v' + PLUGIN_VERSION + ' @ ' + HERE)
           const tp = tuiPanelState()
-          lines.push('宿主面板：' + (tp.available
-            ? (tp.registered ? ('✅ dsh-TUI 侧栏已注册（' + String(tp.id || '?') + '）') : '⚠️ tuiPanels 可用，但面板注册失败')
-            : '无 tuiPanels（Web / headless 或旧版 dsh-TUI；模型工具不受影响）'))
+          lines.push('宿主面板：' + (!tuiPanelOn
+            ? '已在 config.tuiPanel=false 关闭（模型工具不受影响）'
+            : tp.available
+              ? (tp.registered ? ('✅ dsh-TUI 侧栏已注册（' + String(tp.id || '?') + '）') : '⚠️ tuiPanels 可用，但面板注册失败')
+              : '无 tuiPanels（Web / headless 或旧版 dsh-TUI；模型工具不受影响）'))
           lines.push('schemastery：' + (schemaResolve.via
             ? ('已解析（' + schemaResolve.via + '）')
             : ('❌ ' + String(schemaResolve.error || '未解析') + ' —— 工具未注册（降级模式）')))

@@ -84,8 +84,8 @@ blender_viewport(op="doctor")
 
 ## 4. 图片显示与回退
 
-面板把 `/host/view.png` 的 PNG 用 `node:zlib` 解成 RGBA，再按终端单元格（约 2:1）做最近邻缩放，
-交给宿主 `<Image>` 渲染：
+面板把 `/host/view.png` 的 PNG 用 `node:zlib` 解成 RGBA，按**原始像素纵横比**缩到宿主预算
+（最长边 ≤1024、RGBA ≤4MB），交给宿主 `<Image>` 按 cell 盒等比 fit；ASCII 回退则按 cell 面积平均采样：
 
 - 终端支持 **Kitty graphics / Sixel**：显示真实画面（与 TUI 的内联图片同一套渲染路径）。
 - 不支持（tmux 未开 passthrough、`DSH_TUI_DISABLE_TERMINAL_IMAGES=1`、普通 SSH 终端等）：

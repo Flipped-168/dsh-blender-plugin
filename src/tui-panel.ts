@@ -417,7 +417,7 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
           const now = Date.now()
           if (now - pickPolledAtRef.current >= PICK_POLL_MS) {
             pickPolledAtRef.current = now
-            const pickRes = await fetchJson(port, '/host/pick/request')
+            const pickRes = await fetchJson(port, '/host/pick/request?client=tui')
             if (!aliveRef.current) return
             if (pickRes && pickRes.status === 200 && pickRes.data && pickRes.data.ok === true) {
               const request = pickRes.data.request || null
@@ -426,7 +426,12 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
               const currentId = current ? String(current.requestId || '') : ''
               if (nextId !== currentId) {
                 const next = request && nextId
-                  ? { requestId: nextId, prompt: String(request.prompt || '') }
+                  ? {
+                      requestId: nextId,
+                      prompt: String(request.prompt || ''),
+                      multi: request.multi === true,
+                      objects: Array.isArray(request.objects) ? request.objects : [],
+                    }
                   : null
                 pickRef.current = next
                 setPick(next)
@@ -439,7 +444,7 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
             }
           }
 
-          const readyRes = await fetchJson(port, '/host/ready')
+          const readyRes = await fetchJson(port, '/host/ready?client=tui')
           if (!aliveRef.current) return
           setReady(
             readyRes && readyRes.status === 200 && readyRes.data && readyRes.data.ok === true
@@ -447,7 +452,7 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
               : false,
           )
 
-          const latestRes = await fetchJson(port, '/host/view/latest')
+          const latestRes = await fetchJson(port, '/host/view/latest?client=tui')
           if (!aliveRef.current) return
           const data = latestRes ? latestRes.data : null
           if (!latestRes || latestRes.status !== 200 || !data || data.ok !== true) {
@@ -468,14 +473,19 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
           // 失败不重试轰炸）。
           if (!captureTriedRef.current && nextLatest.seq === 0) {
             captureTriedRef.current = true
-            await postJson(port, '/host/view/capture', { auto: true, max_size: CAPTURE_MAX_SIZE })
-            if (aliveRef.current) setReloadToken(token => token + 1)
+            const captured = await postJson(port, '/host/view/capture', { auto: true, max_size: CAPTURE_MAX_SIZE })
+            if (aliveRef.current) {
+              if (!captured || !captured.data || captured.data.ok !== true) {
+                setNotice({ kind: 'error', text: '自动捕获失败：按 c 重试' })
+              }
+              setReloadToken(token => token + 1)
+            }
             return
           }
 
           const cached = decodedRef.current
           if (nextLatest.seq > 0 && (!cached || cached.seq !== nextLatest.seq)) {
-            const png = await fetchRaw(port, '/host/view.png?seq=' + String(nextLatest.seq))
+            const png = await fetchRaw(port, '/host/view.png?seq=' + String(nextLatest.seq) + '&client=tui')
             if (!aliveRef.current) return
             if (png && png.status === 200 && png.body.length) {
               const image = decodePngToRgba(png.body)
@@ -521,6 +531,20 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
           safeToast(host, '捕获失败：后端不可达')
         }
       }
+      const finishMulti = async () => {
+        const request = pickRef.current
+        if (!request || !request.multi || !request.requestId) return
+        const res = await postJson(port, '/host/pick/answer', { requestId: request.requestId, done: true })
+        const data = res ? res.data : null
+        if (data && data.state === 'answered') {
+          const count = Array.isArray(data.objects) ? data.objects.length : 0
+          pickRef.current = null
+          setPick(null)
+          safeToast(host, '已提交多选：' + String(count) + ' 件')
+        } else {
+          safeToast(host, '多选提交失败：' + String((data && data.error) || '后端不可达'))
+        }
+      }
       const listener = (event: any) => {
         if (!event) return
         const key = event.key || {}
@@ -548,6 +572,9 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
         } else if (input === 'r' || input === 'R') {
           try { event.preventDefault() } catch (error) { /* 宿主已消费 */ }
           setReloadToken(token => token + 1)
+        } else if ((input === 'd' || input === 'D') && pickRef.current && pickRef.current.multi) {
+          try { event.preventDefault() } catch (error) { /* 宿主已消费 */ }
+          void finishMulti()
         }
       }
       const off = host.onKey(listener)
@@ -561,8 +588,11 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
     }, [host])
 
     // ── 布局：标题 1 行 +（可选）状态/点选横幅 1 行 + 图像 + 键位提示 1 行。
+    const pickCount = pick && Array.isArray(pick.objects) ? pick.objects.length : 0
     const banner = pick
-      ? '● 模型请求点选：' + (pick.prompt || '请点一下你要改的物体') + '（点画布；Esc 取消）'
+      ? '● 模型请求点选' + (pick.multi ? '（多选 ' + String(pickCount) + '）' : '') + '：'
+        + (pick.prompt || '请点一下你要改的物体')
+        + '（点画布；Esc 取消' + (pick.multi ? '；d 完成' : '') + '）'
       : notice
         ? notice.text
         : ''
@@ -581,9 +611,28 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
     )
     const source = React.useMemo(() => {
       if (!decoded || !decoded.image) return null
-      const scaled = downscaleRgba(decoded.image, layout.columns, layout.rows)
+      const image = decoded.image
+      // ui.Image's source is physical pixels and the renderer fits it into the
+      // cell box by its natural aspect. Downscaling to layout.columns x rows
+      // turned the frame into a 2x-wide image, letterboxed it vertically and
+      // made click y wrong. Keep the natural aspect; only obey the host budget.
+      const edge = 1024
+      const maxBytes = 4 * 1024 * 1024
+      const scale = Math.min(
+        1,
+        edge / Math.max(1, image.width, image.height),
+        Math.sqrt(maxBytes / (4 * image.width * image.height)),
+      )
+      if (scale >= 1) {
+        return { data: image.data, width: image.width, height: image.height }
+      }
+      const scaled = downscaleRgba(
+        image,
+        Math.max(1, Math.round(image.width * scale)),
+        Math.max(1, Math.round(image.height * scale)),
+      )
       return scaled ? { data: scaled.data, width: scaled.width, height: scaled.height } : null
-    }, [decoded, layout.columns, layout.rows])
+    }, [decoded])
     const frameIsCurrent = decoded !== null && decoded.seq === latest.seq && latest.seq > 0
 
     const onImageClick = (event: any) => {
@@ -625,8 +674,15 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
               const name = data.object && data.object.name ? String(data.object.name) : ''
               safeToast(host, name ? '已应答：' + name + '（已返回给模型）' : '已应答：点空处（已返回给模型）')
             } else if (data.ok === true && data.state === 'pending') {
-              // §8.2 多选模式：加选后请求仍 pending。
-              safeToast(host, data.added ? '已加选 ' + String(data.added) : '已加入多选')
+              // §8.2 多选模式：加选后请求仍 pending；记下累积，按 d 收单。
+              const objects = Array.isArray(data.objects)
+                ? data.objects
+                : (Array.isArray(request.objects) ? request.objects : [])
+              const nextPick = { ...request, multi: true, objects: objects }
+              pickRef.current = nextPick
+              setPick(nextPick)
+              safeToast(host, (data.added ? '已加选 ' + String(data.added) : '已加入多选')
+                + '（已选 ' + String(objects.length) + ' 件，按 d 完成）')
             } else {
               safeToast(host, '点选未完成：' + String(data.error || 'unknown') + '（刷新后再点）')
             }
@@ -668,6 +724,7 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
             source: source,
             width: layout.columns,
             height: layout.rows,
+            presentation: 'transcript',
             alt: 'Blender 视口 #' + String(latest.seq) + ' ' + String(frameWidth) + '×' + String(frameHeight),
             copyText: 'Blender 视口 #' + String(latest.seq),
           },
@@ -682,7 +739,8 @@ export function createTuiViewportPanel(opts: { port: number }): (props: any) => 
           { dim: true, wrap: 'truncate' },
           latest.seq > 0 ? '正在载入画面…' : '还没有视口画面（按 c 捕获）',
         )
-    const hint = 'c 捕获 · r 刷新 · Esc 取消点选 · 点击画面拾取'
+    const hint = 'c 捕获 · r 刷新 · ' + (pick && pick.multi ? 'd 完成 · ' : '')
+      + 'Esc 取消点选 · 点击画面拾取'
       + (props.focused ? '' : ' · 点击聚焦')
 
     return React.createElement(
