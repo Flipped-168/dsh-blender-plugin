@@ -341,7 +341,7 @@ dsh-blender-plugin/
 
 ```bash
 node tests/protocol_selftest.mjs         # addon 协议层（28 项，不需要 Blender / DSH）
-node tests/dsh_api_compat_probe.mjs      # 16 个工具 + 15 个静态 timeoutMs + 0 报错
+node tests/dsh_api_compat_probe.mjs      # 16 个工具 + 16 个静态 timeoutMs + 0 报错
 blender_viewport(op="doctor")            # 回执里的「宿主 API：dsh-tools@<版本> @ <路径>」是自证
 ```
 

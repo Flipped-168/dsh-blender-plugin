@@ -4,11 +4,11 @@
  *
  * 干什么：把本包的 lib/index.js 挂到一个假 cordis ctx 上，用**指定版本**的
  *         @deepseek-ai/dsh-tools 走一遍 defineTool（参数/输出 schema 规范化 + 校验），
- *         断言 15 个工具全部注册、0 报错、15 个静态 timeoutMs 都在，
+ *         断言 16 个工具全部注册、0 报错、16 个静态 timeoutMs 都在，
  *         并把每个工具投影后的参数 JSON Schema 写成基线 JSON（可 diff）。
  *
  * 为什么需要：工具是用 defineTool 声明的，而 defineTool 来自宿主的 @deepseek-ai/dsh-tools。
- *         DSH 一升级，这份契约就跟着变；失败方式是「fiber failed → 15 个工具全消失」。
+ *         DSH 一升级，这份契约就跟着变；失败方式是「fiber failed → 16 个工具全消失」。
  *
  * 用法：
  *   node tests/dsh_api_compat_probe.mjs                          # 用宿主当前的 dsh-tools
@@ -31,8 +31,8 @@ const arg = (name, dflt) => {
   const i = argv.indexOf(name)
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt
 }
-const EXPECTED_TOOLS = 15
-const EXPECTED_TIMEOUTS = 15
+const EXPECTED_TOOLS = 16
+const EXPECTED_TIMEOUTS = 16
 const HOST_CANDIDATES = [
   process.env.DSH_HOST_PKGS,
   '/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai',
@@ -90,6 +90,12 @@ if (toolsDir) {
 // 只拷 index.mjs 会让 staging 树缺 runtime/，载入即 ERR_MODULE_NOT_FOUND —— 探针必须按包根布局铺开。
 const pluginRoot = resolve(dirname(pluginLib), '..')
 cpSync(pluginLib, join(root, 'plugin', 'index.mjs'))
+// lib/index.js 可能还有同目录的运行时兄弟模块（v2.2 起 `./tui-panel.js`）。
+// 只拷 index 会让 staging 缺文件、在 import 期就 ERR_MODULE_NOT_FOUND。
+for (const name of readdirSync(dirname(pluginLib))) {
+  if (!name.endsWith('.js') || name === 'index.js') continue
+  cpSync(join(dirname(pluginLib), name), join(root, 'plugin', name))
+}
 cpSync(join(pluginRoot, 'runtime'), join(root, 'runtime'), { recursive: true })
 if (existsSync(join(pluginRoot, 'dsh-blender.config.json'))) {
   cpSync(join(pluginRoot, 'dsh-blender.config.json'), join(root, 'dsh-blender.config.json'))
