@@ -323,6 +323,42 @@ test('downscaleRgba: 最近邻 + 输出形状', () => {
   assert.equal(mod.downscaleRgba({ width: 0, height: 0, data: new Uint8Array(0) }, 1, 1), null);
 });
 
+// ── rgbaToAscii（无图形协议回退）────────────────────────────────────────
+test('rgbaToAscii: 行列数 + 亮度映射', () => {
+  const image = {
+    width: 2,
+    height: 2,
+    data: new Uint8Array([
+      0, 0, 0, 255,       128, 128, 128, 255,
+      255, 255, 255, 255, 32, 32, 32, 255,
+    ]),
+  };
+  const art = mod.rgbaToAscii(image);
+  const lines = art.split('\n');
+  assert.equal(lines.length, 2, '2 行');
+  assert.equal(lines[0].length, 2, '每行 2 字符');
+  assert.equal(lines[0][0], ' ', '黑 → 空格');
+  assert.equal(lines[0][1], '+', '中灰 → +');
+  assert.equal(lines[1][0], '@', '白 → @');
+  assert.equal(lines[1][1], '.', '暗灰 → .');
+  // 自动对比度：100..110 的窄亮度带也应拉满 ramp。
+  const lowContrast = {
+    width: 2,
+    height: 1,
+    data: new Uint8Array([100, 100, 100, 255, 110, 110, 110, 255]),
+  };
+  assert.equal(mod.rgbaToAscii(lowContrast), ' @');
+  // 纯色不放大噪声：退回原始亮度（128 → +）。
+  const flat = { width: 2, height: 1, data: new Uint8Array([128, 128, 128, 255, 128, 128, 128, 255]) };
+  assert.equal(mod.rgbaToAscii(flat), '++');
+  // 显式目标尺寸（最近邻采样）也不能越界。
+  const small = mod.rgbaToAscii(image, 1, 1);
+  assert.equal(small.split('\n').length, 1);
+  assert.equal(small.length, 1);
+  assert.equal(mod.rgbaToAscii(null), '');
+  assert.equal(mod.rgbaToAscii({ width: 2, height: 2, data: new Uint8Array(3) }), '');
+});
+
 // ── mapClickToNormalized ─────────────────────────────────────────────────
 test('mapClickToNormalized: 0..1、边界夹取、图外 null', () => {
   assert.deepEqual(mod.mapClickToNormalized(0, 0, 40, 20), { x: 0, y: 0 });
@@ -346,7 +382,8 @@ test('导出面：4 个函数 + __internals 指向同一实现', () => {
   assert.ok(mod.__internals && typeof mod.__internals === 'object', '__internals 应存在');
   assert.equal(mod.__internals.decodePngToRgba, mod.decodePngToRgba);
   assert.equal(mod.__internals.fitCells, mod.fitCells);
-  assert.equal(typeof mod.__internals.downscaleRgba, 'function');
+  assert.equal(mod.__internals.downscaleRgba, mod.downscaleRgba);
+  assert.equal(mod.__internals.rgbaToAscii, mod.rgbaToAscii);
   assert.equal(typeof mod.__internals.mapClickToNormalized, 'function');
   assert.equal(mod.__internals.tuiPanelState, mod.tuiPanelState);
 });

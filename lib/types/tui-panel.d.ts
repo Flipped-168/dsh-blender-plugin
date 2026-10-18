@@ -48,6 +48,19 @@ export declare function downscaleRgba(image: {
     data: Uint8Array;
 } | null;
 /**
+ * 把 RGBA 缩成 `columns × rows` 的 ASCII 亮度图（每 cell 一个字符）。
+ *
+ * 为什么需要：dsh-TUI 的 `<Image>` 在 tmux / 无 Kitty/Sixel 的终端里会回退成
+ * 一行占位；如果面板只显示 `▦ 视口 W×H`，用户点选就是“盲点”。这里用同一份
+ * 已解码像素做亮度映射，让任何终端都能看见画面轮廓；点击仍按 cell 坐标映射，
+ * 与原生图片路径一致。纯函数、无 I/O，坏了返回空串（调用方回退占位文本）。
+ */
+export declare function rgbaToAscii(image: {
+    width: number;
+    height: number;
+    data: Uint8Array;
+}, columns?: number, rows?: number): string;
+/**
  * 把图像 Box 的单元格局部坐标映射成 0..1 归一化坐标（左上原点、y 向下）。
  * 落在图外返回 null —— v2.1 §8.1 要求"图外点击不发请求"；边界处按
  * [0,1] 夹取（终端点击坐标可能刚好落在右/下边缘）。
@@ -88,6 +101,7 @@ export declare const __internals: {
     decodePngToRgba: typeof decodePngToRgba;
     fitCells: typeof fitCells;
     downscaleRgba: typeof downscaleRgba;
+    rgbaToAscii: typeof rgbaToAscii;
     mapClickToNormalized: typeof mapClickToNormalized;
     tuiPanelState: typeof tuiPanelState;
 };
