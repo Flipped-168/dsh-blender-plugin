@@ -50,7 +50,10 @@ function fixture(root, name, smNames) {
   mkdirSync(dir, { recursive: true })
   cpSync(path.join(PKG, 'lib'), path.join(dir, 'lib'), { recursive: true })
   mkdirSync(path.join(dir, 'runtime'), { recursive: true })
-  cpSync(path.join(PKG, 'runtime', 'backend_probe.mjs'), path.join(dir, 'runtime', 'backend_probe.mjs'))
+  // lib/index.js's static runtime imports: backend_probe.mjs + v2.2 host_presence.mjs.
+  for (const runtimeFile of ['backend_probe.mjs', 'host_presence.mjs']) {
+    cpSync(path.join(PKG, 'runtime', runtimeFile), path.join(dir, 'runtime', runtimeFile))
+  }
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'fixture-' + name, type: 'module' }), 'utf8')
   const nm = path.join(dir, 'node_modules')
   const tools = path.join(nm, '@deepseek-ai', 'dsh-tools')

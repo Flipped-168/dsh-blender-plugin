@@ -48,6 +48,8 @@ import { CFG, describeConfig } from './config.mjs';
 import { viewStore, clampItemsLimit, clampUnit } from './viewstore.mjs';
 // S13（宿主集成 v1.2 · §7.2）：点选请求状态机（全局至多一个 pending）
 import { pickRequestStore } from './pickrequest.mjs';
+// v2.2：有没有 UI 在轮询 /host/*（零 I/O；`blender_rt_pick` 无人应答时快速失败）
+import { createHostPresence } from './host_presence.mjs';
 
 const argv = process.argv.slice(2);
 const portArg = argv.indexOf('--port');
@@ -55,6 +57,8 @@ const PORT = Number(portArg >= 0 ? argv[portArg + 1] : (process.env.VIEWPORT_POR
 const HOST = '127.0.0.1';
 
 const engine = createEngine();
+// 面板轮询的“最后见到时间”：只在面板会轮询的 GET 路由上更新（见 handleHost）。
+const hostPresence = createHostPresence();
 const stats = { frames: 0, acts: 0, cmds: 0, loops: 0, views: 0, headless: 0, plan: 0, worker: 0, txn: 0, preset: 0, job: 0, lastPlanMs: null, lastViewMs: null, lastHeadlessMs: null, lastFrameMs: null, lastActMs: null, lastError: null, startedAt: Date.now() };
 
 /**
@@ -289,6 +293,18 @@ async function hostPickCore(payload) {
 async function handleHost(req, res, url, p) {
   const origin = req.headers.origin || null;
 
+  // v2.2：记录“面板还活着”。面板专属 GET 直接记；`/host/ready` 只在带合法
+  // Web Origin（loopback / dsh-app://app）时记 —— 它代表 Web 页面还活着（侧栏可以
+  // 收起），而无 Origin 的健康检查/调试 curl 不算。`/host/pick/result` 是模型侧
+  // 轮询，绝不能记（否则工具自己的轮询会把自己伪装成 UI）。
+  // 这些路由本来就零 Blender 往返，记一个时间戳不改变任何语义。
+  const webPageAlive = origin !== null && HOST_ORIGIN_RE.test(String(origin));
+  if (req.method === 'GET'
+    && (p === '/host/view/latest' || p === '/host/view.png' || p === '/host/pick/request'
+      || (p === '/host/ready' && webPageAlive))) {
+    hostPresence.note(String(url.searchParams.get('client') || 'unknown'));
+  }
+
   // §1.1 CORS 预检：204 空体
   if (req.method === 'OPTIONS') {
     res.writeHead(204, hostCorsHeaders(origin));
@@ -364,7 +380,8 @@ async function handleHost(req, res, url, p) {
   // §7.1 就绪端点：面板每 2 s 轮询它做门控 ⇒ **必须便宜**。
   // 全同步、零 I/O、零 Blender 往返（engine.hostReady 只读常驻 socket 的存活态与握手缓存）。
   if (req.method === 'GET' && p === '/host/ready') {
-    hostJson(res, 200, engine.hostReady(), origin);
+    // v2.2：附加 `ui` 快照（向后兼容的新字段）。engine.hostReady() 的既有字段一个不动。
+    hostJson(res, 200, Object.assign({}, engine.hostReady(), { ui: hostPresence.snapshot() }), origin);
     return;
   }
 
@@ -375,13 +392,14 @@ async function handleHost(req, res, url, p) {
     try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
     const reqObj = pickRequestStore.create({ prompt: payload.prompt, timeout_s: payload.timeout_s, multi: payload.multi === true });
     stats.pickRequests = (stats.pickRequests || 0) + 1;
-    hostJson(res, 200, { ok: true, request: reqObj }, origin);
+    // v2.2：把“现在有没有 watcher”随回执带给工具，供无人应答时快速失败。
+    hostJson(res, 200, { ok: true, request: reqObj, watching: hostPresence.snapshot() }, origin);
     return;
   }
 
   // §7.2 面板取当前 pending（过期则先判过期再回 null）
   if (req.method === 'GET' && p === '/host/pick/request') {
-    hostJson(res, 200, { ok: true, request: pickRequestStore.current() }, origin);
+    hostJson(res, 200, { ok: true, request: pickRequestStore.current(), watching: hostPresence.snapshot() }, origin);
     return;
   }
 
@@ -438,7 +456,9 @@ async function handleHost(req, res, url, p) {
 
   // §7.2 结果轮询（模型工具用；`expired` 惰性判定）
   if (req.method === 'GET' && p === '/host/pick/result') {
-    hostJson(res, 200, pickRequestStore.result(url.searchParams.get('requestId')), origin);
+    // v2.2：`watching` 是**附加**字段；既有 state/object/objects/error 语义不变。
+    hostJson(res, 200, Object.assign({}, pickRequestStore.result(url.searchParams.get('requestId')),
+                                     { watching: hostPresence.snapshot() }), origin);
     return;
   }
 
