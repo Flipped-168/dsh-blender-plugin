@@ -21,12 +21,19 @@ function section(start, end) {
 }
 const png = Buffer.from('89504e470d0a1a0a', 'hex'); // Header-only fixture; not a Blender render.
 let storeReads = 0;
+const hostNotes = [];
 const sandbox = vm.createContext({
   viewStore: {
     latest() { storeReads++; return { seq: 0, source: 'none' }; },
     pngFor(seq) { return seq === '1' ? { status: 200, png } : { status: 404, body: { ok: false, error: 'no_frame' } }; }
   },
-  engine: { hostReady: () => ({ ok: true, ready: false }) }
+  engine: { hostReady: () => ({ ok: true, ready: false }) },
+  // v2.2：handleHost 顶部会记一次 UI 轮询；/host/ready 会附带 ui 快照。
+  // The spy also pins the route whitelist: result/ready-without-Origin never note.
+  hostPresence: {
+    note(kind) { hostNotes.push(kind || 'unknown'); return { seen: true, age_ms: 0, kind: kind || 'unknown' }; },
+    snapshot() { return { seen: false, age_ms: null, kind: null }; },
+  }
 });
 vm.runInContext(section('const HOST_ORIGIN_RE = ', 'function hostErrText(')
   + section('async function handleHost(', '\nconst server = http.createServer(')
@@ -97,6 +104,36 @@ try {
       assert.equal(r.headers.get('vary'), 'Origin');
     });
   }
+
+  await test('presence notes panel routes only', async () => {
+    hostNotes.length = 0;
+    await request('GET', '/host/view/latest?client=tui', 'dsh-app://app');
+    assert.deepEqual(hostNotes, ['tui']);
+    hostNotes.length = 0;
+    await request('GET', '/host/view.png?seq=1&client=tui', 'dsh-app://app');
+    assert.deepEqual(hostNotes, ['tui']);
+    hostNotes.length = 0;
+    await request('GET', '/host/pick/request?client=tui', 'dsh-app://app');
+    assert.deepEqual(hostNotes, ['tui']);
+    hostNotes.length = 0;
+    await request('GET', '/host/pick/result?requestId=x&client=tui', 'dsh-app://app');
+    assert.deepEqual(hostNotes, [], 'model-side result polling must not refresh presence');
+  });
+
+  await test('presence records /host/ready only for a Web Origin', async () => {
+    hostNotes.length = 0;
+    await request('GET', '/host/ready?client=web', 'dsh-app://app');
+    assert.deepEqual(hostNotes, ['web'], 'Web page alive counts even with the sidebar closed');
+    hostNotes.length = 0;
+    await request('GET', '/host/ready?client=web', 'http://127.0.0.1:3080');
+    assert.deepEqual(hostNotes, ['web']);
+    hostNotes.length = 0;
+    await request('GET', '/host/ready?client=web', undefined);
+    assert.deepEqual(hostNotes, [], 'health-check curl without Origin is not a panel');
+    hostNotes.length = 0;
+    await request('GET', '/host/ready?client=web', 'https://evil.example');
+    assert.deepEqual(hostNotes, [], 'non-loopback Origin is not a panel');
+  });
 } finally {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));

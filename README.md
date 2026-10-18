@@ -135,8 +135,10 @@ Besides the model tools, the package ships a **user-side** half for the DSH UI (
 ### 4.2 Using it from dsh-TUI (side viewport panel + picking)
 
 dsh-TUI ≥ 0.16 exposes the experimental `ctx.tuiPanels` service. When the plugin sees it, it
-registers a **"Blender 视口"** side panel; on Web / headless nothing is registered and nothing
-changes — the 16 model tools and the `/host/*` routes are untouched.
+registers a **"Blender 视口"** side panel; on Web / headless no TUI panel is registered and the
+16 model tools are unchanged. v2.2 adds `ui`/`watching` fields to `/host/*` and makes
+`blender_rt_pick` fail fast (2.5–6 s) when no panel is polling; a visible Web page still counts
+via `/host/ready`, so a collapsed sidebar keeps the old wait.
 
 - **Open it**: `Ctrl+B`, then the "Blender 视口" tab; or `/panel <id>`.
   The host assigns the actual id (e.g. `act1:viewport` when the bundle has no Component identity).
@@ -145,7 +147,9 @@ changes — the 16 model tools and the `/host/*` routes are untouched.
 - **Inside the panel**: `c` captures a frame (`max_size=1600`) · `r` refreshes · click the image to
   pick an object · `Esc` cancels a pending pick request.
 - **Model-requested picking**: after `blender_rt_pick` creates a request, the panel is opened/focused
-  automatically and shows a banner; the clicked object name goes straight back to the model.
+  automatically and shows a banner; the clicked object name goes straight back to the model. If no
+  panel is polling (TUI < 0.16 / panel registration failed / `tuiPanel: false`), the tool returns
+  `PICK 无人应答` in ~**2.5 s** instead of waiting 120–600 s.
 - **Images**: rendered for real on Kitty/Sixel terminals; otherwise the panel falls back to one
   `▦ 视口 1600×1022` line — capture, picking and the model's own view keep working (the model always
   receives the PNG attachment).

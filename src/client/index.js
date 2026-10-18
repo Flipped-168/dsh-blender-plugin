@@ -204,14 +204,14 @@ window.__ModuleLoader__.load({
 		 * **门控的唯一依据**；取不到/未就绪一律当作"不可用"（静默降级）。
 		 */
 		async function fetchReady() {
-			var r = await fetchJSON(backend() + "/host/ready");
+			var r = await fetchJSON(backend() + "/host/ready?client=web");
 			if (r.ok && r.body && r.body.ok === true) return r.body;
 			return null;
 		}
 
 		/** `GET /host/pick/request` → pending 请求或 null（契约 §7.2）。失败一律当 null。 */
 		async function fetchPickRequest() {
-			var r = await fetchJSON(backend() + "/host/pick/request");
+			var r = await fetchJSON(backend() + "/host/pick/request?client=web");
 			if (r.ok && r.body && r.body.ok === true) return r.body.request || null;
 			return null;
 		}
@@ -385,7 +385,7 @@ window.__ModuleLoader__.load({
 			// ① 取当前帧 → blob → File
 			var file;
 			try {
-				var res = await window.fetch(backend() + "/host/view.png?seq=" + seq);
+				var res = await window.fetch(backend() + "/host/view.png?seq=" + seq + "&client=web");
 				if (!res || !res.ok) return { ok: false, reason: "取图失败（HTTP " + (res && res.status ? res.status : 0) + "）" };
 				var blob = await res.blob();
 				file = new File([blob], "blender-viewport.png", { type: "image/png" });
@@ -901,7 +901,7 @@ window.__ModuleLoader__.load({
 						return true;
 					}
 					async function tick() {
-						var r = await fetchJSON(backend() + "/host/view/latest");
+						var r = await fetchJSON(backend() + "/host/view/latest?client=web");
 						if (!alive) return;
 						if (!(r.ok && r.body && r.body.ok === true)) {
 							setNote({ level: "warn", text: offlineText(r) });
@@ -1144,7 +1144,7 @@ window.__ModuleLoader__.load({
 				else if (!inputActions && !fallbackInput) degradeHint = "未取得 inputActions —— 只能预览，不能加入消息";
 
 				var dotColor = view.seq > 0 ? (view.stale ? "#ff9f0a" : "#34c759") : "#aeaeb2";
-				var imgSrc = view.seq > 0 ? backend() + "/host/view.png?seq=" + view.seq : null;
+				var imgSrc = view.seq > 0 ? backend() + "/host/view.png?seq=" + view.seq + "&client=web" : null;
 
 				var stageKids = [];
 				if (imgSrc) {

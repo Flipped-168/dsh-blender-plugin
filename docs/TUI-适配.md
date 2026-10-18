@@ -1,7 +1,8 @@
 # dsh-TUI 适配：侧栏视口面板 + 点击点选
 
 > 适用版本：**dsh-TUI ≥ 0.16.0**（`ctx.tuiPanels`，`apiVersion: 1`，实验性接缝）。
-> Web / 官方桌面端 / headless 的行为**不变**：插件仍然只注册 16 个模型工具，`/host/*` 路由一个字段没改。
+> Web / 官方桌面端 / headless 不注册 TUI 面板，16 个模型工具不变。v2.2 给 `/host/*` 新增了 `ui`/`watching` 附加字段；
+> `blender_rt_pick` 在没有面板轮询时会 2.5–6 s 快速失败（Web 页面可见时 `/host/ready` 仍算 watcher，侧栏收起不会误杀）。
 > 本文只写 TUI 侧新增的那一半；Web 面板、`@` 提及与 v2.1 多选/缩放/作业区仍以
 > [宿主集成接口契约](宿主集成-接口契约.md) 与 [操作教程 §9/§10](操作教程.md#9-宿主集成) 为准。
 
@@ -18,7 +19,7 @@
 | 16 个 `blender_rt_*` 工具 | ✅ | ✅ | ✅（一行未改） |
 | 实时视口面板 | ✅ | ❌ | ✅ 侧栏 Panel |
 | 点击画面选物体 | ✅ | ❌ | ✅ 点击面板画面 |
-| 模型请求点选 `blender_rt_pick` | ✅ 面板应答 | ❌ 无 UI，只能等到超时 | ✅ 自动打开面板 + 点击/`Esc` 应答 |
+| 模型请求点选 `blender_rt_pick` | ✅ 面板应答 | ❌ 无 UI，只能等到超时 | ✅ 自动打开面板 + 点击/`Esc` 应答；无面板时 ~2.5–6 s 快速失败 |
 | 图片内联显示 | `<img>` | 终端图片协议可用时显示，否则文本回退 | 同左 |
 | 点击进消息（sendToChat） | ✅ | ❌（授权未落地，宿主恒 `false`） | ❌ 只 toast 命中结果 |
 | `@` 提及对象/材质/集合 | ✅ | ❌（TUI 没有插件提及接缝） | ❌ 未适配 |
@@ -80,6 +81,12 @@ blender_viewport(op="doctor")
 把面板切到前台并聚焦；请求挂起期间面板显示横幅
 `● 模型请求点选：<prompt>（点画布；Esc 取消）`，同时给面板挂 `warning` 徽标。
 
+如果面板没能注册/打开（dsh-TUI < 0.16、`tuiPanel: false`、注册被拒、宿主没有 `tuiPanels`），
+后端会记录「有没有面板在轮询 `/host/*`」；工具在 **2.5 s 宽限**（auto-open 失败时放宽到 6 s）后若仍无 watcher，会立即取消请求并
+返回 `PICK 未检测到可应答的视口面板`（而不是空等 120–600 s，也不再把原因误写成「用户没点」）。
+有面板轮询时行为不变，仍按 `timeout_s` 等用户点击。细节见
+[宿主集成接口契约 v2.2 增补](宿主集成-接口契约-v2.2增补.md)。
+
 ---
 
 ## 4. 图片显示与回退
@@ -124,7 +131,8 @@ blender_viewport(op="doctor")
 | 面板一直“正在载入画面…” | 后端 9877 是否可达；Blender 是否连上 | `curl 127.0.0.1:9877/health`、`blender_viewport(op="doctor")` |
 | 面板显示 `▦ 视口 W×H` 而不是图 | 终端是否有 Kitty/Sixel；tmux 是否 passthrough | 换支持图形协议的终端，或接受文本回退（功能不受影响） |
 | 点画面总回“空处” | 点的是不是视口里的空白/背景 | 点在物体轮廓内；或用 `blender_rt_pick` 让用户重点 |
-| `blender_rt_pick` 还是等到超时 | 面板是否被手动关掉/切走 | 重新调用会再次自动打开；`timeout_s` 可调，`Esc` 可取消 |
+| `blender_rt_pick` 2.5–6 s 后返回「未检测到可应答的视口面板」 | 面板是否真的注册/轮询（`doctor` 的宿主面板行）；Web 页是否在后台 | 打开/切回面板后重试；修面板或用 `tuiPanel: true` 重启。请求已自动 cancel，不会留 pending |
+| `blender_rt_pick` 等满 `timeout_s` 后超时 | 面板在轮询但用户没点 | `Esc` 取消；或让用户重点/直接给对象名 |
 | Esc 没取消、反而退回聊天 | 焦点是否在面板 | 先点面板画面/按 `Ctrl+B` 聚焦右栏，再按 Esc |
 
 ---
@@ -140,7 +148,9 @@ blender_viewport(op="doctor")
 | `c` 捕获 | seq 递增、尺寸变 1600 长边、`fresh` |
 | 模型 `blender_rt_pick` | 面板自动出现横幅；点击画面后工具返回 `PICK ok`（点空处返回空处语义） |
 | `Esc` 取消 | 工具返回 `PICK 已取消`，面板 toast「已取消点选请求」 |
-| `npm test` | 全绿；新增 `tests/tui_panel_selftest.mjs` **15/15** |
+| 无面板时 `blender_rt_pick` | 独立后端（无 watcher）**2.8 s** 返回 `PICK 未检测到可应答的视口面板`，请求已 cancel，不再等 120 s |
+| 有面板时 `blender_rt_pick` | 1 s 一次 `/host/view/latest` 的 watcher 下，`timeout_s=5` 仍等满 **5.2 s** 返回原超时语义（不误杀） |
+| `npm test` | 全绿；新增 `tests/tui_panel_selftest.mjs` **15/15** + `tests/pick_presence_selftest.mjs` **5/5** |
 | 无图形协议回退 | tmux 内显示 `▦ 视口 1600×1022`，取帧/点选/模型看图均正常 |
 
 > 未覆盖：真实 Kitty/Sixel 终端里的像素级呈现（本机 tmux 无 passthrough）；多选 UI、缩放平移、

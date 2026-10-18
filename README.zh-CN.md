@@ -155,15 +155,17 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 ### 4.2 在 dsh-TUI 里用（侧栏视口面板 + 点选）
 
 dsh-TUI ≥ 0.16 提供实验性 `ctx.tuiPanels`。本包检测到该服务后会自动注册一个
-「**Blender 视口**」侧栏面板；Web / headless 下不注册、行为不变，16 个模型工具与
-`/host/*` 路由一个字段都没改。
+「**Blender 视口**」侧栏面板；Web / headless 下不注册 TUI 面板，16 个模型工具不变。
+v2.2 给 `/host/*` 新增 `ui`/`watching` 附加字段，并让 `blender_rt_pick` 在没有面板轮询时
+2.5–6 s 快速失败；Web 页面可见时 `/host/ready` 仍算 watcher，侧栏收起不会误杀。
 
 - **打开**：`Ctrl+B` 后点「Blender 视口」标签，或 `/panel <id>`。
   实际 id 由宿主分配（没有 Component identity 时形如 `act1:viewport`）；
   跑 `blender_viewport(op="doctor")` 会打印 `宿主面板：✅ dsh-TUI 侧栏已注册（act1:viewport）`。
 - **面板内**：`c` 抓一帧（`max_size=1600`）· `r` 刷新 · 点画面选物体 · `Esc` 取消 pending 点选。
 - **模型请用户点选**：`blender_rt_pick` 发请求后会**自动打开/聚焦**面板并显示横幅；
-  点完对象名直接回给模型，`Esc` 取消。
+  点完对象名直接回给模型，`Esc` 取消。若没有面板在轮询（TUI < 0.16 / 面板注册失败 / `tuiPanel:false`），
+  工具约 **2.5 s** 返回 `PICK 无人应答`，不再空等 120–600 s。
 - **图片**：终端支持 Kitty/Sixel 时显示真实画面；不支持时回退成 `▦ 视口 1600×1022` 一行文本，
   取帧/点选/模型看图仍然正常（模型侧始终拿到 PNG 附件）。
 - **暂不支持**：点击进消息（`sendToChat` 未授权）、`@` 提及、v2.1 的多选 UI/缩放平移/作业区。
