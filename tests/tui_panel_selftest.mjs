@@ -355,6 +355,8 @@ test('rgbaToAscii: 行列数 + 亮度映射', () => {
   const small = mod.rgbaToAscii(image, 1, 1);
   assert.equal(small.split('\n').length, 1);
   assert.equal(small.length, 1);
+  // 面积平均而非单点采样：2×2 平均亮度 103.75 → '='；单点取中心会得到 '+'。
+  assert.equal(small, '=', '1×1 应对整块面积求平均');
   assert.equal(mod.rgbaToAscii(null), '');
   assert.equal(mod.rgbaToAscii({ width: 2, height: 2, data: new Uint8Array(3) }), '');
 });
