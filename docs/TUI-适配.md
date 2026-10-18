@@ -78,14 +78,27 @@ blender_viewport(op="doctor")
 不会反复重试轰炸 Blender。
 
 **模型请求点选时自动打开**：`blender_rt_pick` 发起点选后，host 侧调用 `tuiPanels.open()`，
-把面板切到前台并聚焦；请求挂起期间面板显示横幅
-`● 模型请求点选：<prompt>（点画布；Esc 取消）`，同时给面板挂 `warning` 徽标。
+把面板切到前台并聚焦；请求挂起期间在画框上方显示一条 `点选请求` 提示
+（warning 色左竖线 + 你给的 prompt），同时给面板挂 `warning` 徽标。
 
 如果面板没能注册/打开（dsh-TUI < 0.16、`tuiPanel: false`、注册被拒、宿主没有 `tuiPanels`），
 后端会记录「有没有面板在轮询 `/host/*`」；工具在 **2.5 s 宽限**（auto-open 失败时放宽到 6 s）后若仍无 watcher，会立即取消请求并
 返回 `PICK 未检测到可应答的视口面板`（而不是空等 120–600 s，也不再把原因误写成「用户没点」）。
 有面板轮询时行为不变，仍按 `timeout_s` 等用户点击。细节见
 [宿主集成接口契约 v2.2 增补](宿主集成-接口契约-v2.2增补.md)。
+
+### 3.1 面板视觉
+
+面板走 dsh-TUI 的主题色与原有 UI 原语，不引入图片之外的自绘图形：
+
+- **品牌头**：`BLENDER  VIEWPORT`（accent 色 + subtle 色）+ 右侧状态点
+  `● LIVE / STALE / OFFLINE / IDLE`（success / warning / error / subtle）。
+- **元信息**：`Scene · 宽 × 高 · frame N`，一行 subtle；无帧时 `no frame captured`。
+- **分隔线**：`ui.Divider` 的 hairline，上下各一条，给画框留出呼吸感。
+- **画框**：`ui.Box` 圆角细边框 + 水平内边距；画面顶部锚定，下方留白，不铺满整块面板。
+- **键位栏**：`c 捕获    r 刷新    esc 取消` 与 `click 选物` 两端对齐，只有一行；多选请求额外显示 `d 完成`。
+- **点选提示**：warning 色左竖线 + `点选请求` + prompt；不写长句、不用 emoji。
+- 无 Kitty/Sixel 时画框内是 ASCII 亮度图；有图形协议时同一位置换成真实画面。
 
 ---
 
@@ -96,8 +109,9 @@ blender_viewport(op="doctor")
 
 - 终端支持 **Kitty graphics / Sixel**：显示真实画面（与 TUI 的内联图片同一套渲染路径）。
 - 不支持（tmux 未开 passthrough、`DSH_TUI_DISABLE_TERMINAL_IMAGES=1`、普通 SSH 终端等）：
-  回退成 **ASCII 亮度预览**——每 cell 一个字符，按本帧 min/max 做自动对比度拉伸
-  （Blender 常见的深灰背景 + 灰色物体也能看出轮廓），点击坐标仍按 cell 映射。
+  回退成 **ASCII 亮度预览**——对全分辨率帧按 cell **面积平均**降采样（不是单点采样，避免网格/噪点
+  变成满屏高频字符），再用 **2%–98% 分位**做对比度拉伸（Blender 常见的深灰背景 + 灰色物体也能
+  看出轮廓），点击坐标仍按 cell 映射。
   取帧、点选、模型看图仍然工作；**模型侧始终能拿到 PNG 附件**——面板显示不出来不等于
   `blender_rt_see` 不可用。
 
