@@ -170,8 +170,15 @@ function schemaChars(name) {
   const i = srcTs.indexOf("name: '" + name + "'")
   const d0 = srcTs.indexOf('description:', i)
   const p0 = srcTs.indexOf('parameters: {', d0)
-  const p1 = srcTs.indexOf('\n    },', p0)
-  const seg = srcTs.slice(d0, p1)
+  // End of the tool's own schema: the next top-level member after `parameters`.
+  // The old `\n    },` endpoint can fall beyond the placeholder declaration and
+  // swallow unrelated apply() code, so unrelated additions (a service name, a
+  // comment) silently spend the tool-description budget.
+  const ends = ['\n    output:', '\n    isConcurrencySafe:', '\n    timeoutMs:', '\n    async execute(', '\n    execute(']
+    .map((marker) => srcTs.indexOf(marker, p0))
+    .filter((at) => at > p0)
+  const p1 = ends.length > 0 ? Math.min(...ends) : srcTs.indexOf('\n    },', p0)
+  const seg = p1 > d0 ? srcTs.slice(d0, p1) : srcTs.slice(d0)
   return (seg.match(/'((?:[^'\\]|\\.)*)'/g) || []).join('').length
 }
 // v1.2 修：与 tests/capability_lock.mjs **同一口径** —— 同一个 tool 名会在"降级占位"分支里

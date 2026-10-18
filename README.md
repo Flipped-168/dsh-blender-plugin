@@ -132,6 +132,31 @@ Besides the model tools, the package ships a **user-side** half for the DSH UI (
 
 **Added in v1.2**: a **right-sidebar** viewport panel (appears only while `/host/ready` is true — it disappears when Blender is closed) plus **model-requested picking** (the 16th tool, `blender_rt_pick`: the model asks you to click an object and gets its name back). Usage, the answer/cancel banner, troubleshooting and the unverified list live in [操作教程 §10 右侧栏视口面板 + 模型请求点选](docs/操作教程.md#10-右侧栏视口面板--模型请求点选v12) (Chinese).
 
+### 4.2 Using it from dsh-TUI (side viewport panel + picking)
+
+dsh-TUI ≥ 0.16 exposes the experimental `ctx.tuiPanels` service. When the plugin sees it, it
+registers a **"Blender 视口"** side panel; on Web / headless nothing is registered and nothing
+changes — the 16 model tools and the `/host/*` routes are untouched.
+
+- **Open it**: `Ctrl+B`, then the "Blender 视口" tab; or `/panel <id>`.
+  The host assigns the actual id (e.g. `act1:viewport` when the bundle has no Component identity).
+  `blender_viewport(op="doctor")` prints
+  `宿主面板：✅ dsh-TUI 侧栏已注册（act1:viewport）`.
+- **Inside the panel**: `c` captures a frame (`max_size=1600`) · `r` refreshes · click the image to
+  pick an object · `Esc` cancels a pending pick request.
+- **Model-requested picking**: after `blender_rt_pick` creates a request, the panel is opened/focused
+  automatically and shows a banner; the clicked object name goes straight back to the model.
+- **Images**: rendered for real on Kitty/Sixel terminals; otherwise the panel falls back to one
+  `▦ 视口 1600×1022` line — capture, picking and the model's own view keep working (the model always
+  receives the PNG attachment).
+- **Not yet available**: click-to-message (`sendToChat` is not authorized), `@` mentions, and the
+  v2.1 multi-select UI / zoom / jobs area.
+- **Kill switch**: profile row `config.tuiPanel: false` (default `true`; only applies to hosts that
+  provide `tuiPanels`).
+
+Install, keybindings, troubleshooting and the local acceptance record:
+[docs/TUI-适配.md](docs/TUI-适配.md) (Chinese).
+
 ---
 
 ## 5. What's new in v1.0

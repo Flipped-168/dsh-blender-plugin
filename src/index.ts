@@ -225,6 +225,7 @@ const HOSTNAME = '127.0.0.1'
 export interface Config {
   port: number
   autoStart: boolean
+  tuiPanel: boolean
 }
 
 /**
@@ -311,6 +312,9 @@ export const Config = z
   ? z.object({
       port: z.natural().default(resolveHttpPort()),
       autoStart: z.boolean().default(true),
+      // dsh-TUI 适配：有 ctx.tuiPanels 时注册侧栏视口面板；Web / headless 自动跳过。
+      // 留开关是因为面板 API 仍是实验性接缝，宿主升级出问题时可以一键关掉。
+      tuiPanel: z.boolean().default(true),
     })
   : undefined
 
@@ -324,6 +328,7 @@ function base(port: number): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 import { probeHttp, decideStart, waitHttp } from '../runtime/backend_probe.mjs'
+import { openTuiViewportPanel, registerTuiViewportPanel, tuiPanelState } from './tui-panel.js'
 
 async function probe(port: number, timeoutMs = 1500): Promise<boolean> {
   const ac = new AbortController()
@@ -1009,8 +1014,28 @@ export function apply(ctx: any, config: Config): void {
   const cfgIn: any = (config && typeof config === 'object') ? config : {}
   const port = Number.isFinite(Number(cfgIn.port)) && Number(cfgIn.port) > 0 ? Number(cfgIn.port) : resolveHttpPort()
   const autoStart = cfgIn.autoStart === undefined ? true : !!cfgIn.autoStart
+  const tuiPanelOn = cfgIn.tuiPanel === undefined ? true : !!cfgIn.tuiPanel
 
   void (async () => { if (autoStart && !paused) await ensureBackend(port) })()
+
+  // dsh-TUI 适配：只在这个宿主真的提供 ctx.tuiPanels 时注册（Web / headless 自动 no-op）。
+  // 注册失败不抛、不影响 16 个模型工具；doctor/status 会报告实际状态。
+  // 必须走 ctx.inject：plugin apply 可能早于 dsh-tui 的 tuiPanels 服务挂载，
+  // 一次性 ctx.get('tuiPanels') 在真机首次启动会返回 undefined（已在 TUI 0.16 实测）。
+  if (tuiPanelOn) {
+    const registerPanel = (panelCtx: any) => {
+      try { registerTuiViewportPanel(panelCtx, { port }) } catch (e) { /* 面板是可选能力，绝不拖垮工具面 */ }
+    }
+    if (typeof ctx.inject === 'function') {
+      try {
+        ctx.inject(['tuiPanels'], (panelCtx: any) => { registerPanel(panelCtx) })
+      } catch (e) {
+        registerPanel(ctx)
+      }
+    } else {
+      registerPanel(ctx)
+    }
+  }
 
   // 常驻看护：每 15s 探活一次，掉线自动拉起（宿主重启 / 进程被杀 / 端口被回收都能自愈）。
   // 显式 op=stop 会置 paused，看护尊重它，不会跟用户对着干。
@@ -1728,6 +1753,9 @@ export function apply(ctx: any, config: Config): void {
         return { text: 'PICK 发起失败 · ' + String((rq && (rq.error || rq.raw)) || 'unknown') + String.fromCharCode(10) + '（若为 404：后端版本旧，未装载 /host 路由）' }
       }
       const requestId = String(rq.request.requestId)
+      // TUI 没有 Web 侧栏：请求发出后主动打开/聚焦视口面板，否则用户看不到。
+      // Web / headless 下没有面板服务，这里是 no-op。
+      openTuiViewportPanel()
       const deadline = Date.now() + (timeoutS + 10) * 1000
       const cancel = async (reason: string) => {
         try { await backendPost(port, '/host/pick/cancel', { requestId: requestId, reason: reason }, 8000) } catch (e) { /* 尽力而为 */ }
@@ -2062,6 +2090,12 @@ export function apply(ctx: any, config: Config): void {
           lines.push('诊断：' + String((d && d.kind) || (diag && diag.kind) || (d && d.ok ? 'ok' : 'unknown')))
           lines.push('宿主 API：' + HOST_API)                      // v0.9.2（R2）：DSH 升级后一眼看出插件挂的是哪份 dsh-tools
           lines.push('插件：v' + PLUGIN_VERSION + ' @ ' + HERE)
+          const tp = tuiPanelState()
+          lines.push('宿主面板：' + (!tuiPanelOn
+            ? '已在 config.tuiPanel=false 关闭（模型工具不受影响）'
+            : tp.available
+              ? (tp.registered ? ('✅ dsh-TUI 侧栏已注册（' + String(tp.id || '?') + '）') : '⚠️ tuiPanels 可用，但面板注册失败')
+              : '无 tuiPanels（Web / headless 或旧版 dsh-TUI；模型工具不受影响）'))
           lines.push('schemastery：' + (schemaResolve.via
             ? ('已解析（' + schemaResolve.via + '）')
             : ('❌ ' + String(schemaResolve.error || '未解析') + ' —— 工具未注册（降级模式）')))
@@ -2102,6 +2136,7 @@ export function apply(ctx: any, config: Config): void {
           pluginVersion: s.plugin ? s.plugin.version : null,
           hostApi: HOST_API,                              // v0.9.2（R2）：插件侧解析到的宿主 dsh-tools
           toolVersion: PLUGIN_VERSION,
+          tuiPanel: tuiPanelState(),                      // dsh-TUI 适配：面板服务/注册态/可寻址 id
           // v1.0.1+S11（issue #10）：包名形态解析走哪条通道 / 为什么失败 —— 这类静默整体消失必须留现场
           schemaResolve: { via: schemaResolve.via || null, error: schemaResolve.error || null, tried: schemaResolve.tried },
           recentRuns: (s.runs || []).map((x: any) => ({ id: x.id, status: x.status, pid: x.pid, ms: x.ms,
