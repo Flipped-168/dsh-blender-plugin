@@ -57,6 +57,12 @@ blender_viewport(op="doctor")
   宿主用 `actN:` 前缀）。不要自己拼；以 `doctor` / 面板栏显示为准。
 - 面板注册失败时是 `⚠️ tuiPanels 可用，但面板注册失败`，工具面不受影响。
 
+> ⚠ **已知宿主问题（dsh-TUI 0.16）**：profile 里除官方 bundle 外还有第三方 bundle 时，
+> standalone `dsh-tui` 可能在启动时报 `1 required plugin did not activate`，日志里是核心插件的
+> `root.effect is unavailable from a plugin activation`（核心插件与 TUI 行的激活竞态）。
+> 这不是插件错误：用 **`dsh --profile <profile>`** 启动（DSH 自己的 Loader 组合）即可正常使用
+> 工具与面板；等 dsh-TUI 修好入口守卫后再换回 `dsh-tui`。
+
 打开面板：
 
 - `Ctrl+B` 打开侧栏，点顶部「Blender 视口」标签；或
