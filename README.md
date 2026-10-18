@@ -150,9 +150,10 @@ via `/host/ready`, so a collapsed sidebar keeps the old wait.
   automatically and shows a banner; the clicked object name goes straight back to the model. If no
   panel is polling (TUI < 0.16 / panel registration failed / `tuiPanel: false`), the tool returns
   `PICK 无人应答` in ~**2.5 s** instead of waiting 120–600 s.
-- **Images**: rendered for real on Kitty/Sixel terminals; otherwise the panel falls back to one
-  `▦ 视口 1600×1022` line — capture, picking and the model's own view keep working (the model always
-  receives the PNG attachment).
+- **Images**: rendered for real on Kitty/Sixel terminals; otherwise the panel falls back to an
+  **auto-contrast ASCII preview** (one character per cell, readable even on Blender's dark-grey
+  viewport) — capture, picking and the model's own view keep working (the model always receives the
+  PNG attachment).
 - **Not yet available**: click-to-message (`sendToChat` is not authorized), `@` mentions, and the
   v2.1 multi-select UI / zoom / jobs area.
 - **Kill switch**: profile row `config.tuiPanel: false` (default `true`; only applies to hosts that

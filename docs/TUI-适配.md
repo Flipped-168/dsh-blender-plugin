@@ -19,8 +19,8 @@
 | 16 个 `blender_rt_*` 工具 | ✅ | ✅ | ✅（一行未改） |
 | 实时视口面板 | ✅ | ❌ | ✅ 侧栏 Panel |
 | 点击画面选物体 | ✅ | ❌ | ✅ 点击面板画面 |
-| 模型请求点选 `blender_rt_pick` | ✅ 面板应答 | ❌ 无 UI，只能等到超时 | ✅ 自动打开面板 + 点击/`Esc` 应答；无面板时 ~2.5–6 s 快速失败 |
-| 图片内联显示 | `<img>` | 终端图片协议可用时显示，否则文本回退 | 同左 |
+| 模型请求点选 `blender_rt_pick` | ✅ 面板应答 | ❌ 无 UI，只能等到超时 | ✅ 自动打开面板 + 点击/`Esc`/`d` 应答；无面板时 ~2.5–6 s 快速失败 |
+| 图片内联显示 | `<img>` | 终端图片协议可用时显示真实画面，否则 ASCII 预览 | 同左 |
 | 点击进消息（sendToChat） | ✅ | ❌（授权未落地，宿主恒 `false`） | ❌ 只 toast 命中结果 |
 | `@` 提及对象/材质/集合 | ✅ | ❌（TUI 没有插件提及接缝） | ❌ 未适配 |
 | 多选 UI / 缩放平移 / 作业区 | ✅ v2.1 | ❌ | ❌ 当前只做单选 + 逐次 answer |
@@ -96,8 +96,10 @@ blender_viewport(op="doctor")
 
 - 终端支持 **Kitty graphics / Sixel**：显示真实画面（与 TUI 的内联图片同一套渲染路径）。
 - 不支持（tmux 未开 passthrough、`DSH_TUI_DISABLE_TERMINAL_IMAGES=1`、普通 SSH 终端等）：
-  回退成一行 `▦ 视口 1600×1022` 文本，取帧、点选、模型看图仍然工作。
-  **模型侧始终能拿到 PNG 附件**——面板显示不出来不等于 `blender_rt_see` 不可用。
+  回退成 **ASCII 亮度预览**——每 cell 一个字符，按本帧 min/max 做自动对比度拉伸
+  （Blender 常见的深灰背景 + 灰色物体也能看出轮廓），点击坐标仍按 cell 映射。
+  取帧、点选、模型看图仍然工作；**模型侧始终能拿到 PNG 附件**——面板显示不出来不等于
+  `blender_rt_see` 不可用。
 
 点击坐标按“图像 Box 的局部单元格”换算成 `0..1` 归一化坐标；图外点击不发请求（v2.1 §8.1 判据 19）。
 
@@ -129,7 +131,7 @@ blender_viewport(op="doctor")
 | 报 `tuiPanels 可用，但面板注册失败` | dsh-TUI 启动日志里的 `tuiPanels.register rejected …` | 面板预算（每插件 ≤4 / 全局 ≤32）或 id 冲突；重启 TUI 后复查 |
 | 面板在标签栏里但打不开 | `/panel` 的 id 是否写错 | 用 `doctor` 打印的 `actN:viewport`，或直接点标签 |
 | 面板一直“正在载入画面…” | 后端 9877 是否可达；Blender 是否连上 | `curl 127.0.0.1:9877/health`、`blender_viewport(op="doctor")` |
-| 面板显示 `▦ 视口 W×H` 而不是图 | 终端是否有 Kitty/Sixel；tmux 是否 passthrough | 换支持图形协议的终端，或接受文本回退（功能不受影响） |
+| 面板显示 ASCII 字符画而不是图 | 终端是否有 Kitty/Sixel；tmux 是否 passthrough | 正常回退；换支持图形协议的终端可看真实画面。字符画仍可点击 |
 | 点画面总回“空处” | 点的是不是视口里的空白/背景 | 点在物体轮廓内；或用 `blender_rt_pick` 让用户重点 |
 | `blender_rt_pick` 2.5–6 s 后返回「未检测到可应答的视口面板」 | 面板是否真的注册/轮询（`doctor` 的宿主面板行）；Web 页是否在后台 | 打开/切回面板后重试；修面板或用 `tuiPanel: true` 重启。请求已自动 cancel，不会留 pending |
 | `blender_rt_pick` 等满 `timeout_s` 后超时 | 面板在轮询但用户没点 | `Esc` 取消；或让用户重点/直接给对象名 |
@@ -150,8 +152,8 @@ blender_viewport(op="doctor")
 | `Esc` 取消 | 工具返回 `PICK 已取消`，面板 toast「已取消点选请求」 |
 | 无面板时 `blender_rt_pick` | 独立后端（无 watcher）**2.8 s** 返回 `PICK 未检测到可应答的视口面板`，请求已 cancel，不再等 120 s |
 | 有面板时 `blender_rt_pick` | 1 s 一次 `/host/view/latest` 的 watcher 下，`timeout_s=5` 仍等满 **5.2 s** 返回原超时语义（不误杀） |
-| `npm test` | 全绿；新增 `tests/tui_panel_selftest.mjs` **15/15** + `tests/pick_presence_selftest.mjs` **5/5** |
-| 无图形协议回退 | tmux 内显示 `▦ 视口 1600×1022`，取帧/点选/模型看图均正常 |
+| `npm test` | 全绿；新增 `tests/tui_panel_selftest.mjs` **16/16** + `tests/pick_presence_selftest.mjs` **5/5** |
+| 无图形协议回退 | tmux 内显示自动对比度 ASCII 预览（物体轮廓可见），取帧/点选/模型看图均正常 |
 
 > 未覆盖：真实 Kitty/Sixel 终端里的像素级呈现（本机 tmux 无 passthrough）；多选 UI、缩放平移、
 > 作业区、`@` 提及。它们不是本次适配的承诺，见 §1 对照表。
