@@ -7,10 +7,11 @@
 > 15 个模型工具，不用装 MCP、不用 CLI 适配层：AI 能看、能改、能批处理、能验收、能回滚；
 > 而**你**在 Blender 里原生选中物体，按一个按钮就把它们送进 DSH 当前会话的输入框。
 >
-> 🏷 **v2.4.0** · 15 个模型工具 · 28 family / 186 个 plan op · addon **v1.9**（protocol 11）· 包体 **1.3 MB / 142 文件**
+> 🏷 **v2.5.0** · 15 个模型工具 · 28 family / 186 个 plan op · addon **v1.10**（protocol 11）· 包体 **1.3 MB / 142 文件**
 >
-> **v2.4 变了什么**：选中入口在 Blender（多选 / 集合），v2.4 起**编辑模式点/线/面、姿态骨骼、曲线/晶格点也能一起发送**；
-> N 面板列表可折叠 / 滚动 / 调高度。v2.3 已删除 DSH 侧视口面板、点击进消息、`blender_rt_pick`。
+> **v2.5 变了什么**：活动状态置顶（AI 操作时红色警告），新增「暂停 AI 操作」按钮（暂停后模型写操作被拒）；
+> 「环境与角色模型API调用」父面板 +「环境生成 / 模型生成」子面板（默认全折叠）。
+> v2.4 起编辑模式点/线/面、姿态骨骼、曲线/晶格点也能一起发送；v2.3 已删除 DSH 侧视口面板、点击进消息、`blender_rt_pick`。
 
 ---
 
@@ -19,6 +20,14 @@
 如果它帮你省了时间，可以支持一下开发：<https://afdian.com/a/sixtyseven67>。
 
 ---
+
+## v2.5 亮点（What's new in v2.5）
+
+- **活动状态置顶**：N 面板第一块；AI 操作（`agent` / `both`）时红色警告「AI 正在操作 Blender」。
+- **暂停 AI 操作**：顶部按钮；暂停后模型发来的写操作返回 `AI_PAUSED`（只读查询仍可用），
+  只能在 Blender 面板点「继续 AI 操作」恢复。
+- **环境与角色模型API调用**：父面板默认折叠，内含「环境生成」（Poly Haven / Sketchfab / Poly Pizza）与
+  「模型生成」（Hyper3D / Hunyuan3D / Tripo）两个子面板，默认也折叠；这部分去掉了装饰性图标。
 
 ## v2.4 亮点（What's new in v2.4）
 
@@ -77,7 +86,7 @@
 
 1. **Blender 4.x / 5.x 以 GUI 模式运行** —— 这条通道需要活的 GUI 会话（`-b` 只给无头工具用）。
 2. **Blender 里的 addon —— 只支持本仓附带的 [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)**
-   （**`DSH Blender Bridge` v1.9**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
+   （**`DSH Blender Bridge` v1.10**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
    `get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(...)`、`execute_code(code)`，
    外加 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D）。
    **上游 `MCP for Blender` / harveyxiacn `blender_mcp_addon` 自 v2.3 起不再支持**（旧的双名回退与 category-action 适配已删除）；
@@ -93,7 +102,7 @@
 ## 3. 安装（Install，5 步）
 
 > **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的
-> `dsh-external-dsh-blender-plugin-2.4.0.tgz`（1.3 MB / 142 文件）：解包后放进
+> `dsh-external-dsh-blender-plugin-2.5.0.tgz`（1.3 MB / 142 文件）：解包后放进
 > `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
 > 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
 
@@ -148,7 +157,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # 换个角度：�
 
 - **`@` 提及**：输入框敲 `@` 出对象 / 材质 / 集合候选（引用带前缀 `object:<name>` / `material:<name>` /
   `collection:<name>`），选中后由 `codec` 拆掉前缀、序列化成 `<blender-object>Cube</blender-object>`，模型不再猜对象名。
-- **Blender 原生选中 → 草稿**（v2.3+；子元素选中 v2.4，需 addon v1.9+）：在 Blender 里选中 → `N` → **Selection → DSH** → 发送；
+- **Blender 原生选中 → 草稿**（v2.3+；子元素选中 v2.4，需 addon v1.10+）：在 Blender 里选中 → `N` → **Selection → DSH** → 发送；
   选中进**当前会话草稿**，**不自动发送**。两种模式：**多选**（当前选中对象）/ **集合**（整组发送，大装配体推荐）。
   - **列表可伸缩**：默认折叠，展开后带滚动条；高度用「高度（行）」滑杆调整，不固定。
   - 后端地址收进折叠的「后端 / 高级」。
@@ -232,7 +241,7 @@ blender_rt_txn  {op:"snapshot", label:"before-edit"}
 | 后端不可用（9877 连不上） | 后端进程没起来 | `blender_viewport(op="start")` |
 | `value is not lossless JSON` | 插件版本旧（< v0.9.4） | 升级后**重启 DSH** |
 | 写操作 409 `leased` | 别的会话持有写租约 | `blender_viewport(op="who")`，别强抢 |
-| N 面板没有「Selection → DSH」 | 装的是旧 `MCP for Blender`（v2.3 不支持） | 停用旧 addon，装本仓 v1.9，再重启 DSH |
+| N 面板没有「Selection → DSH」 | 装的是旧 `MCP for Blender`（v2.3 不支持） | 停用旧 addon，装本仓 v1.10，再重启 DSH |
 | 已发送但草稿没字 | 升级后没重启 DSH / 草稿被锁 | 重启 DSH；看 `/host/selection/latest.last_consume` 的 `ok/reason` |
 | 旧「Blender 视口」tab 还在 | DSH 没重启（v2.3 已删面板） | 重启 DSH |
 

@@ -37,7 +37,7 @@ profile 的 `package.json` 里 `dependencies`（`link:`）+ `dsh.profile.bundles
 
 ## 3. 连接 Blender addon（人工一步）
 
-1. Blender 里启用本仓 **DSH Blender Bridge** addon（`addon/dsh_blender_bridge.py`，v1.9+）。v2.3 起旧 `MCP for Blender` 不再支持，如已安装请先停用（见 [../MIGRATIONS.md](../MIGRATIONS.md)）；
+1. Blender 里启用本仓 **DSH Blender Bridge** addon（`addon/dsh_blender_bridge.py`，v1.10+）。v2.3 起旧 `MCP for Blender` 不再支持，如已安装请先停用（见 [../MIGRATIONS.md](../MIGRATIONS.md)）；
 2. 3D 视口按 `N` → **DSH Blender Bridge** 面板 → **Connect**（socket 默认 `127.0.0.1:9876`）；
 3. 回到 DSH 跑 `blender_viewport(op="doctor")` 复核。
 

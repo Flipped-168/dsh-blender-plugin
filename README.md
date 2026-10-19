@@ -8,7 +8,7 @@
 > 15 model tools, no MCP assembly, no CLI adapter: the model can look, edit, batch-process, verify and roll back —
 > while **you** pick objects in Blender natively and send them into the DSH draft with one button.
 >
-> 🏷 **v2.4.0** · 15 model tools · 28 families / 186 plan ops · addon **v1.9** (protocol 11) · package **1.3 MB / 142 files**
+> 🏷 **v2.5.0** · 15 model tools · 28 families / 186 plan ops · addon **v1.10** (protocol 11) · package **1.3 MB / 142 files**
 >
 > **What changed in v2.3:** selection moved into Blender (multi-select / collection modes + human/agent activity);
 > the DSH-side viewport panel, click-to-message and `blender_rt_pick` were **removed**. See §5.
@@ -55,7 +55,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 ## 2. Requirements
 
 1. **Blender 4.x / 5.x running in GUI mode** — this channel needs a live GUI session (`-b` is only used by the headless tools).
-2. **Blender addon — only the bundled [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) is supported** (**`DSH Blender Bridge` v1.9**, module `dsh_blender_bridge`). It listens on `127.0.0.1:9876` and provides `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(...)`, `execute_code(code)` plus the 5 optional asset integrations (PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D). Upstream `MCP for Blender` / harveyxiacn `blender_mcp_addon` are **not supported** since v2.3 (the old dual-name and category-action adapters were deleted) — if you have one installed, disable it and install the bundled addon (see [MIGRATIONS.md](MIGRATIONS.md)).
+2. **Blender addon — only the bundled [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) is supported** (**`DSH Blender Bridge` v1.10**, module `dsh_blender_bridge`). It listens on `127.0.0.1:9876` and provides `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(...)`, `execute_code(code)` plus the 5 optional asset integrations (PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D). Upstream `MCP for Blender` / harveyxiacn `blender_mcp_addon` are **not supported** since v2.3 (the old dual-name and category-action adapters were deleted) — if you have one installed, disable it and install the bundled addon (see [MIGRATIONS.md](MIGRATIONS.md)).
 3. **Node.js ≥ 20** (runs the backend).
 4. **DSH (DeepSeek Harness)** — this package is a DSH plugin (`inject: ['tools']`, declares `dsh.bundle` via `cordis.patch.yml`). WSL host + Windows Blender needs WSL interop (on by default); same-OS setups (Windows / native Linux / macOS) are supported and auto-detected.
 5. **A DSH source checkout only if you rebuild** (`DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh`); the repo commits `lib/`, so a plain clone is ready to install.
@@ -64,7 +64,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 
 ## 3. Install (5 steps)
 
-> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.4.0.tgz` (1.3 MB / 142 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
+> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.5.0.tgz` (1.3 MB / 142 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
 > Full third-party checklist: [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md).
 
 ```bash
@@ -111,7 +111,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")         # a different angle, user
 The package contributes a **user-side** half for DSH's Web client (its own `/host/*` routes — no op-catalog entry, no model tools, so the **15-tool / 186-op** surface is unchanged):
 
 - **`@` mentions** — type `@` to pick scene objects / materials / collections (refs are prefixed: `object:<name>` / `material:<name>` / `collection:<name>`); the `codec` strips the prefix and serializes to `<blender-object>Cube</blender-object>`, so the model stops guessing object names.
-- **Native selection → draft** (v2.3+; sub-element selection v2.4, addon v1.9+): select in Blender → press `N` → **Selection → DSH** → send. The selection lands in the **current session draft** and is **not auto-sent**. Two modes: **多选 / Multi** (current selected objects) and **集合 / Collection** (one collection as a whole — best for large assemblies).
+- **Native selection → draft** (v2.3+; sub-element selection v2.4, addon v1.10+): select in Blender → press `N` → **Selection → DSH** → send. The selection lands in the **current session draft** and is **not auto-sent**. Two modes: **多选 / Multi** (current selected objects) and **集合 / Collection** (one collection as a whole — best for large assemblies).
 - **Collapsible, scrollable, resizable lists**: the object / collection-member list is collapsed by default; once expanded it is a scrollable UI list whose height is set by the **高度（行）** slider (3–30 rows). The backend URL lives under a collapsed **后端 / 高级** section.
 - **Sub-element selection** (v2.4): selection in Edit Mode (vertices / edges / faces), Pose Mode (bones), or curve/lattice edit mode is sent as `selection.sub` (indices + select mode + truncation flag). The draft text names the selected elements; the model can edit them through `bmesh` / `pose.bones[...]`. Full arrays are available via `blender_rt_cmd get_selection`.
 - **Activity state** (v2.3): Blender reports `idle / human / agent / both`; the N panel shows it live and the model can query `blender_rt_cmd get_activity_state` / `get_selection` (the query itself is excluded from `agent`). Also `get_collections` / `send_collection_to_dsh` for the collection workflow.
@@ -133,6 +133,11 @@ blender_rt_txn  {op:"snapshot", label:"before-edit"}
 ---
 
 ## 5. What's new
+
+**v2.5.0 — activity on top, AI pause button, env/model API panels**
+
+- **Activity on top** of the N panel; while the AI is operating (`agent` / `both`) it shows an alert row. A **暂停 AI 操作 / 继续 AI 操作** button pauses the AI: write commands from DSH return `AI_PAUSED`, only read-only queries pass; resume only from the Blender panel.
+- **环境与角色模型API调用** parent panel with two subpanels, all collapsed by default: **环境生成** (Poly Haven / Sketchfab / Poly Pizza) and **模型生成** (Hyper3D / Hunyuan3D / Tripo); decorative icons removed.
 
 **v2.4.0 — sub-element selection + resizable panel lists**
 
@@ -203,7 +208,7 @@ Key knobs: `port` (backend, 9877), `addonHost`/`addonPort` (9876), `blenderExe`,
 | Backend unreachable (`9877`) | Backend process not running | `blender_viewport(op="start")` |
 | `value is not lossless JSON` | Old plugin (< v0.9.4) | Upgrade, **restart DSH** |
 | `409 leased` on writes | Another session holds the write lease | `blender_viewport(op="who")`; don't steal |
-| N panel has no “Selection → DSH” | You are running the old `MCP for Blender` addon (unsupported since v2.3) | Disable it, install the bundled addon v1.9, restart DSH |
+| N panel has no “Selection → DSH” | You are running the old `MCP for Blender` addon (unsupported since v2.3) | Disable it, install the bundled addon v1.10, restart DSH |
 | Selection sent but no text in draft | DSH not restarted after upgrade / draft locked | Restart DSH; check `/host/selection/latest.last_consume` |
 | Old “Blender 视口” tab still shows | DSH not restarted (v2.3 removed the panel) | Restart DSH |
 

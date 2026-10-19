@@ -30,7 +30,7 @@ from bpy.app.handlers import persistent
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "Siddharth Ahuja",
-    "version": (1, 9),
+    "version": (1, 10),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > DSH Blender Bridge",
     "description": "Connect Blender to Claude via MCP",

@@ -41,7 +41,7 @@ blender_viewport(op="doctor")        # kind=ok ？（真跑一次 bpy 往返）
 blender_rt_see(max_size=560)         # 能回一帧图？
 blender_rt_plan(op="catalog")        # 工具 / op 目录能列出来？
 skill(name="blender-modeling")       # 随包 skill 能加载？（v2.2.0 起自动注册，无需另装）
-blender_rt_cmd(name="get_activity_state")  # v2.3：addon v1.9 的 activity/选中命令在不在？
+blender_rt_cmd(name="get_activity_state")  # v2.3：addon v1.10 的 activity/选中命令在不在？
 blender_rt_cmd(name="get_collections")    # v2.3：集合模式的数据源在不在？
 ```
 
@@ -59,8 +59,9 @@ blender_rt_cmd(name="get_collections")    # v2.3：集合模式的数据源在�
 4. **v2.4 新能力**：编辑模式选**顶点/边/面**、姿态模式选**骨骼**、编辑模式选**曲线/晶格控制点**也会随选中一起发送，
    草稿会写明已选哪些元素，AI 可以精确修改；N 面板的对象 / 成员列表可折叠、带滚动条、高度可调。
 5. **已删除**：DSH 里原来的「Blender 视口」面板、点击进消息、模型请求点选（`blender_rt_pick`）在 v2.3 都已移除；
-   截图仍由模型工具 `blender_rt_see` 负责。**升级后必须重启 DSH**，并且 Blender 侧 addon 要 v1.9+。
-6. **addon 兼容性（重要）**：v2.3 起**只支持本仓附带的 `addon/dsh_blender_bridge.py`（v1.9+）**。
+   截图仍由模型工具 `blender_rt_see` 负责。**升级后必须重启 DSH**，并且 Blender 侧 addon 要 v1.10+。
+   v2.5 起 N 面板顶部有「暂停 AI 操作」按钮：暂停后模型写操作会被拒绝，只读查询仍可用；恢复只能在 Blender 里点。
+6. **addon 兼容性（重要）**：v2.3 起**只支持本仓附带的 `addon/dsh_blender_bridge.py`（v1.10+）**。
    如果 Blender 里装的是旧 `MCP for Blender` / `blender_mcp`，请先停用，再安装并启用本仓 addon；
    否则不会出现「Selection → DSH」，上面 1–3 的新功能全部用不了（模型工具也可能连不上）。
    —— 请把这条如实告诉用户，并给出迁移步骤（MIGRATIONS.md）。

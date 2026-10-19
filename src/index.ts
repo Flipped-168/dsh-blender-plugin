@@ -34,7 +34,7 @@ const IS_WIN = process.platform === 'win32'
  * description 由**已加载的那份 lib** 生成 → 会话里一眼能看出自己跑的是哪一代，
  * 不会再出现「读的是新源码、跑的是旧 lib」那种排查事故（外部反馈 j20-build 的元教训）。
  */
-const PLUGIN_VERSION = '2.4.0'
+const PLUGIN_VERSION = '2.5.0'
 // 注意：必须**先加前缀、再交给 defineTool** —— defineTool 负责校验与规范化，
 // 自己 spread 一个成品对象会绕过它（实测：spread 版本会让插件 fiber 直接 failed）。
 //
@@ -250,7 +250,7 @@ function resolveHttpPort(): number {
   return 9877
 }
 /** 后端未就绪时的统一提示（不假设任何本机路径） */
-const BACKEND_HINT = '先确认 Blender 在运行且本仓 addon（DSH Blender Bridge v1.9+）已 Connect；然后 blender_viewport op=start 拉起后端。'
+const BACKEND_HINT = '先确认 Blender 在运行且本仓 addon（DSH Blender Bridge v1.10+）已 Connect；然后 blender_viewport op=start 拉起后端。'
   + '端口/工作目录/blender.exe 可用 DSH_BLENDER_* 环境变量或包根 dsh-blender.config.json 配置（见 docs/配置参考.md）。'
 
 /**

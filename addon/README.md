@@ -13,7 +13,7 @@
 |---|---|
 | 文件名 / 模块名 | `dsh_blender_bridge.py` / `dsh_blender_bridge` |
 | 显示名（Blender 插件列表里） | **DSH Blender Bridge** |
-| 版本 / 协议 | addon **v1.9 / protocol 11**（2026-10-19 活进程实测：Blender 5.2.2 LTS） |
+| 版本 / 协议 | addon **v1.10 / protocol 11**（2026-10-19 活进程实测：Blender 5.2.2 LTS） |
 | 标识前缀 | `dshbb_`（注册类 `bpy.types.dshbb_server`、5 个集成开关 `dshbb_use_*`） |
 | TCP 端口 | `127.0.0.1:9876`（只监听本机） |
 | 命令面 | 39 条（24 常驻 + 15 集成门控；v1.8 新增 `get_activity_state` / `get_selection` / `send_selection_to_dsh` / `get_collections` / `send_collection_to_dsh`；v1.9 选中 payload 增加 `selection.sub`） |
@@ -44,7 +44,7 @@
 ## 验证
 
 ```bash
-blender_rt_cmd get_addon_info     # addon_version 应为 [1, 9]；capabilities 含 5 条新命令
+blender_rt_cmd get_addon_info     # addon_version 应为 [1, 10]；capabilities 含 5 条新命令
 blender_rt_cmd get_activity_state # state 可能为 idle / human / agent / both
 ```
 
@@ -52,7 +52,7 @@ blender_rt_cmd get_activity_state # state 可能为 idle / human / agent / both
 编辑模式选顶点/边/面、姿态模式选骨骼、编辑曲线/晶格控制点也会一起发送（payload 里 `selection.sub`）；
 N 面板的对象 / 成员列表默认折叠，展开后带滚动条且高度可调。
 
-面板结构（v2.5，未发版）：活动状态置顶（AI 操作时显示红色警告）+「暂停 AI 操作」按钮；
+面板结构（v2.5）：活动状态置顶（AI 操作时显示红色警告）+「暂停 AI 操作」按钮；
 「环境与角色模型API调用」为父面板，内含「环境生成」（Poly Haven / Sketchfab / Poly Pizza）与
 「模型生成」（Hyper3D / Hunyuan3D / Tripo）两个子面板，默认全部折叠。暂停期间 socket 只放行只读命令。
 
