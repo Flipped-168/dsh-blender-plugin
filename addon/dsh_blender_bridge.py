@@ -1101,8 +1101,6 @@ SELECTION_ACTIVITY_NAMES = 8
 SELECTION_PAYLOAD_NAMES = 200
 SELECTION_PAYLOAD_OBJECTS = 50
 SELECTION_COLLECTION_ROWS = 50
-# N 面板「列表」最多画多少行（多选对象 / 集合成员）；再多就只显示计数 + 前几行。
-SELECTION_UI_ROWS = 30
 MAX_MODAL_OPERATORS = 8
 DEFAULT_DSH_BACKEND = "http://127.0.0.1:9877"
 
@@ -6305,6 +6303,40 @@ class DSHBB_AddonPreferences(bpy.types.AddonPreferences):
         cred_box.prop(self, "sketchfab_api_key", text="Sketchfab API Key")
         cred_box.prop(self, "polypizza_api_key", text="Poly Pizza API Key")
 
+# ── v1.8 UIList：N 面板对象 / 集合成员列表（可折叠、可滚动、行数可调）──
+LIST_UI_CAP = 500
+
+
+class DSHBB_SelectionItem(bpy.types.PropertyGroup):
+    obj_name: bpy.props.StringProperty(name="Name", default="")
+    obj_type: bpy.props.StringProperty(name="Type", default="")
+
+
+class DSHBB_UL_ObjectList(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        row.label(text=getattr(item, "obj_name", "") or "<unnamed>", icon='OBJECT_DATA')
+        row.label(text=getattr(item, "obj_type", "") or "?")
+
+
+def _sync_ui_list(collection, entries):
+    """把 [(name, type)] 同步进 PropertyGroup 集合；签名相同就跳过（避免每次重绘都重建）。"""
+    if len(collection) == len(entries):
+        same = True
+        for i, (name, typ) in enumerate(entries):
+            item = collection[i]
+            if item.obj_name != name or item.obj_type != typ:
+                same = False
+                break
+        if same:
+            return
+    collection.clear()
+    for name, typ in entries:
+        item = collection.add()
+        item.obj_name = name
+        item.obj_type = typ
+
+
 # Blender UI Panel
 class DSHBB_PT_Panel(bpy.types.Panel):
     bl_label = "DSH Blender Bridge"
@@ -6382,18 +6414,25 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                 selected_in_coll = sum(1 for obj in members if obj.name in selected_names)
                 sel_col.label(text="集合「%s」：%d 件（当前选中 %d 件）—— 发送整个集合"
                                    % (target_coll.name, len(members), selected_in_coll), icon='OUTLINER_COLLECTION')
-                # 集合成员列表（可滚动的 N 面板里逐行列出；超过上限只列前 N 行）
-                list_box = sel_box.box()
-                list_col = list_box.column(align=True)
-                for obj in members[:SELECTION_UI_ROWS]:
-                    row = list_col.row(align=True)
-                    row.label(text=obj.name, icon='OBJECT_DATA')
-                    row.label(text=str(getattr(obj, "type", "?")))
-                if len(members) > SELECTION_UI_ROWS:
-                    list_col.label(text="… 其余 %d 件（发送时名单最多带前 %d 个）"
-                                        % (len(members) - SELECTION_UI_ROWS, SELECTION_PAYLOAD_NAMES), icon='INFO')
-                if not members:
-                    list_col.label(text="集合是空的", icon='INFO')
+                # 成员列表：可折叠；展开后是 UIList（内容多时自带滚动条），高度用「高度（行）」滑杆调
+                list_open = bool(getattr(scene, "dshbb_show_collection_list", False))
+                list_row = sel_box.row()
+                list_row.prop(scene, "dshbb_show_collection_list",
+                              text="成员列表（%d）" % len(members), emboss=False,
+                              icon='TRIA_DOWN' if list_open else 'TRIA_RIGHT')
+                if list_open:
+                    _sync_ui_list(scene.dshbb_collection_items,
+                                  [(obj.name, str(getattr(obj, "type", "?"))) for obj in members[:LIST_UI_CAP]])
+                    ctrl = sel_box.row(align=True)
+                    ctrl.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
+                    sel_box.template_list("DSHBB_UL_ObjectList", "dshbb_collection",
+                                          scene, "dshbb_collection_items",
+                                          scene, "dshbb_collection_index",
+                                          rows=int(getattr(scene, "dshbb_list_rows", 8)))
+                    if len(members) > LIST_UI_CAP:
+                        sel_box.label(text="列表只显示前 %d 件（发送不受影响）" % LIST_UI_CAP, icon='INFO')
+                    if not members:
+                        sel_box.label(text="集合是空的", icon='INFO')
                 try:
                     children = list(target_coll.children)
                 except Exception:
@@ -6418,22 +6457,27 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                                        % (selection.get("active"), selection.get("mode") or "?"))
                 if sel_count > 200:
                     sel_col.label(text="件数过多：切到「集合」模式整组发送更快", icon='INFO')
-                # 多选列表：逐行列出选中对象（N 面板可滚动；超出上限只列前 N 行）
+                # 对象列表：可折叠；展开后是 UIList（内容多时自带滚动条），高度用「高度（行）」滑杆调
                 try:
                     selected_objs = list(bpy.context.selected_objects or [])
                 except Exception:
                     selected_objs = []
-                list_box = sel_box.box()
-                list_col = list_box.column(align=True)
-                for obj in selected_objs[:SELECTION_UI_ROWS]:
-                    row = list_col.row(align=True)
-                    row.label(text=obj.name, icon='OBJECT_DATA')
-                    row.label(text=str(getattr(obj, "type", "?")))
-                if len(selected_objs) > SELECTION_UI_ROWS:
-                    list_col.label(text="… 其余 %d 件（发送时名单最多带前 %d 个）"
-                                        % (len(selected_objs) - SELECTION_UI_ROWS, SELECTION_PAYLOAD_NAMES), icon='INFO')
-                if not selected_objs:
-                    list_col.label(text="（无法枚举选中对象）", icon='INFO')
+                list_open = bool(getattr(scene, "dshbb_show_selection_list", False))
+                list_row = sel_box.row()
+                list_row.prop(scene, "dshbb_show_selection_list",
+                              text="对象列表（%d）" % len(selected_objs), emboss=False,
+                              icon='TRIA_DOWN' if list_open else 'TRIA_RIGHT')
+                if list_open:
+                    _sync_ui_list(scene.dshbb_selection_items,
+                                  [(obj.name, str(getattr(obj, "type", "?"))) for obj in selected_objs[:LIST_UI_CAP]])
+                    ctrl = sel_box.row(align=True)
+                    ctrl.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
+                    sel_box.template_list("DSHBB_UL_ObjectList", "dshbb_selection",
+                                          scene, "dshbb_selection_items",
+                                          scene, "dshbb_selection_index",
+                                          rows=int(getattr(scene, "dshbb_list_rows", 8)))
+                    if len(selected_objs) > LIST_UI_CAP:
+                        sel_box.label(text="列表只显示前 %d 件（发送不受影响）" % LIST_UI_CAP, icon='INFO')
             else:
                 sel_col.label(text="未选中物体：在视口里选中后再发送", icon='INFO')
             send_row = sel_box.row()
@@ -6455,8 +6499,14 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                 sel_box.label(text="最近发送：成功（seq %s）" % send_state.get("seq"), icon='CHECKMARK')
             else:
                 sel_box.label(text="最近发送失败：" + str(send_state.get("error") or "unknown")[:120], icon='ERROR')
-        sel_box.label(text="DSH 后端：" + _dshbb_backend_url(), icon='URL')
-        sel_box.prop(scene, "dshbb_backend_url", text="覆盖后端地址（可留空）")
+        # 后端地址 / 覆盖项：折叠（排错时才展开）
+        adv_open = bool(getattr(scene, "dshbb_show_advanced", False))
+        adv_row = sel_box.row()
+        adv_row.prop(scene, "dshbb_show_advanced", text="后端 / 高级", emboss=False,
+                     icon='TRIA_DOWN' if adv_open else 'TRIA_RIGHT')
+        if adv_open:
+            sel_box.label(text="DSH 后端：" + _dshbb_backend_url(), icon='URL')
+            sel_box.prop(scene, "dshbb_backend_url", text="覆盖后端地址（可留空）")
 
         # Asset libraries
         layout.separator()
@@ -6728,6 +6778,10 @@ class DSHBB_OT_OpenTerms(bpy.types.Operator):
 
 # Registration functions
 def register():
+    # UIList 的 PropertyGroup 必须先注册，后面 CollectionProperty(type=...) 才能用
+    bpy.utils.register_class(DSHBB_SelectionItem)
+    bpy.utils.register_class(DSHBB_UL_ObjectList)
+
     bpy.types.Scene.dshbb_port = IntProperty(
         name="Port",
         description="Port for the DSH Blender Bridge server",
@@ -6758,6 +6812,21 @@ def register():
         description="要发送给 DSH 的集合（大装配体不必逐个选对象）",
         type=bpy.types.Collection
     )
+
+    # v1.8 UIList：对象 / 集合成员列表（可折叠、可滚动、行数可调）
+    bpy.types.Scene.dshbb_selection_items = bpy.props.CollectionProperty(type=DSHBB_SelectionItem)
+    bpy.types.Scene.dshbb_collection_items = bpy.props.CollectionProperty(type=DSHBB_SelectionItem)
+    bpy.types.Scene.dshbb_selection_index = bpy.props.IntProperty(default=0)
+    bpy.types.Scene.dshbb_collection_index = bpy.props.IntProperty(default=0)
+    bpy.types.Scene.dshbb_show_selection_list = bpy.props.BoolProperty(
+        name="Show Selection List", description="展开/折叠 N 面板的对象列表", default=False)
+    bpy.types.Scene.dshbb_show_collection_list = bpy.props.BoolProperty(
+        name="Show Collection List", description="展开/折叠 N 面板的集合成员列表", default=False)
+    bpy.types.Scene.dshbb_list_rows = bpy.props.IntProperty(
+        name="List Rows", description="列表高度（显示行数，可拖动滑杆调整）",
+        default=8, min=3, max=30, soft_min=3, soft_max=20)
+    bpy.types.Scene.dshbb_show_advanced = bpy.props.BoolProperty(
+        name="Show Advanced", description="展开/折叠后端地址等高级项", default=False)
 
     bpy.types.Scene.dshbb_selection_mode = bpy.props.EnumProperty(
         name="Selection Mode",
@@ -6925,6 +6994,7 @@ def register():
     print("DSH Blender Bridge addon registered")
 
 def unregister():
+    # 先删属性，再注销类（顺序反过来会留下悬空属性）
     _dshbb_unregister_auto_start()
 
     _unregister_edit_capture_handlers()
@@ -6936,6 +7006,8 @@ def unregister():
         del bpy.types.dshbb_server
 
     bpy.utils.unregister_class(DSHBB_PT_Panel)
+    bpy.utils.unregister_class(DSHBB_UL_ObjectList)
+    bpy.utils.unregister_class(DSHBB_SelectionItem)
     bpy.utils.unregister_class(DSHBB_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.unregister_class(DSHBB_OT_StartServer)
     bpy.utils.unregister_class(DSHBB_OT_SendSelectionToDSH)
@@ -6953,6 +7025,14 @@ def unregister():
     del bpy.types.Scene.dshbb_backend_url
     del bpy.types.Scene.dshbb_collection_target
     del bpy.types.Scene.dshbb_selection_mode
+    del bpy.types.Scene.dshbb_selection_items
+    del bpy.types.Scene.dshbb_collection_items
+    del bpy.types.Scene.dshbb_selection_index
+    del bpy.types.Scene.dshbb_collection_index
+    del bpy.types.Scene.dshbb_show_selection_list
+    del bpy.types.Scene.dshbb_show_collection_list
+    del bpy.types.Scene.dshbb_list_rows
+    del bpy.types.Scene.dshbb_show_advanced
     del bpy.types.Scene.dshbb_use_polyhaven
     del bpy.types.Scene.dshbb_use_hyper3d
     del bpy.types.Scene.dshbb_hyper3d_mode
