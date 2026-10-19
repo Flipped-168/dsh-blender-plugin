@@ -14,7 +14,7 @@
  * 用法：node tests/selection_store_selftest.mjs
  * 退出码：0 = 全过；1 = 有断言失败
  */
-import { createSelectionStore, sanitizeSelectionPayload, MAX_SELECTION_NAMES, MAX_SELECTION_OBJECTS } from '../runtime/selectionstore.mjs'
+import { createSelectionStore, sanitizeSelectionPayload, MAX_SELECTION_NAMES, MAX_SELECTION_OBJECTS, MAX_SUB_INDICES } from '../runtime/selectionstore.mjs'
 
 let pass = 0
 let fail = 0
@@ -164,6 +164,43 @@ section('2. seq / consumed_seq / consume 语义')
 
   const r3 = store.put(null)
   ok('put(null) → ok=false（路由回 400）', r3.ok === false && r3.error === 'invalid_payload', r3)
+}
+
+section('2.5 v2.4 子元素选择（编辑模式 / 骨骼）')
+{
+  const sub = {
+    type: 'MESH', object: 'Cube', mode: 'EDIT_MESH',
+    select_mode: { vertex: true, edge: false, face: false },
+    counts: { vertices: 3, edges: 1, faces: 0 },
+    indices: { vertices: [0, 1, 2], edges: [5], faces: [] },
+    truncated: false,
+  };
+  const store = createSelectionStore(() => 7);
+  store.put({ selection: { kind: 'objects', count: 1, names: ['Cube'], sub } });
+  const sel = store.snapshot().selection;
+  ok('sub 原样保留类型/对象/模式', sel.sub && sel.sub.type === 'MESH' && sel.sub.object === 'Cube' && sel.sub.mode === 'EDIT_MESH', sel.sub);
+  ok('sub 计数与索引保留', sel.sub.counts.vertices === 3 && sel.sub.indices.vertices.join(',') === '0,1,2', sel.sub);
+  ok('sub 选择模式保留', sel.sub.select_mode.vertex === true && sel.sub.select_mode.face === false, sel.sub.select_mode);
+
+  const arm = sanitizeSelectionPayload({ selection: { names: ['Rig'], sub: {
+    type: 'ARMATURE', object: 'Rig', mode: 'POSE', counts: { bones: 2 }, bones: ['BoneA', 'BoneB'] } } });
+  ok('骨骼 sub 消毒后保留名字', arm.selection.sub && arm.selection.sub.type === 'ARMATURE'
+    && arm.selection.sub.bones.join(',') === 'BoneA,BoneB', arm.selection.sub);
+
+  const bad = sanitizeSelectionPayload({ selection: { names: ['X'], sub: { type: 'BOGUS', object: 'X' } } });
+  ok('未知 sub 类型归为 OTHER 且不伪造成 MESH', bad.selection.sub && bad.selection.sub.type === 'OTHER', bad.selection.sub);
+  const noObj = sanitizeSelectionPayload({ selection: { names: ['X'], sub: { type: 'MESH' } } });
+  ok('sub 缺 object → 丢弃（不凭空造对象名）', noObj.selection.sub === null, noObj.selection.sub);
+
+  const huge = sanitizeSelectionPayload({ selection: { names: ['X'], sub: {
+    type: 'MESH', object: 'X', counts: { vertices: 5000 },
+    indices: { vertices: Array.from({ length: 5000 }, (_, i) => i) } } } });
+  ok('sub 索引夹到 MAX_SUB_INDICES 且 truncated=true',
+    huge.selection.sub.indices.vertices.length === MAX_SUB_INDICES && huge.selection.sub.truncated === true,
+    huge.selection.sub.indices.vertices.length);
+  const junk = sanitizeSelectionPayload({ selection: { names: ['X'], sub: {
+    type: 'MESH', object: 'X', indices: { vertices: ['a', -1, 1.5, 3] } } } });
+  ok('sub 索引过滤非整数/负数', junk.selection.sub.indices.vertices.join(',') === '3', junk.selection.sub.indices.vertices);
 }
 
 section('3. 路由契约形状（存储层输出，客户端/面板直接消费）')

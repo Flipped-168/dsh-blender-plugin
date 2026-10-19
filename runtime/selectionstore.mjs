@@ -22,6 +22,12 @@ export const MAX_SELECTION_OBJECTS = 50;
 export const MAX_SELECTION_COLLECTIONS = 50;
 /** 单个字符串上限。 */
 export const MAX_STRING_CHARS = 200;
+/** 子元素（编辑模式）索引/骨骼条数上限。 */
+export const MAX_SUB_INDICES = 2000;
+export const MAX_SUB_BONES = 500;
+export const MAX_SUB_POINTS = 2000;
+/** 子元素类型白名单（其他类型只保留 note，不猜测语义）。 */
+const SUB_TYPES = new Set(['MESH', 'ARMATURE', 'CURVE', 'LATTICE', 'OTHER']);
 /** 未消费的选中超过这个年龄只做提示，不阻止消费。 */
 export const STALE_MS = 10 * 60 * 1000;
 
@@ -39,6 +45,93 @@ function cleanNames(list) {
     if (name === null || name.length === 0) continue;
     out.push(name);
     if (out.length >= MAX_SELECTION_NAMES) break;
+  }
+  return out;
+}
+
+function cleanIntList(list, max) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const item of list) {
+    const n = Number(item);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) continue;
+    out.push(Math.trunc(n));
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function cleanCounts(value) {
+  const src = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+  const out = {};
+  for (const key of ['vertices', 'edges', 'faces', 'bones', 'points']) {
+    const n = Number(src[key]);
+    if (Number.isFinite(n) && n >= 0) out[key] = Math.trunc(n);
+  }
+  return out;
+}
+
+/**
+ * 消毒 v2.4 的子元素选择（编辑模式点线面 / 骨骼 / 曲线点 / 晶格点）。
+ * 保留数组但夹上限；类型不在白名单时只留 note。
+ * @param {any} sub addon 的 selection.sub
+ * @returns {object|null}
+ */
+export function sanitizeSubSelection(sub) {
+  if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return null;
+  const type = typeof sub.type === 'string' && SUB_TYPES.has(sub.type) ? sub.type : 'OTHER';
+  const object = cleanString(sub.object);
+  if (!object) return null;
+  const out = {
+    type: type,
+    object: object,
+    mode: cleanString(sub.mode, 40) || null,
+    counts: cleanCounts(sub.counts),
+    truncated: sub.truncated === true,
+  };
+  const note = cleanString(sub.note, 200);
+  if (note) out.note = note;
+
+  if (sub.select_mode && typeof sub.select_mode === 'object' && !Array.isArray(sub.select_mode)) {
+    out.select_mode = {
+      vertex: sub.select_mode.vertex === true,
+      edge: sub.select_mode.edge === true,
+      face: sub.select_mode.face === true,
+    };
+  }
+  if (sub.indices && typeof sub.indices === 'object' && !Array.isArray(sub.indices)) {
+    const idx = {};
+    for (const key of ['vertices', 'edges', 'faces']) {
+      const raw = sub.indices[key];
+      if (!Array.isArray(raw)) continue;
+      idx[key] = cleanIntList(raw, MAX_SUB_INDICES);
+      if (raw.length > idx[key].length) out.truncated = true;
+    }
+    out.indices = idx;
+  }
+  if (Array.isArray(sub.bones)) {
+    const bones = [];
+    for (const item of sub.bones) {
+      const name = cleanString(item);
+      if (!name) continue;
+      bones.push(name);
+      if (bones.length >= MAX_SUB_BONES) { out.truncated = true; break; }
+    }
+    out.bones = bones;
+    if (sub.bones.length > bones.length) out.truncated = true;
+  }
+  if (Array.isArray(sub.points)) {
+    const points = [];
+    for (const item of sub.points) {
+      if (!Array.isArray(item) || item.length < 2) continue;
+      const a = Number(item[0]);
+      const b = Number(item[1]);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+      points.push([Math.trunc(a), Math.trunc(b)]);
+      if (points.length >= MAX_SUB_POINTS) { out.truncated = true; break; }
+    }
+    out.points = points;
+    if (sub.points.length > points.length) out.truncated = true;
   }
   return out;
 }
@@ -99,6 +192,7 @@ export function sanitizeSelectionPayload(payload) {
       mode: cleanString(sel.mode, 40),
       objects: objects,
       collections: collections,
+      sub: sanitizeSubSelection(sel.sub),
     },
     scene: { name: cleanString(scene.name), file: cleanString(scene.file) },
     activity: activity === null ? null : {

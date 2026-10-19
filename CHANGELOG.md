@@ -1,14 +1,33 @@
-# CHANGELOG — @dsh-external/dsh-blender-plugin
+## 未发版（v2.4）—— 子元素选中 + N 面板列表折叠/滚动/高度可调
 
-## 未发版补丁（2026-10-19，v2.3.0 之后）—— N 面板列表：可折叠 + 可滚动 + 高度可调
+### v2.4 新功能：编辑模式 / 姿态模式的子元素进入选中记录
+
+**来源**：用户问「Add 菜单里这些类型除了网格，能记录哪些？」→「把编辑模式子元素 / 骨骼也纳入选中记录」。
+
+- addon `build_selection_payload` 新增 `selection.sub`：
+  - `MESH`：`counts`（顶点/边/面）+ `indices`（三类索引数组，各上限 2000）+ `select_mode`（当前点/边/面模式）；
+  - `ARMATURE`：编辑模式 `edit_bones` / 姿态模式 `pose.bones` 的选中骨骼名（上限 500）；
+  - `CURVE` / `LATTICE`：控制点 `(spline_index, point_index)` 或点索引（上限 2000）；
+  - 其他编辑模式（文本/蜡笔）只带 `type:"OTHER"` + `note`，不伪造元素语义；
+  - `truncated` 如实标记截断。
+- 后端 `runtime/selectionstore.mjs` 增加 `sanitizeSubSelection`：白名单类型、过滤非整数/负数、再次夹上限；
+  未知类型归 `OTHER`，缺对象名直接丢弃。
+- Web 客户端 `selectionMessageText` 生成子元素草稿文本（网格给计数 + 索引样例，骨架给骨骼名，
+  曲线/晶格给控制点），完整数组可用 `blender_rt_cmd get_selection` 查。
+- N 面板：编辑/姿态模式显示「子元素：编辑模式（网格）· Cube」，展开列表会多出「顶点 12 / 边 3 / 面 7 / Bone.001」行。
+- 已知边界：子元素变化**不进入 activity 指纹**（activity 仍按对象级选区判定）；大网格不在每个 tick 扫描。
+
+### v2.3.1 UI：N 面板列表：可折叠 + 可滚动 + 高度可调
 
 **来源**：用户反馈「这个列表是可伸缩的吗，能折叠或者隐藏的尽量隐藏」→「高度可以调整不要固定」。
 
 - 对象列表 / 集合成员列表改为 **Blender UIList**：自带滚动条，内容多时不再一长列铺开。
-- **高度可调**：展开后出现「高度（行）」滑杆（`dshbb_list_rows`，3–30，默认 8），拖动即可改可见高度。
-- **可折叠**：两个列表默认收起，点 `对象列表（N）▸` / `成员列表（N）▸` 展开；属性
+- **高度可调**：展开后出现「高度（行）」滑杆（`dshbb_list_rows`，3–30，默认 8）+「− 矮一点 / + 高一点」按钮；
+  `template_list(..., maxrows=30)`。
+- **可折叠**：两个列表默认收起，点 `对象 / 子元素列表（N）▸` / `成员列表（N）▸` 展开；属性
   `dshbb_show_selection_list` / `dshbb_show_collection_list`（默认 `False`）。
-- 列表内容保持原样（对象名 + 类型；集合名 / 子集合摘要不变），发送逻辑不变。
+- **绘制稳定性**：列表数据改由 timer / 属性 update 回调同步，不再在 `draw()` 里写 ID 数据；
+  面板绘制异常写入 `dshbb_last_panel_error`（诊断用，正常为空）。
 - 后端地址 / 覆盖项收进折叠的「后端 / 高级」（`dshbb_show_advanced`，默认隐藏）。
 
 ## v2.3.0（2026-10-19）—— Blender 原生选中 → DSH · 统一 human/agent activity 判定（addon v1.8）

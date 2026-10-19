@@ -49,6 +49,8 @@ blender_rt_cmd get_activity_state # state 可能为 idle / human / agent / both
 ```
 
 装好后在 Blender 里选物体 → `N` →「Selection → DSH」→ 发送，选中会进 **DSH 当前会话草稿**（不自动发送）。
+编辑模式选顶点/边/面、姿态模式选骨骼、编辑曲线/晶格控制点也会一起发送（payload 里 `selection.sub`）；
+N 面板的对象 / 成员列表默认折叠，展开后带滚动条且高度可调。
 
 ## 环境变量（旧名仍兼容）
 

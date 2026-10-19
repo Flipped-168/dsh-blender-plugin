@@ -212,6 +212,38 @@ if (!st) {
     const collsText = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(withColls) : '';
     ok('对象名单带"涉及集合"摘要', /涉及集合：COL-a\(3\)、COL-b\(2\)/.test(collsText), collsText);
   }
+  // v2.4：编辑模式 / 骨骼子元素
+  if (typeof st.selectionMessageText === 'function' && typeof st.subSelectionText === 'function') {
+    const meshSub = { selection: { kind: 'objects', count: 1, names: ['Cube'], sub: {
+      type: 'MESH', object: 'Cube', mode: 'EDIT_MESH',
+      select_mode: { vertex: true, edge: false, face: false },
+      counts: { vertices: 3, edges: 0, faces: 0 },
+      indices: { vertices: [0, 1, 2], edges: [], faces: [] }, truncated: false } } };
+    const meshText = st.selectionMessageText(meshSub);
+    ok('子元素：网格编辑模式 → 草稿含计数 + 顶点索引',
+      /编辑模式（网格）「Cube」：已选 3 顶点/.test(meshText) && /顶点索引：0,1,2/.test(meshText)
+      && /BMesh/.test(meshText), meshText);
+
+    const armSub = { selection: { kind: 'objects', count: 1, names: ['Rig'], sub: {
+      type: 'ARMATURE', object: 'Rig', mode: 'POSE',
+      counts: { bones: 2 }, bones: ['BoneA', 'BoneB'], truncated: false } } };
+    const armText = st.selectionMessageText(armSub);
+    ok('子元素：骨架姿态模式 → 草稿含骨骼名',
+      /骨架.*「Rig」.*姿势模式.*已选 2 根/.test(armText) && /BoneA、BoneB/.test(armText), armText);
+
+    const curveSub = { selection: { kind: 'objects', count: 1, names: ['Curve'], sub: {
+      type: 'CURVE', object: 'Curve', mode: 'EDIT_CURVE', counts: { points: 2 },
+      points: [[0, 1], [0, 3]], truncated: false } } };
+    const curveText = st.selectionMessageText(curveSub);
+    ok('子元素：曲线控制点 → 草稿含 (spline:point)',
+      /曲线\/曲面控制点「Curve」/.test(curveText) && /0:1、0:3/.test(curveText), curveText);
+
+    ok('空 sub 不影响普通对象文本', st.subSelectionText({ sub: null }) === null);
+  } else {
+    ok('__selftest 暴露 subSelectionText', false, typeof st.subSelectionText);
+    ok('__selftest 暴露 SUB_DRAFT_INDEX_LIMIT', false, st.SUB_DRAFT_INDEX_LIMIT);
+  }
+
   if (typeof st.applySelectionToDraft === 'function') {
     let inserted = null;
     const fakeActions = { captureInsertion: () => ({ rev: 1 }), insertText: (text) => { inserted = text; return true; } };

@@ -26,6 +26,9 @@
   选中进 **DSH 当前会话草稿**，**不自动发送**。
 - **两种模式**：**多选**（当前选中对象）/ **集合**（整组发送）。
   对象 / 集合成员列表**默认折叠**；展开后是带滚动条的 UIList，高度用「高度（行）」滑杆调（3–30 行，默认 8）——不固定、不铺长列。
+- **子元素选中**（v2.4）：编辑模式里选**顶点 / 边 / 面**、姿态模式选**骨骼**、编辑模式选**曲线/晶格控制点**，
+  发送时 payload 会带上 `selection.sub`（索引数组 + 选择模式 + 截断标记）；草稿文本会写明"已选哪些元素"，
+  模型可用 `bmesh` / `pose.bones[...]` 精确修改。完整数组用 `blender_rt_cmd get_selection` 查。
   切到集合模式会自动推断最相关集合，⟳ 可重新推断。
   几百个零件的装配体直接发集合，草稿文本只给"集合名 + 件数 + 前几个成员"。
 - **activity 判定**：Blender 统一判定 `idle / human / agent / both`（模态操作、最近人类编辑/撤销/选区变化、
@@ -156,6 +159,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # 换个角度：�
   `blender_rt_cmd get_activity_state` / `get_selection`（查询**自身不算** agent），另有
   `get_collections` / `send_collection_to_dsh` 供集合工作流。
 - **v2.3 已删除**：DSH 侧视口面板（Web 右侧栏 + TUI 侧栏）、点击进消息、第 16 个工具 `blender_rt_pick`。
+  编辑/姿态模式的子元素选择（点/线/面/骨骼/曲线点）也会随发送带过去（`selection.sub`）。
   请改用原生选中；模型侧截图仍用 `blender_rt_see`。后端 `/host/view/*`、`/host/pick*`、`/host/ready`
   路由为兼容保留，但本仓**已无 UI 消费者**。
 

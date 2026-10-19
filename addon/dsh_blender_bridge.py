@@ -1415,6 +1415,122 @@ def _scene_objects_within(selected, cap=SELECTION_PAYLOAD_OBJECTS):
     return objects
 
 
+# v2.4：编辑模式 / 姿态模式的子元素选中（网格点线面、骨骼、曲线点、晶格点）
+SUB_SELECTION_CAP = 2000
+
+
+def _cap_selection(values, cap=SUB_SELECTION_CAP):
+    values = list(values)
+    return values[:cap], len(values) > cap
+
+
+def _read_sub_selection():
+    """返回当前编辑/姿态模式下的子元素选择；对象模式返回 None。
+
+    只在需要时调用（发送 / get_selection / 列表展开），不在 activity tick 里轮询 ——
+    大网格上枚举全部顶点可能很慢。所有数组都夹到 SUB_SELECTION_CAP，并如实带 truncated。
+    """
+    mode = str(getattr(bpy.context, "mode", "OBJECT") or "OBJECT")
+    if mode == "OBJECT":
+        return None
+    edit_obj = getattr(bpy.context, "edit_object", None)
+    active_obj = getattr(bpy.context, "active_object", None)
+
+    # ---- 网格：顶点 / 边 / 面 ----
+    if mode == "EDIT_MESH":
+        obj = edit_obj
+        if obj is None:
+            return None
+        try:
+            import bmesh
+            bm = bmesh.from_edit_mesh(obj.data)
+            verts = [v.index for v in bm.verts if v.select]
+            edges = [e.index for e in bm.edges if e.select]
+            faces = [f.index for f in bm.faces if f.select]
+        except Exception as exc:
+            return {"type": "MESH", "object": obj.name, "mode": mode,
+                    "note": "读取选择失败：" + str(exc), "counts": {}, "indices": {}, "truncated": False}
+        try:
+            sm = tuple(bool(x) for x in bpy.context.tool_settings.mesh_select_mode)
+        except Exception:
+            sm = (False, False, False)
+        v_cap, v_tr = _cap_selection(verts)
+        e_cap, e_tr = _cap_selection(edges)
+        f_cap, f_tr = _cap_selection(faces)
+        return {"type": "MESH", "object": obj.name, "mode": mode,
+                "select_mode": {"vertex": sm[0], "edge": sm[1], "face": sm[2]},
+                "counts": {"vertices": len(verts), "edges": len(edges), "faces": len(faces)},
+                "indices": {"vertices": v_cap, "edges": e_cap, "faces": f_cap},
+                "truncated": bool(v_tr or e_tr or f_tr)}
+
+    # ---- 骨架：编辑骨骼 / 姿态骨骼 ----
+    if mode in ("EDIT_ARMATURE", "POSE"):
+        obj = active_obj if mode == "POSE" else (edit_obj or active_obj)
+        if obj is None or getattr(obj, "type", "") != "ARMATURE":
+            return None
+        try:
+            if mode == "POSE":
+                # 姿态模式的选中标志在 PoseBone.select（Bone 本身没有 select）
+                names = [pb.name for pb in obj.pose.bones if bool(getattr(pb, "select", False))]
+            else:
+                names = [eb.name for eb in obj.data.edit_bones if bool(getattr(eb, "select", False))]
+        except Exception as exc:
+            return {"type": "ARMATURE", "object": obj.name, "mode": mode,
+                    "note": "读取骨骼失败：" + str(exc), "counts": {}, "bones": [], "truncated": False}
+        cap, tr = _cap_selection(names)
+        return {"type": "ARMATURE", "object": obj.name, "mode": mode,
+                "counts": {"bones": len(names)}, "bones": cap, "truncated": bool(tr)}
+
+    # ---- 曲线 / 曲面：控制点（spline_index, point_index）----
+    if mode in ("EDIT_CURVE", "EDIT_SURFACE"):
+        obj = edit_obj or active_obj
+        if obj is None:
+            return None
+        points = []
+        total = 0
+        try:
+            for si, spline in enumerate(obj.data.splines):
+                if str(getattr(spline, "type", "")) == "BEZIER":
+                    for pi, bp in enumerate(spline.bezier_points):
+                        if bool(getattr(bp, "select_control_point", False)):
+                            total += 1
+                            if len(points) < SUB_SELECTION_CAP:
+                                points.append([si, pi])
+                else:
+                    for pi, pt in enumerate(getattr(spline, "points", [])):
+                        if bool(getattr(pt, "select", False)):
+                            total += 1
+                            if len(points) < SUB_SELECTION_CAP:
+                                points.append([si, pi])
+        except Exception as exc:
+            return {"type": "CURVE", "object": obj.name, "mode": mode,
+                    "note": "读取曲线点失败：" + str(exc), "counts": {}, "points": [], "truncated": False}
+        return {"type": "CURVE", "object": obj.name, "mode": mode,
+                "counts": {"points": total}, "points": points, "truncated": total > len(points)}
+
+    # ---- 晶格：控制点 ----
+    if mode == "EDIT_LATTICE":
+        obj = edit_obj or active_obj
+        if obj is None:
+            return None
+        try:
+            points = [i for i, pt in enumerate(obj.data.points) if bool(getattr(pt, "select", False))]
+        except Exception as exc:
+            return {"type": "LATTICE", "object": obj.name, "mode": mode,
+                    "note": "读取晶格点失败：" + str(exc), "counts": {}, "points": [], "truncated": False}
+        cap, tr = _cap_selection(points)
+        return {"type": "LATTICE", "object": obj.name, "mode": mode,
+                "counts": {"points": len(points)}, "points": cap, "truncated": bool(tr)}
+
+    # ---- 其他编辑模式（文本 / 蜡笔等）：如实说明暂无子元素展开 ----
+    if mode.startswith("EDIT_") or mode == "PAINT_GPENCIL":
+        obj = edit_obj or active_obj
+        return {"type": "OTHER", "object": getattr(obj, "name", None), "mode": mode,
+                "note": "该编辑模式的子元素暂未展开；可让模型用 Python 直接读选择集",
+                "counts": {}, "truncated": False}
+    return None
+
+
 def build_selection_payload(include_current_command=True):
     """Build the v1 selection payload pushed to `POST /host/selection` (no network)."""
     tracker = get_activity_tracker()
@@ -1424,21 +1540,26 @@ def build_selection_payload(include_current_command=True):
         selected = list(bpy.context.selected_objects or [])
     except Exception:
         selected = []
+    selection_payload = {
+        "kind": "objects",
+        "count": selection.get("count", 0),
+        "names": list(selection.get("names") or []),
+        "truncated": bool(selection.get("truncated")),
+        "active": selection.get("active"),
+        "mode": selection.get("mode"),
+        "objects": _scene_objects_within(selected),
+        # v2.3：选中对象分布在哪些集合（多件装配体时让 DSH/模型先看到"集合"这一层）
+        "collections": _selection_collection_summary(selected),
+    }
+    # v2.4：编辑/姿态模式的子元素（顶点/边/面、骨骼、曲线/晶格点）
+    sub = _read_sub_selection()
+    if sub is not None:
+        selection_payload["sub"] = sub
     return {
         "v": 1,
         "source": "blender-addon",
         "sent_at": int(round(time.time() * 1000)),
-        "selection": {
-            "kind": "objects",
-            "count": selection.get("count", 0),
-            "names": list(selection.get("names") or []),
-            "truncated": bool(selection.get("truncated")),
-            "active": selection.get("active"),
-            "mode": selection.get("mode"),
-            "objects": _scene_objects_within(selected),
-            # v2.3：选中对象分布在哪些集合（多件装配体时让 DSH/模型先看到"集合"这一层）
-            "collections": _selection_collection_summary(selected),
-        },
+        "selection": selection_payload,
         "scene": _scene_meta(),
         "activity": tracker.snapshot(include_current_command=include_current_command),
     }
@@ -6313,10 +6434,99 @@ class DSHBB_SelectionItem(bpy.types.PropertyGroup):
 
 
 class DSHBB_UL_ObjectList(bpy.types.UIList):
+    bl_idname = "DSHBB_UL_ObjectList"
+
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row(align=True)
         row.label(text=getattr(item, "obj_name", "") or "<unnamed>", icon='OBJECT_DATA')
         row.label(text=getattr(item, "obj_type", "") or "?")
+
+
+def _sub_mode_label(mode):
+    labels = {
+        "EDIT_MESH": "编辑模式（网格）",
+        "EDIT_ARMATURE": "编辑模式（骨架）",
+        "POSE": "姿态模式",
+        "EDIT_CURVE": "编辑模式（曲线）",
+        "EDIT_SURFACE": "编辑模式（曲面）",
+        "EDIT_LATTICE": "编辑模式（晶格）",
+        "EDIT_TEXT": "编辑模式（文本）",
+        "PAINT_GPENCIL": "绘制模式（蜡笔）",
+        "EDIT_GPENCIL": "编辑模式（蜡笔）",
+    }
+    return labels.get(str(mode), str(mode))
+
+
+def _sub_selection_entries(sub):
+    """把子元素选择变成 UIList 行：对象行 + 每个元素一行（标签, 短类型）。"""
+    if not sub:
+        return []
+    entries = []
+    # 对象行由 _selection_list_entries 的 selected_objects 部分负责，这里只加子元素行
+    if str(sub.get("type")) == "MESH":
+        idx = sub.get("indices") or {}
+        for i in (idx.get("vertices") or [])[:LIST_UI_CAP // 3]:
+            entries.append(("顶点 %s" % i, "VERT"))
+        for pair in (idx.get("edges") or [])[:LIST_UI_CAP // 3]:
+            entries.append(("边 %s" % pair, "EDGE"))
+        for i in (idx.get("faces") or [])[:LIST_UI_CAP // 3]:
+            entries.append(("面 %s" % i, "FACE"))
+    elif str(sub.get("type")) == "ARMATURE":
+        for name in (sub.get("bones") or [])[:LIST_UI_CAP]:
+            entries.append((str(name), "BONE"))
+    elif str(sub.get("type")) in ("CURVE", "LATTICE"):
+        for pair in (sub.get("points") or [])[:LIST_UI_CAP]:
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                entries.append(("%s : %s" % (pair[0], pair[1]), "POINT"))
+    return entries[:LIST_UI_CAP]
+
+
+def _selection_list_entries():
+    entries = [(obj.name, str(getattr(obj, "type", "?"))) for obj in (bpy.context.selected_objects or [])[:LIST_UI_CAP]]
+    sub = _read_sub_selection()
+    if sub is not None:
+        entries.extend(_sub_selection_entries(sub))
+    return entries[:LIST_UI_CAP]
+
+
+def _refresh_selection_list(scene, context=None):
+    try:
+        _sync_ui_list(scene.dshbb_selection_items, _selection_list_entries())
+    except Exception:
+        pass
+
+
+def _refresh_collection_list(scene, context=None):
+    try:
+        coll = getattr(scene, "dshbb_collection_target", None)
+        entries = []
+        if coll is not None:
+            entries = [(obj.name, str(getattr(obj, "type", "?"))) for obj in list(coll.objects)[:LIST_UI_CAP]]
+        _sync_ui_list(scene.dshbb_collection_items, entries)
+    except Exception:
+        pass
+
+
+def _on_show_selection_list_update(self, context):
+    _refresh_selection_list(self, context)
+
+
+def _on_show_collection_list_update(self, context):
+    _refresh_collection_list(self, context)
+
+
+def _dshbb_ui_list_timer():
+    """列表打开时保持内容与场景同步（不在 draw() 里改数据，避免 Blender 绘制上下文写 ID 的问题）。"""
+    try:
+        scene = bpy.context.scene
+        if scene is not None:
+            if getattr(scene, "dshbb_show_selection_list", False):
+                _refresh_selection_list(scene)
+            if getattr(scene, "dshbb_show_collection_list", False):
+                _refresh_collection_list(scene)
+    except Exception:
+        pass
+    return 0.5
 
 
 def _sync_ui_list(collection, entries):
@@ -6337,6 +6547,25 @@ def _sync_ui_list(collection, entries):
         item.obj_type = typ
 
 
+# 面板绘制异常记录：写场景属性 + 日志文件（用户不方便看控制台时也能诊断）
+def _log_panel_error(tb):
+    import traceback
+    text = str(tb)[-4000:]
+    try:
+        p = os.path.join("D:/DSH/blender/tmp", "dshbb-panel-error.log")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + text + "\n")
+    except Exception:
+        pass
+    try:
+        p2 = os.path.join(bpy.app.tempdir or "", "dshbb-panel-error.log")
+        with open(p2, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + text + "\n")
+    except Exception:
+        pass
+
+
 # Blender UI Panel
 class DSHBB_PT_Panel(bpy.types.Panel):
     bl_label = "DSH Blender Bridge"
@@ -6355,6 +6584,23 @@ class DSHBB_PT_Panel(bpy.types.Panel):
         return box if getattr(scene, prop_name) else None
 
     def draw(self, context):
+        # 包一层：任何绘制异常都记录下来（用户不方便开控制台），并尽量不把整个面板拖黑
+        try:
+            self._draw_impl(context)
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            _log_panel_error(tb)
+            try:
+                context.scene.dshbb_last_panel_error = tb[-3000:]
+            except Exception:
+                pass
+            try:
+                self.layout.label(text="面板绘制异常：" + str(exc)[:120], icon='ERROR')
+            except Exception:
+                pass
+
+    def _draw_impl(self, context):
         layout = self.layout
         scene = context.scene
         prefs = get_dshbb_addon_preferences(context)
@@ -6421,14 +6667,14 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                               text="成员列表（%d）" % len(members), emboss=False,
                               icon='TRIA_DOWN' if list_open else 'TRIA_RIGHT')
                 if list_open:
-                    _sync_ui_list(scene.dshbb_collection_items,
-                                  [(obj.name, str(getattr(obj, "type", "?"))) for obj in members[:LIST_UI_CAP]])
+                    sel_box.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
                     ctrl = sel_box.row(align=True)
-                    ctrl.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
+                    ctrl.operator("dshbb.list_rows_dec", text="− 矮一点")
+                    ctrl.operator("dshbb.list_rows_inc", text="+ 高一点")
                     sel_box.template_list("DSHBB_UL_ObjectList", "dshbb_collection",
                                           scene, "dshbb_collection_items",
                                           scene, "dshbb_collection_index",
-                                          rows=int(getattr(scene, "dshbb_list_rows", 8)))
+                                          rows=int(getattr(scene, "dshbb_list_rows", 8)), maxrows=30)
                     if len(members) > LIST_UI_CAP:
                         sel_box.label(text="列表只显示前 %d 件（发送不受影响）" % LIST_UI_CAP, icon='INFO')
                     if not members:
@@ -6448,6 +6694,19 @@ class DSHBB_PT_Panel(bpy.types.Panel):
             send_row.operator("dshbb.send_collection_to_dsh", text="发送集合到 DSH", icon='EXPORT')
         else:
             if sel_count:
+                try:
+                    sub_mode = str(getattr(bpy.context, "mode", "") or "")
+                except Exception:
+                    sub_mode = ""
+                sub_obj = None
+                if sub_mode and sub_mode != "OBJECT":
+                    try:
+                        sub_obj = getattr(bpy.context, "edit_object", None) or getattr(bpy.context, "active_object", None)
+                    except Exception:
+                        sub_obj = None
+                    if sub_obj is not None:
+                        sel_col.label(text="子元素：" + _sub_mode_label(sub_mode) + " · " + sub_obj.name,
+                                      icon='EDITMODE_HLT')
                 shown = "、".join(sel_names[:3])
                 if sel_count > 3 or selection.get("truncated"):
                     shown += "…"
@@ -6465,17 +6724,17 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                 list_open = bool(getattr(scene, "dshbb_show_selection_list", False))
                 list_row = sel_box.row()
                 list_row.prop(scene, "dshbb_show_selection_list",
-                              text="对象列表（%d）" % len(selected_objs), emboss=False,
+                              text="对象 / 子元素列表（%d）" % len(selected_objs), emboss=False,
                               icon='TRIA_DOWN' if list_open else 'TRIA_RIGHT')
                 if list_open:
-                    _sync_ui_list(scene.dshbb_selection_items,
-                                  [(obj.name, str(getattr(obj, "type", "?"))) for obj in selected_objs[:LIST_UI_CAP]])
+                    sel_box.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
                     ctrl = sel_box.row(align=True)
-                    ctrl.prop(scene, "dshbb_list_rows", text="高度（行）", slider=True)
+                    ctrl.operator("dshbb.list_rows_dec", text="− 矮一点")
+                    ctrl.operator("dshbb.list_rows_inc", text="+ 高一点")
                     sel_box.template_list("DSHBB_UL_ObjectList", "dshbb_selection",
                                           scene, "dshbb_selection_items",
                                           scene, "dshbb_selection_index",
-                                          rows=int(getattr(scene, "dshbb_list_rows", 8)))
+                                          rows=int(getattr(scene, "dshbb_list_rows", 8)), maxrows=30)
                     if len(selected_objs) > LIST_UI_CAP:
                         sel_box.label(text="列表只显示前 %d 件（发送不受影响）" % LIST_UI_CAP, icon='INFO')
             else:
@@ -6688,6 +6947,52 @@ class DSHBB_OT_UseSelectionCollection(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class DSHBB_OT_ListRowsInc(bpy.types.Operator):
+    """把 N 面板列表加高一点"""
+    bl_idname = "dshbb.list_rows_inc"
+    bl_label = "列表加高"
+    bl_description = "把对象 / 成员列表的高度增加 2 行（3–30）"
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return int(getattr(context.scene, "dshbb_list_rows", 8)) < 30
+        except Exception:
+            return False
+
+    def execute(self, context):
+        scene = context.scene
+        scene.dshbb_list_rows = min(30, int(getattr(scene, "dshbb_list_rows", 8)) + 2)
+        try:
+            context.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
+class DSHBB_OT_ListRowsDec(bpy.types.Operator):
+    """把 N 面板列表变矮一点"""
+    bl_idname = "dshbb.list_rows_dec"
+    bl_label = "列表变矮"
+    bl_description = "把对象 / 成员列表的高度减少 2 行（3–30）"
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return int(getattr(context.scene, "dshbb_list_rows", 8)) > 3
+        except Exception:
+            return False
+
+    def execute(self, context):
+        scene = context.scene
+        scene.dshbb_list_rows = max(3, int(getattr(scene, "dshbb_list_rows", 8)) - 2)
+        try:
+            context.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
 class DSHBB_OT_SendCollectionToDSH(bpy.types.Operator):
     """把一个集合整体发送到 DSH（大装配体推荐）"""
     bl_idname = "dshbb.send_collection_to_dsh"
@@ -6778,6 +7083,11 @@ class DSHBB_OT_OpenTerms(bpy.types.Operator):
 
 # Registration functions
 def register():
+    # UIList 保持同步的轻量 timer（不在 draw 里写 ID 数据）
+    try:
+        bpy.app.timers.register(_dshbb_ui_list_timer, first_interval=0.8, persistent=True)
+    except Exception:
+        pass
     # UIList 的 PropertyGroup 必须先注册，后面 CollectionProperty(type=...) 才能用
     bpy.utils.register_class(DSHBB_SelectionItem)
     bpy.utils.register_class(DSHBB_UL_ObjectList)
@@ -6819,14 +7129,18 @@ def register():
     bpy.types.Scene.dshbb_selection_index = bpy.props.IntProperty(default=0)
     bpy.types.Scene.dshbb_collection_index = bpy.props.IntProperty(default=0)
     bpy.types.Scene.dshbb_show_selection_list = bpy.props.BoolProperty(
-        name="Show Selection List", description="展开/折叠 N 面板的对象列表", default=False)
+        name="Show Selection List", description="展开/折叠 N 面板的对象列表", default=False,
+        update=_on_show_selection_list_update)
     bpy.types.Scene.dshbb_show_collection_list = bpy.props.BoolProperty(
-        name="Show Collection List", description="展开/折叠 N 面板的集合成员列表", default=False)
+        name="Show Collection List", description="展开/折叠 N 面板的集合成员列表", default=False,
+        update=_on_show_collection_list_update)
     bpy.types.Scene.dshbb_list_rows = bpy.props.IntProperty(
         name="List Rows", description="列表高度（显示行数，可拖动滑杆调整）",
         default=8, min=3, max=30, soft_min=3, soft_max=20)
     bpy.types.Scene.dshbb_show_advanced = bpy.props.BoolProperty(
         name="Show Advanced", description="展开/折叠后端地址等高级项", default=False)
+    bpy.types.Scene.dshbb_last_panel_error = bpy.props.StringProperty(
+        name="Last Panel Error", description="最近一次 N 面板绘制异常（诊断用）", default="")
 
     bpy.types.Scene.dshbb_selection_mode = bpy.props.EnumProperty(
         name="Selection Mode",
@@ -6981,6 +7295,8 @@ def register():
     bpy.utils.register_class(DSHBB_OT_StartServer)
     bpy.utils.register_class(DSHBB_OT_SendSelectionToDSH)
     bpy.utils.register_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.register_class(DSHBB_OT_ListRowsInc)
+    bpy.utils.register_class(DSHBB_OT_ListRowsDec)
     bpy.utils.register_class(DSHBB_OT_UseSelectionCollection)
     bpy.utils.register_class(DSHBB_OT_StopServer)
     bpy.utils.register_class(DSHBB_OT_OpenTerms)
@@ -6994,6 +7310,10 @@ def register():
     print("DSH Blender Bridge addon registered")
 
 def unregister():
+    try:
+        bpy.app.timers.unregister(_dshbb_ui_list_timer)
+    except Exception:
+        pass
     # 先删属性，再注销类（顺序反过来会留下悬空属性）
     _dshbb_unregister_auto_start()
 
@@ -7012,6 +7332,8 @@ def unregister():
     bpy.utils.unregister_class(DSHBB_OT_StartServer)
     bpy.utils.unregister_class(DSHBB_OT_SendSelectionToDSH)
     bpy.utils.unregister_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.unregister_class(DSHBB_OT_ListRowsInc)
+    bpy.utils.unregister_class(DSHBB_OT_ListRowsDec)
     bpy.utils.unregister_class(DSHBB_OT_UseSelectionCollection)
     bpy.utils.unregister_class(DSHBB_OT_StopServer)
     bpy.utils.unregister_class(DSHBB_OT_OpenTerms)
@@ -7033,6 +7355,7 @@ def unregister():
     del bpy.types.Scene.dshbb_show_collection_list
     del bpy.types.Scene.dshbb_list_rows
     del bpy.types.Scene.dshbb_show_advanced
+    del bpy.types.Scene.dshbb_last_panel_error
     del bpy.types.Scene.dshbb_use_polyhaven
     del bpy.types.Scene.dshbb_use_hyper3d
     del bpy.types.Scene.dshbb_hyper3d_mode
