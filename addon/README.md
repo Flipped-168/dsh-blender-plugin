@@ -44,13 +44,17 @@
 ## 验证
 
 ```bash
-blender_rt_cmd get_addon_info     # addon_version 应为 [1, 8]；capabilities 含 5 条新命令
+blender_rt_cmd get_addon_info     # addon_version 应为 [1, 9]；capabilities 含 5 条新命令
 blender_rt_cmd get_activity_state # state 可能为 idle / human / agent / both
 ```
 
 装好后在 Blender 里选物体 → `N` →「Selection → DSH」→ 发送，选中会进 **DSH 当前会话草稿**（不自动发送）。
 编辑模式选顶点/边/面、姿态模式选骨骼、编辑曲线/晶格控制点也会一起发送（payload 里 `selection.sub`）；
 N 面板的对象 / 成员列表默认折叠，展开后带滚动条且高度可调。
+
+面板结构（v2.5，未发版）：活动状态置顶（AI 操作时显示红色警告）+「暂停 AI 操作」按钮；
+「环境与角色模型API调用」为父面板，内含「环境生成」（Poly Haven / Sketchfab / Poly Pizza）与
+「模型生成」（Hyper3D / Hunyuan3D / Tripo）两个子面板，默认全部折叠。暂停期间 socket 只放行只读命令。
 
 ## 环境变量（旧名仍兼容）
 

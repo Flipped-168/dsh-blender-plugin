@@ -1,3 +1,20 @@
+# CHANGELOG — @dsh-external/dsh-blender-plugin
+
+## 未发版 —— N 面板重排（活动置顶 / 环境与模型 API 子面板）+ 暂停 AI 操作
+
+**来源**：用户要求把活动状态移到上面、资产库与 AI Model Generation 合并成「环境与角色模型API调用」父面板
+（环境生成 / 模型生成两个子面板，默认全折叠），AI 操作时显示警告，并加「暂停 AI 操作」按钮；顺带删掉一些图标。
+
+- **活动状态置顶**：N 面板第一块就是活动状态；`agent` / `both` 时用 `alert` 红色警告「AI 正在操作 Blender」。
+- **暂停 AI 操作**：新增场景属性 `dshbb_ai_paused` + 按钮 `dshbb.toggle_ai_pause`；
+  暂停后 socket 只放行只读命令（`ping` / `get_*` / `drain_human_activity` / `describe_node_type` / `bpy_api_lookup`），
+  `execute_code`、资产下载/生成/导入等写操作返回 `AI_PAUSED`；`get_activity_state` 带 `paused` 字段。
+  恢复只能由人在 Blender 面板点「继续 AI 操作」（模型无法自己解除）。
+- **新面板**：`环境与角色模型API调用`（父，默认折叠）→ `环境生成`（Poly Haven / Sketchfab / Poly Pizza）+
+  `模型生成`（Hyper3D / Hunyuan3D / Tripo，含 Premium 状态）；父面板与两个子面板都 `DEFAULT_CLOSED`。
+- **删图标**：新面板里的集成标题、环境生成 URL、模型生成的按钮等不再带装饰性图标；活动状态只在警告时带图标。
+- 状态变化由 0.5 s timer 触发 N 面板重绘（不靠鼠标移动才刷新）。
+
 ## v2.4.0（2026-10-19）—— 子元素选中 + N 面板列表可伸缩（addon v1.9）
 
 ### 新功能：编辑模式 / 姿态模式的子元素进入选中记录

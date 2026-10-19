@@ -1097,6 +1097,42 @@ def get_edit_recorder():
 HUMAN_ACTIVE_WINDOW_S = 1.5
 AGENT_ACTIVE_WINDOW_S = 1.5
 ACTIVITY_TICK_MIN_INTERVAL_S = 0.2
+
+# v2.5：暂停 AI 操作（N 面板按钮）——暂停后 socket 上除只读命令外全部拒绝。
+PAUSE_SAFE_COMMANDS = frozenset({
+    "ping", "drain_human_activity", "describe_node_type", "bpy_api_lookup",
+    "get_activity_state", "get_selection", "get_collections",
+})
+
+
+def _ai_paused():
+    try:
+        return bool(getattr(bpy.context.scene, "dshbb_ai_paused", False))
+    except Exception:
+        return False
+
+
+def _is_pause_safe_command(cmd):
+    """只读命令在白名单里；其余（execute_code / 资产下载 / 生成 / 导入）在暂停时拒绝。"""
+    cmd = str(cmd or "")
+    if cmd in PAUSE_SAFE_COMMANDS:
+        return True
+    if cmd.startswith("get_"):
+        return True
+    return False
+
+
+def _redraw_view3d_panels():
+    try:
+        for wm in bpy.context.window_manager.windows:
+            for area in wm.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except Exception:
+        pass
+
+
+_LAST_UI_STATE_KEY = {"key": None}
 SELECTION_ACTIVITY_NAMES = 8
 SELECTION_PAYLOAD_NAMES = 200
 SELECTION_PAYLOAD_OBJECTS = 50
@@ -2125,6 +2161,10 @@ class DSHBlenderBridgeServer:
 
     def execute_command(self, command):
         """Execute a command in the main Blender thread"""
+        # 暂停检查放在 try/finally 之前：被拒的请求不应标记成「AI 正在操作」
+        if _ai_paused() and not _is_pause_safe_command(command.get("type")):
+            return {"status": "error", "error": "AI_PAUSED",
+                    "message": "AI 操作已暂停：请在 Blender N 面板「活动状态」里点「继续 AI 操作」"}
         try:
             with get_edit_recorder().agent_command():
                 return self._execute_command_internal(command)
@@ -2313,7 +2353,9 @@ class DSHBlenderBridgeServer:
         """v1.8：统一 activity 状态（human / agent / idle / both）+ 原生选区摘要。"""
         try:
             # 查询命令不能把自己算成 agent（否则每次查询都回 state=agent）
-            return get_activity_tracker().snapshot(include_current_command=False)
+            snap = get_activity_tracker().snapshot(include_current_command=False)
+            snap["paused"] = _ai_paused()
+            return snap
         except Exception as e:
             print(f"Error getting activity state: {str(e)}")
             return {"error": str(e)}
@@ -6516,7 +6558,7 @@ def _on_show_collection_list_update(self, context):
 
 
 def _dshbb_ui_list_timer():
-    """列表打开时保持内容与场景同步（不在 draw() 里改数据，避免 Blender 绘制上下文写 ID 的问题）。"""
+    """列表打开时保持内容与场景同步；活动状态/暂停状态变化时重绘 N 面板。"""
     try:
         scene = bpy.context.scene
         if scene is not None:
@@ -6524,6 +6566,14 @@ def _dshbb_ui_list_timer():
                 _refresh_selection_list(scene)
             if getattr(scene, "dshbb_show_collection_list", False):
                 _refresh_collection_list(scene)
+            try:
+                snap = get_activity_tracker().snapshot(include_current_command=False)
+                key = (snap.get("state"), bool(getattr(scene, "dshbb_ai_paused", False)))
+                if key != _LAST_UI_STATE_KEY["key"]:
+                    _LAST_UI_STATE_KEY["key"] = key
+                    _redraw_view3d_panels()
+            except Exception:
+                pass
     except Exception:
         pass
     return 0.5
@@ -6603,7 +6653,35 @@ class DSHBB_PT_Panel(bpy.types.Panel):
     def _draw_impl(self, context):
         layout = self.layout
         scene = context.scene
-        prefs = get_dshbb_addon_preferences(context)
+
+        # v2.5 · 活动状态置顶（AI 操作时警告）+ 暂停 AI 操作
+        layout.separator()
+        act_box = layout.box()
+        try:
+            activity = get_activity_tracker().snapshot(include_current_command=False)
+        except Exception:
+            activity = {}
+        state = str(activity.get("state") or "idle")
+        state_text = {"human": "人：操作中", "agent": "AI：执行中",
+                      "both": "人 / AI 同时活动", "idle": "空闲"}.get(state, state)
+        paused = _ai_paused()
+        if state in ("agent", "both"):
+            warn = act_box.row()
+            warn.alert = True
+            warn.label(text="AI 正在操作 Blender" + ("（同时有人操作）" if state == "both" else ""),
+                       icon='ERROR')
+        else:
+            act_box.label(text="活动状态：" + state_text)
+        if paused:
+            prow = act_box.row()
+            prow.alert = True
+            prow.label(text="AI 操作已暂停 · 模型请求会被拒绝")
+        btn_row = act_box.row()
+        btn_row.scale_y = 1.2
+        btn_row.operator("dshbb.toggle_ai_pause",
+                         text=("继续 AI 操作" if paused else "暂停 AI 操作"))
+        if activity.get("last_human_kind"):
+            act_box.label(text="最近人类动作：" + str(activity.get("last_human_kind")))
 
         # Connection
         box = layout.box()
@@ -6620,20 +6698,8 @@ class DSHBB_PT_Panel(bpy.types.Panel):
 
         # v1.8 · Selection → DSH（在 Blender 原生选区里选，按按钮进 DSH 下一条消息）
         layout.separator()
-        layout.label(text="Selection → DSH", icon='RESTRICT_SELECT_OFF')
+        layout.label(text="Selection → DSH")
         sel_box = layout.box()
-        try:
-            activity = get_activity_tracker().snapshot()
-        except Exception:
-            activity = {}
-        state = str(activity.get("state") or "idle")
-        state_text = {"human": "人：操作中", "agent": "AI：执行中",
-                      "both": "人 / AI 同时活动", "idle": "空闲"}.get(state, state)
-        state_icon = {"human": 'HAND', "agent": 'CONSOLE',
-                      "both": 'ERROR', "idle": 'CHECKMARK'}.get(state, 'INFO')
-        sel_box.row().label(text="活动状态：" + state_text, icon=state_icon)
-        if activity.get("last_human_kind"):
-            sel_box.label(text="最近人类动作：" + str(activity.get("last_human_kind")), icon='INFO')
         selection = activity.get("selection") or {}
         sel_count = int(selection.get("count") or 0)
         sel_names = list(selection.get("names") or [])
@@ -6767,19 +6833,64 @@ class DSHBB_PT_Panel(bpy.types.Panel):
             sel_box.label(text="DSH 后端：" + _dshbb_backend_url(), icon='URL')
             sel_box.prop(scene, "dshbb_backend_url", text="覆盖后端地址（可留空）")
 
-        # Asset libraries
+        # Community section
         layout.separator()
-        layout.label(text="Asset Libraries", icon='ASSET_MANAGER')
+        community_box = layout.box()
 
-        sub = self._integration_header(
-            layout, scene, "dshbb_use_polyhaven", "Poly Haven", 'WORLD')
+        col = community_box.column(align=True)
+        # Wrap by panel width so Blender doesn't elide the phrase mid-line.
+        ui_scale = context.preferences.system.ui_scale
+        region_width = context.region.width if context.region else 300
+        chars = max(12, int((region_width - 30) / (7 * ui_scale)))
+        for line in textwrap.wrap("Stay updated with the latest developments", chars):
+            col.label(text=line)
+        col.separator()
+        row = col.row()
+        row.scale_y = 1.3
+        row.operator("wm.url_open", text="Join Discord", icon='URL').url = DISCORD_URL
+
+# ── v2.5 面板：环境与角色模型API调用（父面板 + 两个子面板，默认全折叠）──
+def _draw_api_toggle(layout, scene, prop_name, title):
+    """集成开关行（无图标，保持面板简洁）。"""
+    box = layout.box()
+    row = box.row()
+    row.prop(scene, prop_name, text="")
+    row.label(text=title)
+    return box if getattr(scene, prop_name) else None
+
+
+class DSHBB_PT_EnvModelAPI(bpy.types.Panel):
+    bl_label = "环境与角色模型API调用"
+    bl_idname = "DSHBB_PT_EnvModelAPI"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'DSH Blender Bridge'
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        self.layout.label(text="环境生成：资产库；模型生成：AI 模型 API")
+
+
+class DSHBB_PT_EnvGen(bpy.types.Panel):
+    bl_label = "环境生成"
+    bl_idname = "DSHBB_PT_EnvGen"
+    bl_parent_id = "DSHBB_PT_EnvModelAPI"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        prefs = get_dshbb_addon_preferences(context)
+
+        sub = _draw_api_toggle(layout, scene, "dshbb_use_polyhaven", "Poly Haven")
         if sub:
             col = sub.column(align=True)
             col.label(text="Free CC0 HDRIs, textures and models")
-            col.operator("wm.url_open", text="polyhaven.com", icon='URL').url = POLYHAVEN_SITE
+            col.operator("wm.url_open", text="polyhaven.com").url = POLYHAVEN_SITE
 
-        sub = self._integration_header(
-            layout, scene, "dshbb_use_sketchfab", "Sketchfab", 'MESH_MONKEY')
+        sub = _draw_api_toggle(layout, scene, "dshbb_use_sketchfab", "Sketchfab")
         if sub:
             col = sub.column(align=True)
             if prefs:
@@ -6787,8 +6898,7 @@ class DSHBB_PT_Panel(bpy.types.Panel):
             else:
                 col.prop(scene, "dshbb_sketchfab_api_key", text="API Key")
 
-        sub = self._integration_header(
-            layout, scene, "dshbb_use_polypizza", "Poly Pizza", 'MESH_ICOSPHERE')
+        sub = _draw_api_toggle(layout, scene, "dshbb_use_polypizza", "Poly Pizza")
         if sub:
             col = sub.column(align=True)
             if prefs:
@@ -6796,17 +6906,26 @@ class DSHBB_PT_Panel(bpy.types.Panel):
             else:
                 col.prop(scene, "dshbb_polypizza_api_key", text="API Key")
 
-        # AI model generation
-        layout.separator()
-        layout.label(text="AI Model Generation", icon='SHADERFX')
+
+class DSHBB_PT_ModelGen(bpy.types.Panel):
+    bl_label = "模型生成"
+    bl_idname = "DSHBB_PT_ModelGen"
+    bl_parent_id = "DSHBB_PT_EnvModelAPI"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        prefs = get_dshbb_addon_preferences(context)
         premium = premium_active()
         if premium:
             premium_draw_panel(layout, prefs)
         else:
             premium_draw_upsell(layout)
 
-        sub = self._integration_header(
-            layout, scene, "dshbb_use_hyper3d", "Hyper3D Rodin", 'MESH_UVSPHERE')
+        sub = _draw_api_toggle(layout, scene, "dshbb_use_hyper3d", "Hyper3D Rodin")
         if sub and premium:
             sub.label(text="Runs through Premium")
         elif sub:
@@ -6816,11 +6935,9 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                 col.prop(prefs, "hyper3d_api_key", text="API Key")
             else:
                 col.prop(scene, "dshbb_hyper3d_api_key", text="API Key")
-            sub.operator("dshbb.set_hyper3d_free_trial_api_key",
-                         text="Set Free Trial API Key", icon='KEYINGSET')
+            sub.operator("dshbb.set_hyper3d_free_trial_api_key", text="Set Free Trial API Key")
 
-        sub = self._integration_header(
-            layout, scene, "dshbb_use_hunyuan3d", "Tencent Hunyuan 3D", 'MESH_CUBE')
+        sub = _draw_api_toggle(layout, scene, "dshbb_use_hunyuan3d", "Tencent Hunyuan 3D")
         if sub and premium:
             sub.label(text="Runs through Premium")
         elif sub:
@@ -6846,25 +6963,27 @@ class DSHBB_PT_Panel(bpy.types.Panel):
                 col.prop(scene, "dshbb_hunyuan3d_texture", text="Generate Texture")
 
         if premium:
-            sub = self._integration_header(layout, scene, "dshbb_use_tripo", "Tripo", 'MESH_TORUS')
+            sub = _draw_api_toggle(layout, scene, "dshbb_use_tripo", "Tripo")
             if sub:
                 sub.label(text="Runs through Premium")
 
-        # Community section
-        layout.separator()
-        community_box = layout.box()
 
-        col = community_box.column(align=True)
-        # Wrap by panel width so Blender doesn't elide the phrase mid-line.
-        ui_scale = context.preferences.system.ui_scale
-        region_width = context.region.width if context.region else 300
-        chars = max(12, int((region_width - 30) / (7 * ui_scale)))
-        for line in textwrap.wrap("Stay updated with the latest developments", chars):
-            col.label(text=line)
-        col.separator()
-        row = col.row()
-        row.scale_y = 1.3
-        row.operator("wm.url_open", text="Join Discord", icon='URL').url = DISCORD_URL
+class DSHBB_OT_ToggleAIPause(bpy.types.Operator):
+    """暂停 / 继续 AI 操作（拒绝 DSH 发来的 Blender 写操作）"""
+    bl_idname = "dshbb.toggle_ai_pause"
+    bl_label = "暂停 AI 操作"
+    bl_description = "暂停后模型只能做只读查询；在 N 面板顶部点「继续 AI 操作」恢复"
+
+    def execute(self, context):
+        scene = context.scene
+        scene.dshbb_ai_paused = not bool(getattr(scene, "dshbb_ai_paused", False))
+        _redraw_view3d_panels()
+        if scene.dshbb_ai_paused:
+            self.report({'WARNING'}, "AI 操作已暂停（只读查询仍可用）")
+        else:
+            self.report({'INFO'}, "AI 操作已恢复")
+        return {'FINISHED'}
+
 
 # Operator to set Hyper3D API Key
 class DSHBB_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
@@ -7141,6 +7260,10 @@ def register():
         name="Show Advanced", description="展开/折叠后端地址等高级项", default=False)
     bpy.types.Scene.dshbb_last_panel_error = bpy.props.StringProperty(
         name="Last Panel Error", description="最近一次 N 面板绘制异常（诊断用）", default="")
+    bpy.types.Scene.dshbb_ai_paused = bpy.props.BoolProperty(
+        name="Pause AI Operations",
+        description="暂停后，DSH/模型发来的 Blender 写操作会被拒绝（只读查询仍可用）；在 N 面板顶部恢复",
+        default=False)
 
     bpy.types.Scene.dshbb_selection_mode = bpy.props.EnumProperty(
         name="Selection Mode",
@@ -7291,10 +7414,15 @@ def register():
     bpy.utils.register_class(DSHBB_AddonPreferences)
 
     bpy.utils.register_class(DSHBB_PT_Panel)
+    # v2.5：父面板 + 两个子面板（默认全折叠），注册顺序决定面板顺序
+    bpy.utils.register_class(DSHBB_PT_EnvModelAPI)
+    bpy.utils.register_class(DSHBB_PT_EnvGen)
+    bpy.utils.register_class(DSHBB_PT_ModelGen)
     bpy.utils.register_class(DSHBB_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.register_class(DSHBB_OT_StartServer)
     bpy.utils.register_class(DSHBB_OT_SendSelectionToDSH)
     bpy.utils.register_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.register_class(DSHBB_OT_ToggleAIPause)
     bpy.utils.register_class(DSHBB_OT_ListRowsInc)
     bpy.utils.register_class(DSHBB_OT_ListRowsDec)
     bpy.utils.register_class(DSHBB_OT_UseSelectionCollection)
@@ -7326,12 +7454,16 @@ def unregister():
         del bpy.types.dshbb_server
 
     bpy.utils.unregister_class(DSHBB_PT_Panel)
+    bpy.utils.unregister_class(DSHBB_PT_ModelGen)
+    bpy.utils.unregister_class(DSHBB_PT_EnvGen)
+    bpy.utils.unregister_class(DSHBB_PT_EnvModelAPI)
     bpy.utils.unregister_class(DSHBB_UL_ObjectList)
     bpy.utils.unregister_class(DSHBB_SelectionItem)
     bpy.utils.unregister_class(DSHBB_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.unregister_class(DSHBB_OT_StartServer)
     bpy.utils.unregister_class(DSHBB_OT_SendSelectionToDSH)
     bpy.utils.unregister_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.unregister_class(DSHBB_OT_ToggleAIPause)
     bpy.utils.unregister_class(DSHBB_OT_ListRowsInc)
     bpy.utils.unregister_class(DSHBB_OT_ListRowsDec)
     bpy.utils.unregister_class(DSHBB_OT_UseSelectionCollection)
@@ -7356,6 +7488,7 @@ def unregister():
     del bpy.types.Scene.dshbb_list_rows
     del bpy.types.Scene.dshbb_show_advanced
     del bpy.types.Scene.dshbb_last_panel_error
+    del bpy.types.Scene.dshbb_ai_paused
     del bpy.types.Scene.dshbb_use_polyhaven
     del bpy.types.Scene.dshbb_use_hyper3d
     del bpy.types.Scene.dshbb_hyper3d_mode
