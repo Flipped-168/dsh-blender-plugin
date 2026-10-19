@@ -22,9 +22,9 @@ If it saved you some time, you're welcome to support its development on Afdian: 
 
 > 🌐 **Language:** **English (this page)** · [简体中文](README.zh-CN.md)
 >
-> 🧩 **Companion skill: [blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling)** — the process and the acceptance criteria for modeling / assembly (multi-agent division of labour, reference-image-driven shapes, six pitfalls, numeric assembly gates). The plugin owns the *channel*; the skill owns *how to build and how to verify*.
+> 🧩 **Bundled modeling skill (v2.2.0+): [`blender-modeling`](skills/blender-modeling/)** — ships inside this package and is **registered automatically** with DSH's skill registry when the plugin loads, so installing the plugin is all you need (no separate repo, no download, no symlink). It owns the process and acceptance criteria (multi-agent division of labour, reference-image-driven shapes, six pitfalls, numeric assembly gates); the plugin owns the *channel*. The standalone [dsh-skill-blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling) repo is kept as a mirror for non-DSH hosts.
 >
-> 🏷 **Version: v2.1.0** (package `2.1.0`) — the first stable release. The model-facing surface is frozen at **16 tools**, and the plan channel exposes **28 families · 186 ops**.
+> 🏷 **Version: v2.2.0** (package `2.2.0`) — stable release + the bundled `blender-modeling` skill (auto-registered) + the dsh-TUI side viewport panel / picking (§4.2). The model-facing surface is frozen at **16 tools**, and the plan channel exposes **28 families · 186 ops**.
 
 > **Let an AI model actually drive Blender** — no clicking, no screenshots-into-prompt, no MCP server.
 > One direct TCP channel (addon `127.0.0.1:9876` · backend `127.0.0.1:9877`) gives the model 16 tools: **see the viewport · edit the scene · watch a time window · run an inner search loop · profile and fix render perf · decimate objects safely · offload heavy work to a headless process · batch long work as jobs · roll back · store parameter presets · call any addon command · judge / verify / export through the contract layer · operate the channel itself.**
@@ -53,6 +53,13 @@ If it saved you some time, you're welcome to support its development on Afdian: 
 | **Job layer** for work longer than one wait window | `blender_rt_job` | `op=wait` blocks for the structured result |
 | Channel health / write lease / one-call Blender launch | `blender_viewport` | health 70–100 ms |
 
+### Bundled modeling skill (v2.2.0+, no extra install)
+
+The package ships `blender-modeling` under [`skills/blender-modeling/`](skills/blender-modeling/) and registers it with DSH's skill registry as a `bundled` provider when the plugin loads. After installing the plugin and restarting DSH, the skill appears in the session skill catalog and the model loads it on its own for modeling / assembly work. It contains the shape decision tree, 24 numbered recipes, the six pitfalls, the numeric-gate checklist, and the multi-agent coordination protocol.
+
+- **Precedence**: rank 600 (DSH's `BUNDLED_SKILL_RANK`). A copy you installed yourself under `~/.dsh/skills/blender-modeling` (user rank 400) still wins, so existing users are never force-updated.
+- **Non-DSH hosts** (Claude Code / Codex / Cursor…): the same directory is a plain `skills/<name>/SKILL.md` bundle — link or copy it to `~/.dsh/skills/` (or your host's skill root). See [`skills/blender-modeling/README.md`](skills/blender-modeling/README.md).
+
 Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) · configuration reference (Chinese): [`docs/配置参考.md`](docs/配置参考.md) · deployment SOP: [`docs/部署SOP.md`](docs/部署SOP.md). This README covers the same ground in condensed English.
 
 ---
@@ -75,7 +82,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 
 ## 3. Install (5 steps)
 
-> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.1.0.tgz` (1.3 MB / 144 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`.
+> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.2.0.tgz` (1.5 MB / 161 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
 > Full third-party checklist: [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md).
 
 ```bash
@@ -104,6 +111,8 @@ curl -sS http://127.0.0.1:9877/who       # write lease + channel metrics + effec
 ```
 
 The plugin auto-starts the backend (`node runtime/server.mjs`, default `127.0.0.1:9877`) and runs a **15-second watchdog** that respawns it if it dies. `blender_viewport op=stop` pauses the watchdog.
+
+> **Bundled skill (v2.2.0+)**: once DSH restarts, `blender-modeling` is registered from `skills/blender-modeling/` automatically — no extra clone / download / symlink. It is marked `bundled` (rank 600); a user-level copy at `~/.dsh/skills/blender-modeling` (rank 400) still takes precedence.
 
 ---
 

@@ -1,7 +1,8 @@
 # DSH × Blender 直连实时插件
 
-> DSH（DeepSeek Harness）插件：让 AI 模型通过一条 TCP 直连通道驱动 **GUI Blender** —— 看视口 / 改场景 / 连续观察 / 内环搜索 / 渲染性能 / 对象精简 / 无头跑重活 / 事务回滚 / 契约层与规划器，共 15 个工具。
+> DSH（DeepSeek Harness）插件：让 AI 模型通过一条 TCP 直连通道驱动 **GUI Blender** —— 看视口 / 改场景 / 连续观察 / 内环搜索 / 渲染性能 / 对象精简 / 无头跑重活 / 事务回滚 / 契约层与规划器，共 16 个工具。
 > 本包**不含** Blender addon（`DSH Blender Bridge`，旧名 `MCP for Blender`），需用户自备；v2.0.0 改名后模块名变了，需在 Blender 偏好设置里重新启用（见 MIGRATIONS.md）。
+> 当前版本 **v2.2.0**：`blender-modeling` skill 已随包发布，DSH 启动时自动注册（无需另下）。
 
 ## 安装（先读，别猜）
 
@@ -10,6 +11,12 @@
 - [AI 安装提示词](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/docs/AI-安装提示词.md): 可直接粘贴给 AI 助手
 - [AGENTS.md](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/AGENTS.md): 助手自动加载的仓库约定
 - [配置参考](https://raw.githubusercontent.com/sixtysevenlf/dsh-blender-plugin/main/docs/配置参考.md): 配置文件 / 环境变量 / 路径映射 / 自动探测
+
+## 随包 skill（v2.2.0+，无需另装）
+
+- **`blender-modeling`** —— 建模 / 装配流程与验收判据（选形决策树 · 24 条编号配方 · 六条必踩的坑 · 数值门清单 · 多 Agent 分工协议）。
+  随包在 `skills/blender-modeling/`，DSH 启动时自动注册为 `bundled` skill（rank 600；用户 `~/.dsh/skills` 的 400 副本仍优先）。
+  独立仓库 <https://github.com/sixtysevenlf/dsh-skill-blender-modeling> 仅作非 DSH 宿主的镜像。
 
 ## 验收判据（没到就是没装好）
 

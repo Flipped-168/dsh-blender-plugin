@@ -51,7 +51,11 @@
   ② `npm test` 全绿；③ 提交 → `git tag -a vX.Y.Z` → 推 `main` 与 tag → `gh release create`。
 - **发布 npm**：`npm pack` → `npm publish <tgz> --access public`（包名 `@dsh-external/dsh-blender-plugin`，需维护者 npm 登录）。
   打包面靠 `runtime/.npmignore` + `package.json` 的 `files` 否定模式把 `runtime/ext/venv`（1.2 G）挡在包外 ——
-  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：约 1.3 MB / 125 文件；曾经漏成 458 MB / 12638 文件）。
+  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：v2.2.0 起约 **1.5 MB / 161 文件**，含随包 skill；此前 1.3 MB / 144；
+  曾经漏成 458 MB / 12638 文件）。
+- **随包 skill 的真源**：`skills/blender-modeling/`（SKILL.md + references + MIT LICENSE/NOTICE）。插件加载时注册 bundled provider
+  （`ctx.inject(['skills'], …)`，rank 600；用户 `~/.dsh/skills` 的 400 副本仍优先）。**改 skill 直接改这里**，独立仓库
+  `dsh-skill-blender-modeling` 仅作非 DSH 宿主的镜像；改完跑 `node tests/skill_bundle_selftest.mjs`（61 断言，含带 signal 的真 SkillRegistry 集成）。
 
 ## 4. 给用户的一段提示词
 

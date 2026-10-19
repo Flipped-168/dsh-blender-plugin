@@ -27,12 +27,13 @@
 装完跑 blender_viewport(op="doctor")，kind=ok 才算成功；不是 kind=ok 就按 §7 排查，并把原始回执贴给我。
 ```
 
-## ③ 装完让 AI 自检（三行）
+## ③ 装完让 AI 自检（四行）
 
 ```text
 blender_viewport(op="doctor")        # kind=ok ？（真跑一次 bpy 往返）
 blender_rt_see(max_size=560)         # 能回一帧图？
 blender_rt_plan(op="catalog")        # 工具 / op 目录能列出来？
+skill(name="blender-modeling")       # 随包 skill 能加载？（v2.2.0 起自动注册，无需另装）
 ```
 
 ## ④ 什么算失败（拿到这些回执就别宣布成功）

@@ -22,13 +22,14 @@
 
 > 🌐 **语言 / Language：** [English](README.md) · **简体中文（本页）**
 >
-> 🧩 **配套 skill：[blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling)** —— 建模 / 装配的流程与判据（多 Agent 分工范式、参考图形体还原、六条坑、数值门装配审计）。
-> 插件管"通道"，skill 管"怎么建、怎么验收"，两个一起用才完整。
+> 🧩 **随包 skill（v2.2.0 起）：[`blender-modeling`](skills/blender-modeling/)** —— 就在本包里，插件加载时**自动注册**进 DSH 的技能目录；装插件即有，**不用再去独立仓库下载 / 软链**。
+> 它管"怎么建、怎么验收"（多 Agent 分工范式、参考图形体还原、六条坑、数值门装配审计）；插件管"通道"。
+> 独立仓库 [dsh-skill-blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling) 仅作**非 DSH 宿主**的镜像。
 
 > 让 **AI 模型真正驱动 Blender**：不用人点鼠标、不截屏喂图、不装 MCP 服务端，
 > 通过一条 TCP 直连通道拿到 **16 个模型侧工具**：**看视口 / 改场景 / 连续观察 / 内环搜索 / addon 命令面 / 渲染优化 / 对象精简 / 无头跑重活 / 热无头会话 / 作业层 / 事务回滚 / 配方库 / 判定与验收（28 family · 186 op）/ 通道运维 / 请用户点选（单选或多选）**。
 >
-> **版本 v1.0** —— 自带 runtime（node + python），包内路径全相对，**换机器不用改源码**；配置走 `runtime/config.mjs`（env → 配置文件 → 自动探测 → 默认）。
+> **版本 v2.2.0** —— 自带 runtime（node + python），包内路径全相对，**换机器不用改源码**；配置走 `runtime/config.mjs`（env → 配置文件 → 自动探测 → 默认）。**v2.2.0 起随包 skill `blender-modeling` 自动注册**（装插件即有），并新增 **dsh-TUI 侧栏视口面板 / 点选**（§4.2）。
 > **操作教程：[docs/操作教程.md](docs/操作教程.md) · 配置：[docs/配置参考.md](docs/配置参考.md) · 部署 SOP：[docs/部署SOP.md](docs/部署SOP.md)**
 
 ---
@@ -67,6 +68,13 @@
 | **判定 / 验收 / 导出 / 造型** | `blender_rt_plan` | 307 对象：AABB 24 ms · BVH 0.17 ms/对 |
 | 通道体检 / 租约 / 一键拉起 | `blender_viewport` | 体检 70–100 ms |
 
+### 随包 skill（v2.2.0 起，不用另装）
+
+本包在 [`skills/blender-modeling/`](skills/blender-modeling/) 里自带 `blender-modeling` skill，插件加载时把它注册成 DSH 的 `bundled` provider。**装好插件、重启 DSH 后**，会话的技能目录里会自动出现它，模型遇到建模 / 装配任务会自行加载：选形决策树、24 条编号配方、六条必踩的坑、数值门清单、多 Agent 分工协议都在里面。
+
+- **优先级**：rank 600（DSH 的 `BUNDLED_SKILL_RANK`）。你自己装在 `~/.dsh/skills/blender-modeling`（user 级 rank 400）的副本仍然优先 —— 老用户不会被强制更新。
+- **非 DSH 宿主**（Claude Code / Codex / Cursor…）：这个目录本身就是标准 `skills/<name>/SKILL.md` 结构，软链或拷贝到对应技能根目录即可，见 [`skills/blender-modeling/README.md`](skills/blender-modeling/README.md)。
+
 ---
 
 ## 2. 前置条件（Requirements，5 条，缺一不可）
@@ -86,7 +94,7 @@
 
 ## 3. 安装（Install，5 步）
 
-> **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的 `dsh-external-dsh-blender-plugin-2.1.0.tgz`（1.3 MB / 144 文件）：解包后放进 `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。
+> **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的 `dsh-external-dsh-blender-plugin-2.2.0.tgz`（1.5 MB / 161 文件）：解包后放进 `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
 > 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
 
 ```bash
@@ -122,6 +130,8 @@ curl -sS http://127.0.0.1:9877/who         # 租约 + 通道指标 + config
 插件加载时会自动拉起后端（`node runtime/server.mjs`，默认 `127.0.0.1:9877`）并带 **15 秒看护**：进程被杀 / 宿主重启会自动拉起；`blender_viewport op=stop` 会暂停看护。
 
 > ⚠ 插件是 **DSH 启动时加载**的模块：**升级后要重启 DSH** 才会在当前会话生效；只改了后端才用 `blender_viewport op=restart`。
+
+> 🧩 **随包 skill（v2.2.0+）**：重启 DSH 后 `blender-modeling` 会从 `skills/blender-modeling/` **自动注册**到技能目录（无需另下 / 另链）。它标为 `bundled`（rank 600）；你自己装在 `~/.dsh/skills/blender-modeling`（rank 400）的副本仍然优先。
 
 ---
 

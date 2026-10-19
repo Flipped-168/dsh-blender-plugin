@@ -47,6 +47,23 @@ declare function headlessReceipt(res: any, ctx: any): any;
  */
 declare function promotedReceipt(job: any, jobId: string, why: string): any;
 export declare function apply(ctx: any, config: Config): void;
+/** 解析 SKILL.md 的 YAML frontmatter（只取本插件需要的 name/description；不引 yaml 依赖）。 */
+declare function parseSkillFrontmatter(raw: string): {
+    meta: Record<string, string>;
+    body: string;
+};
+declare function readBundledSkill(): {
+    name: string;
+    description: string;
+    content: string;
+} | null;
+declare function createBundledSkillProvider(): any | null;
+/**
+ * 把随包 skill 注册进宿主的 skills 注册表（可选能力，失败只告警）。
+ * 用 ctx.inject(['skills'], cb) 延迟到服务可用时再注册：宿主若没有 skill 服务，
+ * 这个子 fiber 一直待命即可，**不会**让插件本身起不来。
+ */
+declare function registerBundledSkill(ctx: any): void;
 export declare const __internals: {
     frameDedupe: typeof frameDedupe;
     resetFrameCache: typeof resetFrameCache;
@@ -61,6 +78,15 @@ export declare const __internals: {
         via?: string;
         error?: string;
         tried: string[];
+    };
+    bundledSkill: {
+        dir: string;
+        provider: string;
+        rank: number;
+        read: typeof readBundledSkill;
+        createProvider: typeof createBundledSkillProvider;
+        register: typeof registerBundledSkill;
+        parseFrontmatter: typeof parseSkillFrontmatter;
     };
 };
 export {};

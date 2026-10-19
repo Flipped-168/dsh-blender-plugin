@@ -1,5 +1,63 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.2.0（2026-10-19）—— skill 并入插件仓：随包发布 + 加载时自动注册
+
+**来源**：用户提问 ——「把这个 blender-modeling skill 合并到 blender 插件仓库吧，好多人不看 github 主页不下载这个 skill」。
+**结论**：skill 不再要求用户去独立仓库下载 / 软链；插件装好、DSH 重启后，会话技能目录里自动出现 `blender-modeling`。
+
+> **本版还包含（上游 main 合入，PR #23–#26）**：dsh-TUI 适配 —— `ctx.tuiPanels` 侧栏「Blender 视口」面板 +
+> 点选（Web / headless 自动 no-op；无面板轮询时快速失败），详见 README §4.2 与 `docs/TUI-适配.md`、
+> `docs/宿主集成-接口契约-v2.2增补.md`。本次 skill 提交 rebase 到该 TUI 工作之上发布。
+
+### 新 · 随包 skill（真源迁到本仓）
+
+- 内容并入 [`skills/blender-modeling/`](skills/blender-modeling/)：`SKILL.md` + 4 个 `references/` + MIT `LICENSE` + `NOTICE.md` + 随包 `README.md`
+  （独立仓库 `dsh-skill-blender-modeling` 保留为非 DSH 宿主的镜像，内容与本目录同步）。
+- host 侧 `apply()` 在宿主**有 `skills` 服务时**注册 bundled provider：`ctx.inject(['skills'], cb)` 延迟挂载，
+  服务缺席则跳过；**任何注册失败只告警，不影响 16 个工具**（技能是附加能力）。
+- provider 口径：`source: "bundled"`、`rank = 600`（与 `@deepseek-ai/dsh-skill` 的 `BUNDLED_SKILL_RANK` 同值）；
+  candidate / definition 按 DSH 技能注册表契约构造，`resourceBase` 指向包内技能目录 ⇒ 引用 `references/*.md` 的相对路径可直接读。
+- **优先级**：DSH 规则 rank 小者优先 ⇒ 用户自己装在 `~/.dsh/skills`（user 级 rank 400）的副本覆盖包内副本（600），
+  老用户不会被强制更新；卸载插件即自动消失（不需要清理用户技能目录）。
+- 不新增运行时依赖：frontmatter 用约 20 行手写解析（只取 `name` / `description`），不引 `yaml`，不 import 宿主的 `@deepseek-ai/dsh-skill`。
+- 打包面：`package.json.files` 增加 `skills`；tgz **1.5 MB / 161 文件**（v2.1.0 为 1.3 MB / 144 文件）。
+
+### 新 · 回归门
+
+- 新增 `tests/skill_bundle_selftest.mjs`（接入 `npm test`）：
+  资产树 / frontmatter / 无 `.bak` / `files` 打包面 / lib 中 provider 形状 / frontmatter 解析边界 /
+  fake ctx 三条注册路径（`inject` / 直挂 / 无 skills 服务）/ **真 `SkillRegistry` 集成**（找到宿主才跑：`list`/`get` 全链路 + 用户级 rank 400 覆盖 bundled 600）。
+  本机 **61/61 PASS**；没有宿主包的环境会明确 skip 真 registry 集成段（57 断言，其中含 4 条带 `AbortController.signal` 的 thenable 断言）。
+- **复核发现的 P0（同日修复）**：provider 的 `list` / `get` 原先**同步**返回数组 / 对象；宿主 `waitWithAbort()` 在调用方带 `signal`
+  时会直接对返回值 `.then(...)`（模型侧每条 lookup 都带 signal）⇒ `TypeError: promise.then is not a function`，provider 被**静默 skip**，
+  skill 实际加载不了（无 signal 的测试恰好绕过）。改为 `async` 后在 selftest 里补带 `AbortController.signal` 的断言（先复现失败、后验证修复：
+  带 signal 的 `snapshot` 命中、`get()` 返回 103,925 字符正文）。
+- 实现细节：v2.2.0 代码块放在 `apply()` **之后**（函数声明提升，行为不变）—— 若插在 `registerSchemaDiagnostic` 之后，
+  会干扰 `discoverability_selftest` 对 `blender_viewport` 的 schema 字符片段切分（其口径依赖相对位置），
+  把预算误报成 12,317。调整后 schema 预算保持 **11,995 / 12,000**，**没有放宽这道门**。
+
+### 文档
+
+- README（EN / zh-CN）：「Companion skill」改为「Bundled skill（加载时自动注册）」，§1 增随包说明，§3 安装补「重启 DSH 后技能目录自动出现」；
+  Releases tgz 信息更新到 2.2.0（1.5 MB / 161 文件）。
+- `AGENTS.md`：打包健康值更新；新增「随包 skill 真源 = `skills/blender-modeling/`」约定。
+- 版本三处同步 **2.2.0**（`package.json` / `src/index.ts` 的 `PLUGIN_VERSION` / 重建后的 `lib/`）。
+
+### 验收（实测，2026-10-19）
+
+- `npm test` **exit 0**（含新增 skill_bundle_selftest）。
+- 真宿主 `SkillRegistry` 集成：`ctx.skills.list()` 命中 `blender-modeling`（`source=bundled`）· `get()` 加载 103,925 字符正文 ·
+  `resourceBase` 指向包内目录 · 模拟 user 级副本（rank 400）成功覆盖 bundled（600）。
+- **带 `AbortController.signal`** 的真注册表 `snapshot` / `get` 实测通过（修复前：snapshot 为空、get 抛 `TypeError`）。
+- `npm pack --dry-run`：**1.5 MB / 161 文件**，`skills/blender-modeling/**` 8 个文件全部在包内。
+
+### 未证实（需重启 DSH 后由用户确认）
+
+- 真实 DSH 会话里技能目录是否出现在**首条消息**的 available-skills 列表（本会话由用户级软链提供同一技能，无法在不重启的情况下验证 bundled 路径）。
+- 用户同时保留 user 级副本时，DSH 日志会有一条 "higher-priority skill already exists" 提示（预期行为，不是故障）。
+
+---
+
 ## v2.1.0（2026-10-16）—— 面板缩放/平移 · 一次多选零件 · headless 作业区
 
 **来源**：用户提问 —— ① 多子代理并行建模用的是 headless，"这怎么看"；② "能一次多选零件吗"；③ "可以在标签页 blender 视口里进行放大缩小移动视角吗" → 裁决"都做"。
