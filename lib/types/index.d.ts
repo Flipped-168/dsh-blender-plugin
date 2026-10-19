@@ -26,7 +26,6 @@ export declare const inject: string[];
 export interface Config {
     port: number;
     autoStart: boolean;
-    tuiPanel: boolean;
 }
 export declare const Config: any;
 /** 纯决策：命中 ⇒ dup=true 且计数 +1；未命中 ⇒ 记下新 hash。force=true 一律当未命中处理并重置。 */

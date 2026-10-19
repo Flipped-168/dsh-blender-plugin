@@ -9,7 +9,7 @@
 
 | 读哪节 | 为什么 |
 |---|---|
-| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧的 addon `DSH Blender Bridge`（**旧名 `MCP for Blender`**，模块名 `blender_mcp`）**不在本包内**，必须用户自备并在 Blender 里 Connect；v2.0.0 改名后模块名变了，需在 Blender 偏好设置里**重新启用**（旧条目是死引用，见 [MIGRATIONS.md](MIGRATIONS.md)） |
+| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧 addon `DSH Blender Bridge`（**旧名 `MCP for Blender`**，模块名 `blender_mcp`）**本包附带 v1.8**（`addon/dsh_blender_bridge.py`），也可用上游原版；必须在 Blender 里 Connect。v2.0.0 改名后模块名变了，需在偏好设置里**重新启用**（旧条目是死引用，见 [MIGRATIONS.md](MIGRATIONS.md)） |
 | **§3 安装（5 步）** | 构建 → 配置 → 装进 profile → 起 Blender → 验证 |
 | **§8 常见故障**（英文 README 为 §9） | 报错先查表，别自己发明修法 |
 
@@ -51,11 +51,17 @@
   ② `npm test` 全绿；③ 提交 → `git tag -a vX.Y.Z` → 推 `main` 与 tag → `gh release create`。
 - **发布 npm**：`npm pack` → `npm publish <tgz> --access public`（包名 `@dsh-external/dsh-blender-plugin`，需维护者 npm 登录）。
   打包面靠 `runtime/.npmignore` + `package.json` 的 `files` 否定模式把 `runtime/ext/venv`（1.2 G）挡在包外 ——
-  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：v2.2.0 起约 **1.5 MB / 161 文件**，含随包 skill；此前 1.3 MB / 144；
+  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：v2.3.0 起约 **1.4 MB / 159 文件**（删掉 TUI 面板后变小），含随包 skill + 选中桥；v2.2 为 1.5 MB/161、v2.1 为 1.3 MB/144；
   曾经漏成 458 MB / 12638 文件）。
 - **随包 skill 的真源**：`skills/blender-modeling/`（SKILL.md + references + MIT LICENSE/NOTICE）。插件加载时注册 bundled provider
   （`ctx.inject(['skills'], …)`，rank 600；用户 `~/.dsh/skills` 的 400 副本仍优先）。**改 skill 直接改这里**，独立仓库
   `dsh-skill-blender-modeling` 仅作非 DSH 宿主的镜像；改完跑 `node tests/skill_bundle_selftest.mjs`（61 断言，含带 signal 的真 SkillRegistry 集成）。
+- **v2.3 选中桥 + 删面板**：DSH 侧视口面板 / `blender_rt_pick` / TUI 侧栏面板**已删除**（入口改到 Blender 原生选中）。addon 侧 `ActivityTracker` + 5 条命令（`get_activity_state` / `get_selection` / `send_selection_to_dsh` /
+  `get_collections` / `send_collection_to_dsh`，addon v1.8；集合发送用于大装配体）；
+  后端 `/host/selection{,/latest,/consume}`；Web 客户端 `conversation.input.dock` 无头桥。契约唯一真源 `docs/宿主集成-接口契约-v2.3增补.md`；
+  回归 `node tests/selection_store_selftest.mjs` + `node tests/client_bundle_selftest.mjs`（改后两者都必须在 `npm test` 里绿）。
+  两个 N 面板模式：**多选 / 集合**（`get_collections` / `send_collection_to_dsh`；大装配体用集合）。
+  **装完/升级完必须主动告诉用户这些新功能**（话术见 `docs/AI-安装提示词.md` §③.5）——用户装插件后不会去翻 CHANGELOG。
 
 ## 4. 给用户的一段提示词
 

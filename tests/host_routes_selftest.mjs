@@ -223,6 +223,62 @@ console.log('[判据 2] 非 loopback Origin 不回显（不放行任意站点）
 }
 console.log('');
 
+// ── 判据 S1–S3 · Blender 原生选中 → DSH（v2.3；纯 HTTP，不需要 Blender）──────
+// 契约：docs/宿主集成-接口契约-v2.3增补.md §S1–§S3。
+console.log('[判据 S1–S3] Blender 原生选中 → DSH（/host/selection）');
+{
+  const marker = 'SELFTEST-' + Date.now().toString(36);
+  const post = await req('POST', '/host/selection', {
+    headers: { Origin: LOOPBACK },
+    json: {
+      v: 1, source: 'blender-addon', sent_at: Date.now(),
+      selection: {
+        count: 2, names: [marker + '-Cube', marker + '-Sphere'], truncated: false,
+        active: marker + '-Cube', mode: 'OBJECT',
+        objects: [{ name: marker + '-Cube', type: 'MESH', dimensions_mm: [100, 100, 100] }],
+      },
+      scene: { name: 'SELFTEST-SCENE', file: 'selftest.blend' },
+      activity: { state: 'human', human_active: true, agent_active: false },
+    },
+    timeout: 8000,
+  });
+  show(post, 'POST /host/selection');
+  const pj = jbody(post);
+  if (post.ok && post.status === 404) {
+    doSkip('判据 S1', '/host/selection 未装载（后端版本旧）—— 重启后端后重跑');
+    doSkip('判据 S2', '同上');
+    doSkip('判据 S3', '同上');
+  } else {
+    ok('判据 S1 · POST selection → 200 + ok:true + seq', post.ok && post.status === 200 && pj && pj.ok === true && Number.isInteger(pj.seq), pj);
+    ok('判据 S1 · 响应带 received_at（毫秒）', pj && Number.isFinite(pj.received_at), pj && pj.received_at);
+    const seq = pj && pj.seq;
+    const latest = await req('GET', '/host/selection/latest', { headers: { Origin: LOOPBACK }, timeout: 8000 });
+    show(latest, 'GET /host/selection/latest');
+    const lj = jbody(latest);
+    ok('判据 S2 · latest → unconsumed=true 且带对象名',
+      latest.ok && lj && lj.ok === true && lj.unconsumed === true
+      && lj.selection && Array.isArray(lj.selection.names) && lj.selection.names.indexOf(marker + '-Cube') >= 0, lj);
+    ok('判据 S2 · latest 的 seq 与 POST 一致', lj && lj.seq === seq, { seq: seq, latest: lj && lj.seq });
+    ok('判据 S2 · latest 带 activity/scene（面板展示用）',
+      lj && lj.activity && lj.activity.state === 'human' && lj.scene && lj.scene.name === 'SELFTEST-SCENE', lj && { activity: lj.activity, scene: lj.scene });
+    const consume = await req('POST', '/host/selection/consume', { headers: { Origin: LOOPBACK }, json: { seq: seq, ok: true, how: 'actions' }, timeout: 8000 });
+    show(consume, 'POST /host/selection/consume');
+    const cj = jbody(consume);
+    ok('判据 S3 · consume → 200 + consumed_seq=seq', consume.ok && cj && cj.ok === true && cj.consumed_seq === seq, cj);
+    const latest2 = await req('GET', '/host/selection/latest', { headers: { Origin: LOOPBACK }, timeout: 8000 });
+    const lj2 = jbody(latest2);
+    ok('判据 S3 · 消费后 unconsumed=false / selection=null（不会重复插入）',
+      lj2 && lj2.ok === true && lj2.unconsumed === false && lj2.selection === null, lj2);
+    ok('判据 S3 · last_consume 记录了客户端的插入结果（诊断用）',
+      lj2 && lj2.last_consume && lj2.last_consume.seq === seq && lj2.last_consume.ok === true && lj2.last_consume.how === 'actions', lj2 && lj2.last_consume);
+    const bad = await req('POST', '/host/selection/consume', { headers: { Origin: LOOPBACK }, json: { seq: 0 }, timeout: 8000 });
+    ok('判据 S3 · 非法 consume(0) → 400', bad.ok && bad.status === 400, { status: bad.status, body: jbody(bad) });
+    const badPut = await req('POST', '/host/selection', { headers: { Origin: LOOPBACK }, json: null, timeout: 8000 });
+    ok('判据 S1 · 非对象 payload → 400', badPut.ok && badPut.status === 400, { status: badPut.status, body: jbody(badPut) });
+  }
+}
+console.log('');
+
 // ── 判据 3–8 需要 Blender（帧来自真实视口）─────────────────────────────────
 if (!blenderUp) {
   for (const [n, why] of [['3', 'capture 需要 Blender'], ['4', '需要帧'], ['5', '需要帧+矩阵'], ['6', '需要帧+矩阵'],

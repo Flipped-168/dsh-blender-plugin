@@ -1,5 +1,84 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.3.0（2026-10-19）—— Blender 原生选中 → DSH · 统一 human/agent activity 判定（addon v1.8）
+
+**来源**：用户裁决 ——「bl 插件端加一个"操作中"的判定，把当前 DSH 的选中功能移到 Blender 插件端」。
+确认口径：**B. Blender N 面板「发送选中到 DSH」** + **C. human / agent 两种 activity 统一成一个状态**。
+**结论**：选物体不再依赖在 DSH 面板里点低清截图 —— 在 Blender 原生选区里选，按 N 面板按钮即进 DSH 当前会话草稿
+（**不自动发送**）；Blender 侧同时给出 `idle / human / agent / both` 四态，面板实时显示、模型可查。
+**同版本删除**（用户明确要求）：DSH 侧视口面板（Web 侧栏 + TUI 侧栏）、点击进消息、模型请求点选 `blender_rt_pick`
+—— 模型工具 **16 → 15**；后端 `/host/view/*`、`/host/pick*`、`/host/ready` 路由保留但无本仓 UI 消费者。
+**两种模式**：N 面板 `dshbb_selection_mode` 可切「**多选**」（发当前选中对象）/「**集合**」（整组发送，大装配体用）。
+
+### 新 · addon v1.8（协议号仍 11，向后兼容）
+
+- **`ActivityTracker`**（主线程，本地判定、**与 telemetry 同意无关、不上传**）：
+  - human 信号 = `bpy.context.window.modal_operators` 非空（拖拽/变换/菜单等，持续有效）+ 最近 1.5 s 人类操作符
+    （含 view3d 导航，agent 命令期间抑制）+ 撤销/重做 + 原生选区/活动对象/模式变化（1.5 s 窗口）；
+  - agent 信号 = agent 命令执行中（`agent_depth>0`）或最近一次命令结束 ≤1.5 s；
+  - agent 命令结束时作废选区指纹 ⇒ 不会把工具自己的改动误报成"人操作"。
+- **5 条常驻命令**（进 `capabilities`，常驻 19 → **24**，总命令 34 → **39**）：
+  `get_activity_state`（四态快照；**查询自身不计入 agent**）· `get_selection`（原生选中：名字/类型/活动对象/模式/场景）·
+  `send_selection_to_dsh`（把 §S1.3 payload POST 给后端；按钮与命令同一实现）·
+  `get_collections`（场景集合 + 对象数 + 选中数）· `send_collection_to_dsh`（整组发送；大装配体免逐个选）。
+- **N 面板新 section「Selection → DSH」**：活动状态行（人/agent/同时/空闲）+ 最近人类动作 + **模式切换（多选 / 集合）** +
+  多选模式下的已选摘要与「发送选中到 DSH」/ 集合模式下的集合下拉（`dshbb_collection_target`）与「发送集合到 DSH」 +
+  最近一次发送结果 + 后端地址（可用场景属性 `dshbb_backend_url` / 环境变量 `DSH_BLENDER_BACKEND_URL` 覆盖）。
+- **大装配体收敛**：对象模式草稿文本最多列 24 个名字（超出给"共 N 件"）；集合模式只给"集合名 + 件数 + 前几个成员"——
+  不再把 200 个对象名刷进输入框。
+- **Blender 侧两种模式完善（用户要求）**：多选模式在 N 面板里给出**可滚动的对象列表**（名字 + 类型，最多 30 行）；
+  集合模式给出**成员列表 + 件数 + 子集合 + 当前选中数**；切到集合模式时 `update` 回调自动推断最相关集合，
+  另有 ⟳ 按钮（`dshbb.use_selection_collection`）随时重新推断。
+- 真机实测：模态探针 `human_active=true` + `modal_operators=[DSH_TMP_OT_modal_probe]`；模态结束后回到 `idle`；
+  面板按钮 → 后端 `seq` 增长 → 浏览器草稿收到文本（`last_consume {ok:true,how:"actions"}`）；
+  集合命令 `get_collections` / `send_collection_to_dsh` 真机可用；旧 v1.7 addon 的其它命令不受影响。
+
+### 新 · 后端 `/host/selection`（纯内存，零 Blender 往返）
+
+- `runtime/selectionstore.mjs`：payload 消毒（名字 ≤200 / 对象 ≤50 / 字符串 ≤200 字符）· `seq` / `consumed_seq` 只增不减 ·
+  `consume` 幂等 + 非法 seq 400 · `last_consume` 记录客户端插入结果（回答"按钮点了为什么草稿没字"）。
+- 3 条路由：`POST /host/selection`（addon 推送，**不校验写租约**）· `GET /host/selection/latest`（只有未消费才带 payload）·
+  `POST /host/selection/consume`（可带 `{ok,how,reason}` 诊断）。
+- `tests/selection_store_selftest.mjs`（接入 `npm test`）：**53 断言**覆盖消毒 / seq / consume / 诊断 / 集合 payload。
+
+### 新 · Web 客户端半边：无头桥 `conversation.input.dock`
+
+- 注册 id `blender-selection-bridge`（session 作用域、渲染 null、**面板收起也收**），每 **1200 ms** 轮询 latest。
+- 插入当前会话草稿：优先 `inputActions.insertText`（可追加、保留用户内容）；备用 `SessionInput.setDraft` 仅当草稿为空；
+  **不自动发送**。插入成功才 `consume {ok:true,how}`；失败不消费、重试 3 次后消费并回传原因。
+- **不按页面可见性跳过**：用户可能点完 Blender 按钮立刻切回 DSH；轮询零 Blender 往返。
+- `tests/client_bundle_selftest.mjs` 重写为 v2.3 精简版：**46 断言**（bundle 形状 / 无面板残留 / @ codec / 选中文本（对象/集合/大名单收敛）/ 三种插入路径 / dock 注册）。
+- 删除 `src/tui-panel.ts`、`tests/tui_panel_selftest.mjs`、`docs/TUI-适配.md`；capability lock 16 → 15 工具。
+
+### 文档 / 契约
+
+- 新契约唯一真源：[`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md)（§S0 背景 · §S1 addon 命令与 payload ·
+  §S2 三条路由 · §S3 客户端插入 · §S4 判据 S1–S8 · §S5 已知边界）。
+- README（EN / zh-CN）：新增 §4.3「Blender 原生选中 → DSH」+ 四态表 + 前置（addon v1.8 + 重启 DSH）+ TUI 不支持说明；
+  命令面计数 34→37（常驻 19→22）；版本 v2.3.0。
+- 操作教程新增 §11（步骤 / 排错 / 验收）；`AGENTS.md`、`llms.txt`、`addon/README.md`、第三方安装清单、配置参考同步。
+- 版本三处同步 **2.3.0**（`package.json` / `src/index.ts` 的 `PLUGIN_VERSION` / 重建后的 `lib/`）；**addon 1.8**。
+
+### 验收（实测，2026-10-19）
+
+- `npm test` **exit 0**（新增 selection_store + client_bundle 入列）；`client_bundle_selftest` 全过；schema 预算仍 ≤12,000。
+- 真机：addon v1.8 重载后 `get_addon_info` 回 `[1,8]` 且 capabilities 含三条新命令；`get_activity_state` 空闲时 `idle`、
+  命令后 `agent`、模拟人类操作/模态时 `human`/`both`（`last_human_kind=selection` / `modal:…` 实测）。
+- 端到端：Blender 选中 Cube+Camera → 面板按钮 → 后端 `seq` → **当前会话草稿收到文本**；
+  `/host/selection/latest.last_consume` 回 `{ok:true, how:"actions"}`（真实 Web 客户端插入成功）。
+- 打包：**1.4 MB / 159 文件**（v2.2 为 1.5 MB/161；删 TUI 面板 3 个文件 + 新增 selectionstore/契约/测试；`skills/blender-modeling/` 8 文件仍在包内）。
+
+### 未证实 / 已知边界
+
+- **必须重启 DSH**（客户端半边是启动时装载的模块）；开发期 HMR 可能热加载，正式升级以重启为准。
+- **DSH 视口面板已删除**：老用户的侧栏 tab 会消失（代码不再注册）；`/host/view/*` 等路由仍在但无 UI。
+- **装完必须通知用户**：`docs/AI-安装提示词.md` §③.5 已要求安装型 AI 主动介绍原生选中 / 两种模式 / activity / 删除项。
+- **TUI 暂不支持草稿插入**（无 composer dock；与 `sendToChat` 未授权的既有边界一致）。
+- 桥只写**当前打开的会话**；多标签页极端情况下同一选中可能各插一次（服务端 `last_consume` 保留最后一条）。
+- 宿主面板在 Blender 主线程之外无法逐帧刷新（面板显示随 Blender 重绘更新）。
+
+---
+
 ## v2.2.0（2026-10-19）—— skill 并入插件仓：随包发布 + 加载时自动注册
 
 **来源**：用户提问 ——「把这个 blender-modeling skill 合并到 blender 插件仓库吧，好多人不看 github 主页不下载这个 skill」。

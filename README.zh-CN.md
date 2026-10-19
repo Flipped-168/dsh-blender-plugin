@@ -27,9 +27,10 @@
 > 独立仓库 [dsh-skill-blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling) 仅作**非 DSH 宿主**的镜像。
 
 > 让 **AI 模型真正驱动 Blender**：不用人点鼠标、不截屏喂图、不装 MCP 服务端，
-> 通过一条 TCP 直连通道拿到 **16 个模型侧工具**：**看视口 / 改场景 / 连续观察 / 内环搜索 / addon 命令面 / 渲染优化 / 对象精简 / 无头跑重活 / 热无头会话 / 作业层 / 事务回滚 / 配方库 / 判定与验收（28 family · 186 op）/ 通道运维 / 请用户点选（单选或多选）**。
+> 通过一条 TCP 直连通道拿到 **15 个模型侧工具**：**看视口 / 改场景 / 连续观察 / 内环搜索 / addon 命令面 / 渲染优化 / 对象精简 / 无头跑重活 / 热无头会话 / 作业层 / 事务回滚 / 配方库 / 判定与验收（28 family · 186 op）/ 通道运维 / 请用户点选（单选或多选）**。
 >
-> **版本 v2.2.0** —— 自带 runtime（node + python），包内路径全相对，**换机器不用改源码**；配置走 `runtime/config.mjs`（env → 配置文件 → 自动探测 → 默认）。**v2.2.0 起随包 skill `blender-modeling` 自动注册**（装插件即有），并新增 **dsh-TUI 侧栏视口面板 / 点选**（§4.2）。
+> **版本 v2.3.0** —— 自带 runtime（node + python），包内路径全相对，**换机器不用改源码**；配置走 `runtime/config.mjs`（env → 配置文件 → 自动探测 → 默认）。
+> v2.2 起随包 skill `blender-modeling` 自动注册；**v2.3 新增 Blender 原生选中 → DSH 草稿 + 统一 human/agent activity 判定（§4.2，需 addon v1.8+，两种模式：多选 / 集合）**；同版本**删除 DSH 侧视口面板与 `blender_rt_pick`**。
 > **操作教程：[docs/操作教程.md](docs/操作教程.md) · 配置：[docs/配置参考.md](docs/配置参考.md) · 部署 SOP：[docs/部署SOP.md](docs/部署SOP.md)**
 
 ---
@@ -43,7 +44,7 @@
 - **建模 / 造型**：`sculpt_*` 程序化雕刻（numpy 位移笔刷 + 体素 / multires / dyntopo + 遮罩）· `fix_*` 网格修复闭环 · `uv_*` UV 四件套 · `sweep_*` 沿路径扫掠 · `shape_plan → shape_sections → shape_loft` 参考图还原 · `vehicle_*` 车辆外壳 · `material_build / material_apply / material_bake` 材质节点图与 bake。
 - **判定 / 验收**：`audit_scene` / `audit_mesh`（网格体检）· `audit_gate`（装配门）· `audit_interference` / `audit_overlap`（干涉 / 重叠）· `qc_render_views` / `qc_compare`（对照图与 IoU）· `print_report`（薄壁 + 悬垂）· `deliver_export` / `deliver_verify`（OBJ/MTL + md5）· `motion_joints` / `motion_measure` / `motion_export_urdf` · `gate_plan(preset="assembly") → gate_run(spec_path=…)` 读 `verdict` 三态 · 契约层三态判定 `supported·refuted·unresolved`。
 - **可发现性 / 稳定性**：`blender_rt_plan(op="catalog")` 三级渐进披露（插件本地直出；未知 op 回 `did_you_mean` 带骨架）· 渲染中主线程写命令秒回 `BUSY_RENDER`（`render_state / render_wait / render_reset`）· `runtime/offline_bootstrap.py` 离线逃生口 · 验收不再随规模退化（7 类面数门槛默认"不限、全跑"）。
-- **addon 支持**：v1.7（protocol 11，19 常驻 + 15 集成门控）与扁平协议 v1.6 都通，`addonProtocol=auto` 自动适配。
+- **addon 支持**：v1.8（protocol 11，24 常驻 + 15 集成门控）与扁平协议 v1.6 都通，`addonProtocol=auto` 自动适配。
 - **回归**：`tests/capability.lock.json` 锁 28 / 183 / 15 · 路由契约静态 28/28、真机 70/70 · `npm test` 13 步 · macOS `npm run test:mac` 45 断言、GUI 通道 11/11。
 
 ---
@@ -80,7 +81,7 @@
 ## 2. 前置条件（Requirements，5 条，缺一不可）
 
 1. **Blender 4.x / 5.x（GUI 模式）** —— 本通道要的是"能看见的 Blender"；后台 `-b` 只用于无头工具那条线。
-2. **Blender 里的 addon**：**两条路任选** —— ① **本仓附带**（推荐）：[`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)（改名版，模块名 `dsh_blender_bridge`，见 [`addon/README.md`](addon/README.md)）；② **上游原版**：`MCP for Blender`（模块名 `blender_mcp`，[ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)）。**两条都能用** —— 插件对 addon 标识做了**双名回退**（新名优先、旧名回退），所以用哪条都连得上。它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 34 条（19 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
+2. **Blender 里的 addon**：**两条路任选** —— ① **本仓附带**（推荐）：[`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)（改名版，模块名 `dsh_blender_bridge`，见 [`addon/README.md`](addon/README.md)）；② **上游原版**：`MCP for Blender`（模块名 `blender_mcp`，[ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)）。**两条都能用** —— 插件对 addon 标识做了**双名回退**（新名优先、旧名回退），所以用哪条都连得上。它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 39 条（24 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
    - **也支持 harveyxiacn 增强版 `blender_mcp_addon`**（协议不同，插件侧自动适配，配置项 `addonProtocol`，默认 `auto`；见 `docs/配置参考.md` §6）。该实现没有上面那 5 条资产集成通道，相关命令会明确报错。
    - 装好后：3D 视图按 `N` → 找到「DSH Blender Bridge」面板 → **Connect**；兼容性自检 `node runtime/_probe_tools.mjs`（逐条探测命令，输出 ok / 耗时）；协议自检 `node tests/protocol_selftest.mjs`（不需要 Blender）。
    - ⚠️ **改名迁移（v2.0.0）**：旧版本叫 `MCP for Blender`（模块名 `blender_mcp`）；改名后模块名变了，需在 Blender 偏好设置里**重新启用 `DSH Blender Bridge`**（`Edit ▸ Preferences ▸ Add-ons`）—— 旧的"已启用"记录指向 `blender_mcp`，是**死引用**，可移除。完整迁移要点见 [MIGRATIONS.md](MIGRATIONS.md)。
@@ -94,7 +95,7 @@
 
 ## 3. 安装（Install，5 步）
 
-> **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的 `dsh-external-dsh-blender-plugin-2.2.0.tgz`（1.5 MB / 161 文件）：解包后放进 `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
+> **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的 `dsh-external-dsh-blender-plugin-2.3.0.tgz`（1.4 MB / 159 文件）：解包后放进 `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
 > 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
 
 ```bash
@@ -145,48 +146,47 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # ③ 换个角度�
 
 期望：① `kind=ok`（含 `roundTripMs` / `ping_ms` / `config`）；②③ 返回内联图片 + 毫秒数与 hash。
 
-### 4.1 宿主集成：视口面板 · 点击进消息 · `@` 提及
+### 4.1 宿主集成：`@` 提及 + Blender 原生选中（v2.3 起视口面板已删除）
 
-除模型工具外，本包还给 DSH 界面贡献一个**用户侧**半边（走独立 `/host/*` 路由，**不进** op 目录、**不加**模型工具 ⇒ 16 个工具 / 186 个 op 的能力面零变化）：
+除模型工具外，本包还给 DSH Web 客户端贡献一个**用户侧**半边（走独立 `/host/*` 路由，**不进** op 目录、**不加**模型工具 ⇒ **15 个工具 / 186 个 op** 的能力面零变化）：
 
-- **视口面板**：会话视图里的「Blender 视口」tab，显示最新一帧视口（1500 ms 轮询；帧陈旧时 600 ms）。
-- **点击进消息**：点画面里的物体 → 打标记 → 按「加入消息」把**截图 + 对象名文本**放进草稿（**不自动发送**，发不发你决定）。
 - **`@` 提及**：输入框敲 `@` 出对象 / 材质 / 集合候选（引用带前缀 `object:<name>` / `material:<name>` / `collection:<name>`），选中后由 `codec` **拆掉前缀**、序列化成 `<blender-object>Cube</blender-object>`，模型不再猜对象名。
-- 三条纪律：面板只读后端 store（**不占 Blender 主线程**）· 文件/场景**错配拒绝**（回 `*_mismatch`，绝不投到当前场景）· 静默窗口 0.8 s 是**后端**语义。
-
-> ⚠ **照实说明（未证实项）**：面板在 `conversation.view` 槽位上，**大概率是对话区的一个 View 页签**而非常驻侧栏；`section` 分组标题、`codec.serialize` 进模型文本、`inject` 业务面合并、以及"静默后自动重拍"（当前**只有手动重拍**）**均未证实**。逐条见 [操作教程 §9.9](docs/操作教程.md#9-宿主集成)。
+- **Blender 原生选中 → 草稿**（v2.3，需 addon v1.8+）：在 Blender 视口里原生选中 → 按 `N` →「DSH Blender Bridge」→ **Selection → DSH** → 发送；选中进**当前会话草稿**（**不自动发送**）。N 面板有**两种模式**：**多选**发送当前选中对象；**集合**把一整个集合作为一条发送（大装配体推荐，草稿文本收敛成"集合 + 件数 + 前几个成员"，不再刷几百个名字）。
+- **activity 状态**（v2.3）：Blender 统一判定 `idle / human / agent / both`（模态操作、最近人类编辑/撤销/选区变化、agent 命令窗口）；N 面板实时显示，模型可查 `blender_rt_cmd get_activity_state` / `get_selection`（查询**自身不算** agent）。
+- **v2.3 已删除**：DSH 侧视口面板（Web 右侧栏 + TUI 侧栏）、点击进消息、第 16 个工具 `blender_rt_pick`。请改用原生选中；模型侧截图仍用 `blender_rt_see`。后端 `/host/view/*`、`/host/pick*`、`/host/ready` 路由为兼容保留，但本仓**已无 UI 消费者**。
 
 > ⚠ **改完/升级完必须重启 DSH**：客户端半边（`lib/client.js`）是 DSH 启动时加载的模块；只改了后端才用 `blender_viewport(op="restart")`。
-> 面板从 HTTP loopback GUI 或官方桌面端 `dsh-app://app` 跨源调 `9877`；后端仅对 **HTTP loopback** 与**精确的 `dsh-app://app`** 回显 CORS Origin，其他来源不带 `Access-Control-Allow-Origin`。这不是请求身份验证或服务端 403 拒绝。
+> 客户端半边从 HTTP loopback GUI 或官方桌面端 `dsh-app://app` 跨源调 `9877`；后端仅对 **HTTP loopback** 与**精确的 `dsh-app://app`** 回显 CORS Origin。
 > 用法、CORS/端口要求与**故障对照表**见 [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成)。
 
-**v1.2 增补**：另有**右侧栏**视口面板（只在 `/host/ready` 为 true 时出现，Blender 关掉就消失）+ **模型请求点选**（第 16 个工具 `blender_rt_pick`，阻塞式：模型请你点物体 → 点完把对象名返回给模型）。用法、横幅应答/取消、故障对照与未证实项见 [操作教程 §10 右侧栏视口面板 + 模型请求点选](docs/操作教程.md#10-右侧栏视口面板--模型请求点选v12)。
+### 4.2 Blender 原生选中 → DSH（v2.3，需 addon v1.8+）
 
-### 4.2 在 dsh-TUI 里用（侧栏视口面板 + 点选）
+在 Blender 视口里原生选中物体 → 按 `N` →「DSH Blender Bridge」→ **Selection → DSH** → 发送。
+addon 把选中 POST 给后端（`POST /host/selection`），Web 客户端半边把它插入**当前会话草稿**（**不自动发送**）。
+两种模式：
 
-dsh-TUI ≥ 0.16 提供实验性 `ctx.tuiPanels`。本包检测到该服务后会自动注册一个
-「**Blender 视口**」侧栏面板；Web / headless 下不注册 TUI 面板，16 个模型工具不变。
-v2.2 给 `/host/*` 新增 `ui`/`watching` 附加字段，并让 `blender_rt_pick` 在没有面板轮询时
-2.5–6 s 快速失败；Web 页面可见时 `/host/ready` 仍算 watcher，侧栏收起不会误杀。
+| 模式 | 发送什么 |
+|---|---|
+| **多选** | 当前选中的多个对象 —— N 面板里是**可滚动的对象列表**（名字 + 类型，最多 30 行）；草稿文本收敛成"前 24 个 + 共 N 件" |
+| **集合** | 一整个集合 —— N 面板显示**成员列表** + 件数 + 子集合；草稿文本为"集合名 + 件数 + 前几个成员"（几百个零件时用这个） |
 
-- **打开**：`Ctrl+B` 后点「Blender 视口」标签，或 `/panel <id>`。
-  实际 id 由宿主分配（没有 Component identity 时形如 `act1:viewport`）；
-  跑 `blender_viewport(op="doctor")` 会打印 `宿主面板：✅ dsh-TUI 侧栏已注册（act1:viewport）`。
-- **面板内**：`c` 抓一帧（`max_size=1600`）· `r` 刷新 · 点画面选物体 · `Esc` 取消 pending 点选。
-- **模型请用户点选**：`blender_rt_pick` 发请求后会**自动打开/聚焦**面板并显示横幅；
-  点完对象名直接回给模型，`Esc` 取消。若没有面板在轮询（TUI < 0.16 / 面板注册失败 / `tuiPanel:false`），
-  工具约 **2.5 s** 返回 `PICK 无人应答`，不再空等 120–600 s。
-- **图片**：终端支持 Kitty/Sixel 时显示真实画面；不支持时回退成**自动对比度 ASCII 预览**
-  （每 cell 一个字符，深灰视口背景也能看出轮廓），取帧/点选/模型看图仍然正常
-  （模型侧始终拿到 PNG 附件）。
-- **暂不支持**：点击进消息（`sendToChat` 未授权）、`@` 提及、v2.1 的多选 UI/缩放平移/作业区。
-- **开关**：插件行 `config.tuiPanel: false` 可关闭面板（默认 `true`，仅对有 `tuiPanels` 的宿主生效）。
+同一个 N 面板还实时显示统一 **activity 状态**：
 
-安装、快捷键、排障表与本机验收记录见 [docs/TUI-适配.md](docs/TUI-适配.md)。
+| 状态 | 含义 |
+|---|---|
+| `idle` | 双方都没在操作 |
+| `human` | 模态操作中（拖拽 / 变换 / 菜单），或 1.5 s 内有人类操作 / 撤销 / 选区变化 |
+| `agent` | agent 命令执行中，或刚结束 ≤1.5 s |
+| `both` | 两个信号同时存在 |
+
+- 前置：**addon v1.8+**（本仓附带版）+ 升级后**重启 DSH**；草稿写入只在 Web 客户端半边生效。
+- 模型侧可查同一状态：`blender_rt_cmd get_activity_state` / `get_selection`（查询**自身不算** agent）。
+- **TUI 暂不支持草稿插入**（没有 composer dock）；桥总是写**当前打开的会话**。
+- 契约：[docs/宿主集成-接口契约-v2.3增补.md](docs/宿主集成-接口契约-v2.3增补.md)。
 
 ---
 
-## 5. 工具参考（Tool reference，16 个工具）
+## 5. 工具参考（Tool reference，15 个工具）
 
 ### `blender_rt_see` —— 看视口
 
@@ -215,7 +215,7 @@ v2.2 给 `/host/*` 新增 `ui`/`watching` 附加字段，并让 `blender_rt_pick
 
 ### `blender_rt_commands` —— 查命令面与集成状态
 
-列出直连通道当前可用的 addon 命令（实测 34 条 = 19 常驻 + 15 集成门控）与 5 个集成的真实状态（开关是否打开、是否缺 API key）。调 `blender_rt_cmd` 之前先用它 —— 命令面随 addon 版本变化，以实时输出为准。
+列出直连通道当前可用的 addon 命令（实测 39 条 = 24 常驻 + 15 集成门控）与 5 个集成的真实状态（开关是否打开、是否缺 API key）。调 `blender_rt_cmd` 之前先用它 —— 命令面随 addon 版本变化，以实时输出为准。
 
 ### `blender_rt_perf` —— 渲染性能
 
@@ -263,7 +263,7 @@ v2.2 给 `/host/*` 新增 `ui`/`watching` 附加字段，并让 `blender_rt_pick
 `status`（健康 / 视口区域 / 计数 / 版本）· `doctor`（真跑一次 bpy 往返的三级体检：未连 / 主线程忙 / addon 线程卡死 + 修法）· `start` / `stop` / `restart`（后端进程与 15 s 看护）· `who` / `lease` / `release`（写租约）。
 `launch`：一键拉起 GUI Blender 并自动 Connect addon —— 写 boot 脚本 → detached spawn → **轮询 addon 端口**（唯一可信判据）→ 顺手 doctor；幂等，支持 `wait_ms` / `file` / `exe` / `addon_module` / `addon_file` / `dry_run`。
 
-### 通道语义（16 个工具共用）
+### 通道语义（15 个工具共用）
 
 - **只有一条 TCP 直连通道**：后端 `127.0.0.1:9877` → addon socket `127.0.0.1:9876`；插件加载时自动拉起后端并带 15 秒看护。
 - **持久内核 `K`**：`execute_code` 每次是新命名空间，状态要挂在 `K` 上（`sys.modules["dsh_rt_kernel"]`）。路径助手 `K.win_path / K.wsl_path / K.blend_path / K.out_dir`（GUI 与无头通用），另有 `K.run(path, reload_modules=True)`。
@@ -338,7 +338,7 @@ v2.2 给 `/host/*` 新增 `ui`/`watching` 附加字段，并让 `blender_rt_pick
 dsh-blender-plugin/
 ├── package.json · cordis.patch.yml · dsh-blender.config.example.json   # 包定义 / bundle 装配 / 配置样例
 ├── tsconfig.json · scripts/build.sh   # 构建：链接 checkout 依赖 + tsc → lib/
-├── src/index.ts                       # host：16 个工具 + 后端看护 + 租约 + 回执消毒
+├── src/index.ts                       # host：15 个工具 + 后端看护 + 租约 + 回执消毒
 ├── runtime/                           # 自带 runtime（node + python，包内路径全相对）
 │   ├── config.mjs · paths.mjs         # env → 配置文件 → 自动探测 → 默认；跨 OS 路径
 │   ├── engine.mjs · server.mjs        # 直连引擎（addon socket 客户端 + 路由）与后端 HTTP 9877
@@ -369,11 +369,11 @@ dsh-blender-plugin/
 **① 离线回归（一条命令，13 步）**：`npm test` —— 判据是**退出码 0**（别用 grep 判"失败"字样，会漏掉静默失败）。
 单跑入口：`npm run test:discover`（工具可发现性 51 项）· `test:lease` · `test:workdir`（14 项）· `test:provenance`（16 项）· `test:generator`（13 项）· `test:dedupe` · `test:mac`（45 项）· `test:lossless`（回执出口消毒）· `test:routes`（路由契约）。
 
-**② DSH 升级后先跑这三条**（工具是用宿主的 `defineTool` 声明的，契约一变就是"16 个工具整体消失"）：
+**② DSH 升级后先跑这三条**（工具是用宿主的 `defineTool` 声明的，契约一变就是"15 个工具整体消失"）：
 
 ```bash
 node tests/protocol_selftest.mjs         # addon 协议层（28 项，不需要 Blender / DSH）
-node tests/dsh_api_compat_probe.mjs      # 16 个工具 + 16 个静态 timeoutMs + 0 报错
+node tests/dsh_api_compat_probe.mjs      # 15 个工具 + 静态 timeoutMs + 0 报错
 blender_viewport(op="doctor")            # 回执里的「宿主 API：dsh-tools@<版本> @ <路径>」是自证
 ```
 

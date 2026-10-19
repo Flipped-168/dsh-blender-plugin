@@ -711,7 +711,8 @@ export function createEngine(opts = {}) {
   function clearRenderFlag() { try { fs.unlinkSync(RENDER_FLAG_WSL); return true; } catch (e) { return false; } }
   // 需要 Blender 主线程的命令（ping 不在内：它走 addon 服务器线程，渲染中照样可用）
   const MAIN_THREAD_CMDS = new Set(['execute_code', 'get_scene_info', 'get_object_info', 'get_viewport_screenshot',
-    'export_scene', 'describe_node_type', 'bpy_api_lookup', 'drain_human_activity']);
+    'export_scene', 'describe_node_type', 'bpy_api_lookup', 'drain_human_activity',
+    'get_activity_state', 'get_selection', 'send_selection_to_dsh']);
   const injected = new Set();
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
   const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0 };

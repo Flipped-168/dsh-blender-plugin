@@ -30,7 +30,7 @@ from bpy.app.handlers import persistent
 bl_info = {
     "name": "DSH Blender Bridge",
     "author": "Siddharth Ahuja",
-    "version": (1, 7),
+    "version": (1, 8),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > DSH Blender Bridge",
     "description": "Connect Blender to Claude via MCP",
@@ -1080,6 +1080,519 @@ def get_edit_recorder():
     return _edit_recorder
 
 
+#region Selection / activity bridge (v1.8)
+# 「谁在操作」+「当前选中」的 Blender 侧判定（v1.8 新增）。
+#
+# 为什么要加：
+#   · 旧流程里"选中物体"是在 DSH 侧点截图完成的（面板反投影），图小、会陈旧、还要人切窗口；
+#     现在改成**在 Blender 原生选区里选**，按 N 面板的「发送选中到 DSH」直接进下一条消息。
+#   · 人正在拖拽/模态操作时，AI 不应把中间态当最终态。这里统一出
+#     human_active / agent_active / idle 三态（agent 命令窗口由 UserEditRecorder 标记）。
+#
+# 口径：
+#   · human 信号 = 模态操作符（window.modal_operators，含 transform/拖拽）+ 最近一次
+#     人类操作符/撤销/选区变化（窗口 HUMAN_ACTIVE_WINDOW_S）；
+#   · agent 信号 = agent 命令执行中（depth>0）或刚结束（AGENT_ACTIVE_WINDOW_S）；
+#   · 本判定只本地使用，不依赖 telemetry_consent（不上传任何数据）。
+HUMAN_ACTIVE_WINDOW_S = 1.5
+AGENT_ACTIVE_WINDOW_S = 1.5
+ACTIVITY_TICK_MIN_INTERVAL_S = 0.2
+SELECTION_ACTIVITY_NAMES = 8
+SELECTION_PAYLOAD_NAMES = 200
+SELECTION_PAYLOAD_OBJECTS = 50
+SELECTION_COLLECTION_ROWS = 50
+# N 面板「列表」最多画多少行（多选对象 / 集合成员）；再多就只显示计数 + 前几行。
+SELECTION_UI_ROWS = 30
+MAX_MODAL_OPERATORS = 8
+DEFAULT_DSH_BACKEND = "http://127.0.0.1:9877"
+
+
+class ActivityTracker:
+    """Unified human/agent activity + native selection snapshot (main thread only)."""
+
+    def __init__(self):
+        self._recorder = None
+        self._last_human_at = 0.0
+        self._last_human_kind = None
+        self._last_agent_at = 0.0
+        self._last_tick = 0.0
+        self._selection_fp = None
+        self._selection = {"count": 0, "names": [], "active": None,
+                           "mode": "OBJECT", "truncated": False}
+        self._modal = []
+        self._scene = None
+
+    def attach(self, recorder):
+        self._recorder = recorder
+        self._resync()
+
+    def _suppressed(self):
+        return bool(self._recorder is not None and self._recorder._suppressed)
+
+    @property
+    def agent_depth(self):
+        return 0 if self._recorder is None else int(self._recorder._agent_depth)
+
+    def note_human(self, kind, now=None):
+        """Record a human-originated action; agent-issued commands are ignored."""
+        if self._suppressed():
+            return
+        self._last_human_at = time.time() if now is None else float(now)
+        self._last_human_kind = str(kind or "activity")
+
+    def note_agent_end(self, now=None):
+        """Mark that an agent command just finished (so its side effects are not blamed on the human)."""
+        self._last_agent_at = time.time() if now is None else float(now)
+
+    def _resync(self):
+        """Drop the previous selection fingerprint after agent commands (avoids a false 'human' event)."""
+        self._selection_fp = None
+
+    @staticmethod
+    def _modal_operators():
+        try:
+            win = bpy.context.window
+            ops = list(getattr(win, "modal_operators", []) or []) if win is not None else []
+        except Exception:
+            return []
+        out = []
+        for op in ops[:MAX_MODAL_OPERATORS]:
+            try:
+                out.append(str(getattr(op, "bl_idname", None) or getattr(op, "name", None) or "modal"))
+            except Exception:
+                out.append("modal")
+        return out
+
+    @staticmethod
+    def _read_selection():
+        try:
+            selected = list(bpy.context.selected_objects or [])
+        except Exception:
+            selected = []
+        count = len(selected)
+        names = [obj.name for obj in selected[:SELECTION_PAYLOAD_NAMES]]
+        try:
+            active = getattr(bpy.context.active_object, "name", None)
+        except Exception:
+            active = None
+        try:
+            mode = str(bpy.context.mode)
+        except Exception:
+            mode = "UNKNOWN"
+        return {"count": count, "names": names, "active": active, "mode": mode,
+                "truncated": count > len(names)}
+
+    def tick(self, now=None, force=False):
+        """Poll modal state + native selection; throttled to ACTIVITY_TICK_MIN_INTERVAL_S."""
+        now = time.time() if now is None else float(now)
+        if not force and (now - self._last_tick) < ACTIVITY_TICK_MIN_INTERVAL_S:
+            return self._selection
+        self._last_tick = now
+        self._modal = self._modal_operators()
+        if self._modal and not self._suppressed():
+            self.note_human("modal:" + self._modal[0], now)
+        sel = self._read_selection()
+        fingerprint = (sel["count"], sel["active"], sel["mode"],
+                       None if sel["truncated"] else tuple(sel["names"]))
+        if self._selection_fp is not None and fingerprint != self._selection_fp:
+            # 刚被 agent 命令改过的选中不算人的操作（否则每次工具调用后都误报 human_active）
+            if not self._suppressed() and not self.agent_active(now):
+                self.note_human("selection", now)
+        self._selection_fp = fingerprint
+        self._selection = sel
+        try:
+            self._scene = bpy.context.scene.name if bpy.context.scene else None
+        except Exception:
+            self._scene = None
+        return sel
+
+    def human_active(self, now=None):
+        now = time.time() if now is None else float(now)
+        if self._modal:
+            return True
+        return (now - self._last_human_at) <= HUMAN_ACTIVE_WINDOW_S
+
+    def agent_active(self, now=None):
+        now = time.time() if now is None else float(now)
+        return self.agent_depth > 0 or (now - self._last_agent_at) <= AGENT_ACTIVE_WINDOW_S
+
+    def snapshot(self, now=None, include_current_command=True):
+        """Unified activity snapshot.
+
+        `include_current_command=False` is for **query commands** (get_activity_state /
+        get_selection): a query must not report *itself* as "agent is operating", otherwise
+        every model-facing query would always say `state=agent`.
+        """
+        now = time.time() if now is None else float(now)
+        self.tick(now)
+        depth = self.agent_depth
+        if not include_current_command:
+            depth = max(0, depth - 1)
+        human = self.human_active(now)
+        agent = depth > 0 or (now - self._last_agent_at) <= AGENT_ACTIVE_WINDOW_S
+        state = "both" if (human and agent) else ("human" if human else ("agent" if agent else "idle"))
+        human_idle = None if self._last_human_at <= 0 else max(0, int(round((now - self._last_human_at) * 1000)))
+        agent_idle = None if self._last_agent_at <= 0 else max(0, int(round((now - self._last_agent_at) * 1000)))
+        sel = dict(self._selection)
+        sel["names"] = list(sel.get("names") or [])[:SELECTION_ACTIVITY_NAMES]
+        sel["truncated"] = bool(sel.get("truncated") or int(sel.get("count") or 0) > len(sel["names"]))
+        return {
+            "state": state,
+            "human_active": human,
+            "agent_active": agent,
+            "human_idle_ms": human_idle,
+            "agent_idle_ms": agent_idle,
+            "last_human_kind": self._last_human_kind,
+            "agent_depth": depth,
+            "modal_operators": list(self._modal),
+            "mode": sel.get("mode", "UNKNOWN"),
+            "selection": sel,
+            "windows_ms": {"human": int(HUMAN_ACTIVE_WINDOW_S * 1000),
+                           "agent": int(AGENT_ACTIVE_WINDOW_S * 1000)},
+            "scene": self._scene,
+            "ts": now,
+            "source": "addon",
+        }
+
+
+_activity_tracker = ActivityTracker()
+_activity_tracker.attach(_edit_recorder)
+
+
+def get_activity_tracker():
+    return _activity_tracker
+
+
+@persistent
+def _dshbb_activity_undo_post(scene, depsgraph=None):
+    tracker = get_activity_tracker()
+    tracker.note_human("undo")
+    tracker.tick(force=True)
+
+
+@persistent
+def _dshbb_activity_redo_post(scene, depsgraph=None):
+    tracker = get_activity_tracker()
+    tracker.note_human("redo")
+    tracker.tick(force=True)
+
+
+@persistent
+def _dshbb_activity_depsgraph_post(scene, depsgraph=None):
+    try:
+        get_activity_tracker().tick()
+    except Exception:
+        pass
+
+
+def _register_activity_handlers():
+    """Always-on (independent of telemetry consent): local-only activity detection."""
+    handlers = [
+        (bpy.app.handlers.undo_post, _dshbb_activity_undo_post),
+        (bpy.app.handlers.redo_post, _dshbb_activity_redo_post),
+        (bpy.app.handlers.depsgraph_update_post, _dshbb_activity_depsgraph_post),
+    ]
+    for handler_list, handler in handlers:
+        if handler not in handler_list:
+            handler_list.append(handler)
+
+
+def _unregister_activity_handlers():
+    handlers = [
+        (bpy.app.handlers.undo_post, _dshbb_activity_undo_post),
+        (bpy.app.handlers.redo_post, _dshbb_activity_redo_post),
+        (bpy.app.handlers.depsgraph_update_post, _dshbb_activity_depsgraph_post),
+    ]
+    for handler_list, handler in handlers:
+        with suppress(ValueError):
+            handler_list.remove(handler)
+
+
+def _dshbb_backend_url():
+    """Backend base URL for the addon→DSH selection push (env → scene prop → default)."""
+    try:
+        env = str(os.environ.get("DSH_BLENDER_BACKEND_URL") or "").strip()
+        if env:
+            return env.rstrip("/")
+    except Exception:
+        pass
+    try:
+        scene = bpy.context.scene
+        value = str(getattr(scene, "dshbb_backend_url", "") or "").strip() if scene else ""
+        if value:
+            return value.rstrip("/")
+    except Exception:
+        pass
+    return DEFAULT_DSH_BACKEND
+
+
+def _scene_meta():
+    """(scene_name, blend_basename) — shared by both payload builders."""
+    scene_name = None
+    try:
+        scene_name = bpy.context.scene.name if bpy.context.scene else None
+    except Exception:
+        scene_name = None
+    file_name = None
+    try:
+        filepath = bpy.data.filepath
+        file_name = os.path.basename(filepath) if filepath else None
+    except Exception:
+        file_name = None
+    return {"name": scene_name, "file": file_name}
+
+
+def _best_collection_for_selection():
+    """当前选中对象里"最代表"的集合（出现在最多选中对象上的那个）；没有就 None。"""
+    try:
+        selected = list(bpy.context.selected_objects or [])
+    except Exception:
+        selected = []
+    counts = {}
+    for obj in selected:
+        try:
+            collections = list(obj.users_collection or [])
+        except Exception:
+            collections = []
+        for coll in collections:
+            try:
+                counts[coll.name] = counts.get(coll.name, 0) + 1
+            except Exception:
+                continue
+    if not counts:
+        return None
+    name = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    try:
+        return bpy.data.collections.get(name)
+    except Exception:
+        return None
+
+
+def _on_selection_mode_update(self, context):
+    """切到「集合」模式时：若还没选集合，自动用当前选中对象最常出现的集合。"""
+    try:
+        if getattr(self, "dshbb_selection_mode", "MULTI") == "COLLECTION" and getattr(self, "dshbb_collection_target", None) is None:
+            best = _best_collection_for_selection()
+            if best is not None:
+                self.dshbb_collection_target = best
+    except Exception:
+        pass
+
+
+def _selection_collection_summary(selected, cap=SELECTION_COLLECTION_ROWS):
+    """Selected objects grouped by their direct collections: [{name, count}] (count desc)."""
+    counts = {}
+    for obj in selected:
+        seen = set()
+        try:
+            collections = list(obj.users_collection or [])
+        except Exception:
+            collections = []
+        for coll in collections:
+            try:
+                coll_name = coll.name
+            except Exception:
+                continue
+            if coll_name in seen:
+                continue
+            seen.add(coll_name)
+            counts[coll_name] = counts.get(coll_name, 0) + 1
+    rows = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:cap]
+    return [{"name": name, "count": count} for name, count in rows]
+
+
+def _scene_objects_within(selected, cap=SELECTION_PAYLOAD_OBJECTS):
+    """Type + mm dimensions for up to `cap` selected objects."""
+    objects = []
+    for obj in selected[:cap]:
+        entry = {"name": obj.name, "type": getattr(obj, "type", "UNKNOWN")}
+        try:
+            dims = obj.dimensions
+            entry["dimensions_mm"] = [round(float(dims.x) * 1000.0, 1),
+                                      round(float(dims.y) * 1000.0, 1),
+                                      round(float(dims.z) * 1000.0, 1)]
+        except Exception:
+            pass
+        objects.append(entry)
+    return objects
+
+
+def build_selection_payload(include_current_command=True):
+    """Build the v1 selection payload pushed to `POST /host/selection` (no network)."""
+    tracker = get_activity_tracker()
+    selection = tracker.tick(force=True) or {"count": 0, "names": [], "active": None,
+                                             "mode": "UNKNOWN", "truncated": False}
+    try:
+        selected = list(bpy.context.selected_objects or [])
+    except Exception:
+        selected = []
+    return {
+        "v": 1,
+        "source": "blender-addon",
+        "sent_at": int(round(time.time() * 1000)),
+        "selection": {
+            "kind": "objects",
+            "count": selection.get("count", 0),
+            "names": list(selection.get("names") or []),
+            "truncated": bool(selection.get("truncated")),
+            "active": selection.get("active"),
+            "mode": selection.get("mode"),
+            "objects": _scene_objects_within(selected),
+            # v2.3：选中对象分布在哪些集合（多件装配体时让 DSH/模型先看到"集合"这一层）
+            "collections": _selection_collection_summary(selected),
+        },
+        "scene": _scene_meta(),
+        "activity": tracker.snapshot(include_current_command=include_current_command),
+    }
+
+
+def build_collection_payload(collection_name, include_current_command=True):
+    """Build a payload that sends one *collection* (instead of individual objects).
+
+    返回 None 表示集合不存在。大装配体场景下，发"集合 + 成员数"比发几百个对象名更有用；
+    成员名单仍带前 200 个，客户端文本只展示前若干个。
+    """
+    name = str(collection_name or "").strip()
+    if not name:
+        return None
+    try:
+        collection = bpy.data.collections.get(name)
+    except Exception:
+        collection = None
+    if collection is None:
+        return None
+    try:
+        members = list(collection.objects)
+    except Exception:
+        members = []
+    names = [obj.name for obj in members[:SELECTION_PAYLOAD_NAMES]]
+    try:
+        mode = str(bpy.context.mode)
+    except Exception:
+        mode = "UNKNOWN"
+    return {
+        "v": 1,
+        "source": "blender-addon",
+        "sent_at": int(round(time.time() * 1000)),
+        "selection": {
+            "kind": "collection",
+            "collection": name,
+            "count": len(members),
+            "names": names,
+            "truncated": len(members) > len(names),
+            "active": None,
+            "mode": mode,
+            "objects": _scene_objects_within(members),
+            "collections": [{"name": name, "count": len(members)}],
+        },
+        "scene": _scene_meta(),
+        "activity": get_activity_tracker().snapshot(include_current_command=include_current_command),
+    }
+
+
+def build_collections_payload(limit=200):
+    """List scene collections with object counts for the N panel / model query."""
+    try:
+        selected_names = {obj.name for obj in (bpy.context.selected_objects or [])}
+    except Exception:
+        selected_names = set()
+    rows = []
+    try:
+        all_collections = list(bpy.data.collections)
+    except Exception:
+        all_collections = []
+    for collection in all_collections:
+        try:
+            members = list(collection.objects)
+        except Exception:
+            members = []
+        parent = getattr(collection, "parent", None)
+        rows.append({
+            "name": collection.name,
+            "count": len(members),
+            "selected_count": sum(1 for obj in members if obj.name in selected_names),
+            "parent": getattr(parent, "name", None) if parent else None,
+        })
+    rows.sort(key=lambda row: (-row["count"], row["name"]))
+    try:
+        limit = max(1, int(limit))
+    except Exception:
+        limit = 200
+    return {"count": len(rows), "returned": min(len(rows), limit),
+            "collections": rows[:limit], "scene": _scene_meta()}
+
+
+def _post_selection_payload(payload, timeout=3.0):
+    """POST one selection payload to the DSH backend (never raises)."""
+    url = _dshbb_backend_url() + "/host/selection"
+    result = {"ok": False, "backend_url": url, "payload": payload}
+    try:
+        response = requests.post(url, json=payload, timeout=float(timeout))
+        result["status_code"] = int(response.status_code)
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            result["server"] = body
+            if body.get("seq") is not None:
+                result["seq"] = body.get("seq")
+            if body.get("received_at") is not None:
+                result["received_at"] = body.get("received_at")
+            result["ok"] = bool(response.status_code == 200 and body.get("ok") is True)
+            if not result["ok"]:
+                result["error"] = str(body.get("error") or ("HTTP %s" % response.status_code))
+        else:
+            result["error"] = "HTTP %s（响应不是 JSON）" % response.status_code
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        result["hint"] = ("后端未运行或端口不同：确认 DSH 插件已加载且 127.0.0.1:9877 在监听；"
+                          "可用 DSH_BLENDER_BACKEND_URL 或场景属性 dshbb_backend_url 覆盖")
+        return result
+
+
+def send_selection_to_dsh(timeout=3.0):
+    """POST the current native selection to the DSH backend (used by the N-panel button)."""
+    return _post_selection_payload(build_selection_payload(), timeout)
+
+
+def send_collection_to_dsh(collection_name=None, timeout=3.0):
+    """POST one collection (the whole set) to the DSH backend."""
+    name = collection_name
+    if not name:
+        try:
+            target = getattr(bpy.context.scene, "dshbb_collection_target", None)
+            name = getattr(target, "name", None) if target else None
+        except Exception:
+            name = None
+    payload = build_collection_payload(name)
+    if payload is None:
+        return {"ok": False, "error": "collection_not_found", "collection": name,
+                "hint": "先在 N 面板「集合」下拉里选一个集合，或传 collection 名字"}
+    return _post_selection_payload(payload, timeout)
+
+
+_selection_send_state = {}
+
+
+def _record_selection_send(result):
+    global _selection_send_state
+    selection = (result.get("payload") or {}).get("selection") or {}
+    _selection_send_state = {
+        "ok": bool(result.get("ok")),
+        "seq": result.get("seq"),
+        "error": result.get("error"),
+        "backend_url": result.get("backend_url"),
+        "at": time.time(),
+        "count": int(selection.get("count") or 0),
+        "kind": str(selection.get("kind") or "objects"),
+        "collection": selection.get("collection"),
+    }
+    return result
+#endregion
+
+
 @persistent
 def _dshbb_undo_post(scene, depsgraph=None):
     _edit_recorder.record_undo("undo")
@@ -1300,6 +1813,8 @@ class DSHBlenderBridgeServer:
             self.server_thread.start()
 
             _register_edit_capture_handlers()
+            # v1.8：活动/选区判定与 telemetry 无关，服务器一起来就常驻注册
+            _register_activity_handlers()
 
             # start() is called from the operator, i.e. the main thread, so
             # this is the only safe place to touch bpy.app.timers.
@@ -1315,6 +1830,7 @@ class DSHBlenderBridgeServer:
         self.running = False
 
         _unregister_edit_capture_handlers()
+        _unregister_activity_handlers()
         get_edit_recorder().drain()
 
         try:
@@ -1408,6 +1924,12 @@ class DSHBlenderBridgeServer:
         if not self.running:
             return None
 
+        # v1.8：活动的统一判定跑在主线程 timer 上（modal 操作符 / 原生选区变化）。
+        try:
+            get_activity_tracker().tick()
+        except Exception:
+            pass
+
         while True:
             try:
                 command, client = self.command_queue.get_nowait()
@@ -1492,6 +2014,14 @@ class DSHBlenderBridgeServer:
             print(f"Error executing command: {str(e)}")
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
+        finally:
+            # v1.8：标记 agent 刚操作过；并把选区指纹作废，避免把 agent 的改动误算成人的操作
+            try:
+                tracker = get_activity_tracker()
+                tracker.note_agent_end()
+                tracker._resync()
+            except Exception:
+                pass
 
     def _execute_command_internal(self, command):
         """Internal command execution with proper context"""
@@ -1518,6 +2048,11 @@ class DSHBlenderBridgeServer:
             "describe_node_type": self.describe_node_type,
             "bpy_api_lookup": self.bpy_api_lookup,
             "drain_human_activity": self.drain_human_activity,
+            "get_activity_state": self.get_activity_state,
+            "get_selection": self.get_selection,
+            "send_selection_to_dsh": self.send_selection_to_dsh,
+            "get_collections": self.get_collections,
+            "send_collection_to_dsh": self.send_collection_to_dsh,
             "get_telemetry_consent": self.get_telemetry_consent,
             "set_telemetry_consent": self.set_telemetry_consent,
             "get_polyhaven_status": self.get_polyhaven_status,
@@ -1610,6 +2145,11 @@ class DSHBlenderBridgeServer:
                 "describe_node_type",
                 "bpy_api_lookup",
                 "drain_human_activity",
+                "get_activity_state",
+                "get_selection",
+                "send_selection_to_dsh",
+                "get_collections",
+                "send_collection_to_dsh",
                 "get_telemetry_consent",
                 "set_telemetry_consent",
             ]),
@@ -1649,6 +2189,53 @@ class DSHBlenderBridgeServer:
             print(f"Error in get_scene_info: {str(e)}")
             traceback.print_exc()
             return {"error": str(e)}
+
+    def get_activity_state(self):
+        """v1.8：统一 activity 状态（human / agent / idle / both）+ 原生选区摘要。"""
+        try:
+            # 查询命令不能把自己算成 agent（否则每次查询都回 state=agent）
+            return get_activity_tracker().snapshot(include_current_command=False)
+        except Exception as e:
+            print(f"Error getting activity state: {str(e)}")
+            return {"error": str(e)}
+
+    def get_selection(self):
+        """v1.8：当前 Blender 原生选中（名字/类型/活动对象/模式/场景），供模型或面板查询。"""
+        try:
+            payload = build_selection_payload(include_current_command=False)
+            out = dict(payload.get("selection") or {})
+            scene = payload.get("scene") or {}
+            out["scene"] = scene.get("name")
+            out["file"] = scene.get("file")
+            out["activity"] = payload.get("activity")
+            return out
+        except Exception as e:
+            print(f"Error getting selection: {str(e)}")
+            return {"error": str(e)}
+
+    def send_selection_to_dsh(self, timeout: float = 3.0):
+        """v1.8：把当前原生选中 POST 给 DSH 后端（N 面板按钮 / 模型调用同一实现）。"""
+        try:
+            return _record_selection_send(send_selection_to_dsh(timeout=timeout))
+        except Exception as e:
+            print(f"Error sending selection to DSH: {str(e)}")
+            return {"ok": False, "error": str(e)}
+
+    def get_collections(self, limit: int = 200):
+        """v1.8：列场景集合（名字 / 对象数 / 其中被选中的数量），大装配体先选集合再发送。"""
+        try:
+            return build_collections_payload(limit=limit)
+        except Exception as e:
+            print(f"Error listing collections: {str(e)}")
+            return {"error": str(e)}
+
+    def send_collection_to_dsh(self, collection=None, timeout: float = 3.0):
+        """v1.8：把一个集合整体 POST 给 DSH（集合名缺省取 N 面板下拉的 dshbb_collection_target）。"""
+        try:
+            return _record_selection_send(send_collection_to_dsh(collection_name=collection, timeout=timeout))
+        except Exception as e:
+            print(f"Error sending collection to DSH: {str(e)}")
+            return {"ok": False, "error": str(e)}
 
     def drain_human_activity(self):
         """Return human-originated events buffered since the last drain.
@@ -5753,6 +6340,124 @@ class DSHBB_PT_Panel(bpy.types.Panel):
             col.prop(scene, "dshbb_port")
             col.operator("dshbb.start_server", text="Connect to MCP server", icon='PLAY')
 
+        # v1.8 · Selection → DSH（在 Blender 原生选区里选，按按钮进 DSH 下一条消息）
+        layout.separator()
+        layout.label(text="Selection → DSH", icon='RESTRICT_SELECT_OFF')
+        sel_box = layout.box()
+        try:
+            activity = get_activity_tracker().snapshot()
+        except Exception:
+            activity = {}
+        state = str(activity.get("state") or "idle")
+        state_text = {"human": "人：操作中", "agent": "AI：执行中",
+                      "both": "人 / AI 同时活动", "idle": "空闲"}.get(state, state)
+        state_icon = {"human": 'HAND', "agent": 'CONSOLE',
+                      "both": 'ERROR', "idle": 'CHECKMARK'}.get(state, 'INFO')
+        sel_box.row().label(text="活动状态：" + state_text, icon=state_icon)
+        if activity.get("last_human_kind"):
+            sel_box.label(text="最近人类动作：" + str(activity.get("last_human_kind")), icon='INFO')
+        selection = activity.get("selection") or {}
+        sel_count = int(selection.get("count") or 0)
+        sel_names = list(selection.get("names") or [])
+        mode = str(getattr(scene, "dshbb_selection_mode", "MULTI") or "MULTI")
+        # v1.8 · 两种模式：多选（发当前选中对象）/ 集合（整组发送，大装配体用）
+        mode_row = sel_box.row(align=True)
+        mode_row.prop(scene, "dshbb_selection_mode", expand=True)
+        sel_col = sel_box.column(align=True)
+
+        if mode == "COLLECTION":
+            coll_row = sel_box.row(align=True)
+            coll_row.prop(scene, "dshbb_collection_target", text="集合")
+            coll_row.operator("dshbb.use_selection_collection", text="", icon='FILE_REFRESH')
+            target_coll = getattr(scene, "dshbb_collection_target", None)
+            try:
+                selected_names = {obj.name for obj in (bpy.context.selected_objects or [])}
+            except Exception:
+                selected_names = set()
+            if target_coll is not None:
+                try:
+                    members = list(target_coll.objects)
+                except Exception:
+                    members = []
+                selected_in_coll = sum(1 for obj in members if obj.name in selected_names)
+                sel_col.label(text="集合「%s」：%d 件（当前选中 %d 件）—— 发送整个集合"
+                                   % (target_coll.name, len(members), selected_in_coll), icon='OUTLINER_COLLECTION')
+                # 集合成员列表（可滚动的 N 面板里逐行列出；超过上限只列前 N 行）
+                list_box = sel_box.box()
+                list_col = list_box.column(align=True)
+                for obj in members[:SELECTION_UI_ROWS]:
+                    row = list_col.row(align=True)
+                    row.label(text=obj.name, icon='OBJECT_DATA')
+                    row.label(text=str(getattr(obj, "type", "?")))
+                if len(members) > SELECTION_UI_ROWS:
+                    list_col.label(text="… 其余 %d 件（发送时名单最多带前 %d 个）"
+                                        % (len(members) - SELECTION_UI_ROWS, SELECTION_PAYLOAD_NAMES), icon='INFO')
+                if not members:
+                    list_col.label(text="集合是空的", icon='INFO')
+                try:
+                    children = list(target_coll.children)
+                except Exception:
+                    children = []
+                if children:
+                    sel_box.label(text="子集合 %d 个：%s"
+                                       % (len(children), "、".join(c.name for c in children[:4])), icon='OUTLINER_COLLECTION')
+            else:
+                sel_col.label(text="未选择集合：在上面的下拉里选一个", icon='INFO')
+            send_row = sel_box.row()
+            send_row.scale_y = 1.2
+            send_row.enabled = target_coll is not None
+            send_row.operator("dshbb.send_collection_to_dsh", text="发送集合到 DSH", icon='EXPORT')
+        else:
+            if sel_count:
+                shown = "、".join(sel_names[:3])
+                if sel_count > 3 or selection.get("truncated"):
+                    shown += "…"
+                sel_col.label(text="已选 %d 件：%s" % (sel_count, shown), icon='OBJECT_DATA')
+                if selection.get("active"):
+                    sel_col.label(text="活动对象：%s · 模式：%s"
+                                       % (selection.get("active"), selection.get("mode") or "?"))
+                if sel_count > 200:
+                    sel_col.label(text="件数过多：切到「集合」模式整组发送更快", icon='INFO')
+                # 多选列表：逐行列出选中对象（N 面板可滚动；超出上限只列前 N 行）
+                try:
+                    selected_objs = list(bpy.context.selected_objects or [])
+                except Exception:
+                    selected_objs = []
+                list_box = sel_box.box()
+                list_col = list_box.column(align=True)
+                for obj in selected_objs[:SELECTION_UI_ROWS]:
+                    row = list_col.row(align=True)
+                    row.label(text=obj.name, icon='OBJECT_DATA')
+                    row.label(text=str(getattr(obj, "type", "?")))
+                if len(selected_objs) > SELECTION_UI_ROWS:
+                    list_col.label(text="… 其余 %d 件（发送时名单最多带前 %d 个）"
+                                        % (len(selected_objs) - SELECTION_UI_ROWS, SELECTION_PAYLOAD_NAMES), icon='INFO')
+                if not selected_objs:
+                    list_col.label(text="（无法枚举选中对象）", icon='INFO')
+            else:
+                sel_col.label(text="未选中物体：在视口里选中后再发送", icon='INFO')
+            send_row = sel_box.row()
+            send_row.scale_y = 1.2
+            send_row.enabled = sel_count > 0
+            send_row.operator("dshbb.send_selection_to_dsh", text="发送选中到 DSH", icon='EXPORT')
+            if 1 < sel_count <= 200:
+                try:
+                    selected_now = list(bpy.context.selected_objects or [])
+                except Exception:
+                    selected_now = []
+                colls = _selection_collection_summary(selected_now, cap=4)
+                if colls:
+                    sel_col.label(text="选中涉及集合：" + "、".join(
+                        "%s(%d)" % (c["name"], c["count"]) for c in colls), icon='OUTLINER_COLLECTION')
+        send_state = _selection_send_state
+        if send_state:
+            if send_state.get("ok"):
+                sel_box.label(text="最近发送：成功（seq %s）" % send_state.get("seq"), icon='CHECKMARK')
+            else:
+                sel_box.label(text="最近发送失败：" + str(send_state.get("error") or "unknown")[:120], icon='ERROR')
+        sel_box.label(text="DSH 后端：" + _dshbb_backend_url(), icon='URL')
+        sel_box.prop(scene, "dshbb_backend_url", text="覆盖后端地址（可留空）")
+
         # Asset libraries
         layout.separator()
         layout.label(text="Asset Libraries", icon='ASSET_MANAGER')
@@ -5873,6 +6578,96 @@ class DSHBB_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
         return {'FINISHED'}
 
 # Operator to start the server
+class DSHBB_OT_SendSelectionToDSH(bpy.types.Operator):
+    """发送当前原生选中到 DSH（写进下一条消息草稿，不自动发送）"""
+    bl_idname = "dshbb.send_selection_to_dsh"
+    bl_label = "发送选中到 DSH"
+    bl_description = "把当前选中的物体 POST 给 DSH 插件后端；DSH 收到后插入当前会话草稿（不自动发送）"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return bool(context.selected_objects)
+        except Exception:
+            return False
+
+    def execute(self, context):
+        result = _record_selection_send(send_selection_to_dsh())
+        if result.get("ok"):
+            self.report({'INFO'}, "已发送选中到 DSH（seq %s）" % result.get("seq"))
+        else:
+            self.report({'WARNING'}, "发送失败：%s"
+                        % (result.get("error") or result.get("hint") or "unknown"))
+        try:
+            context.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
+class DSHBB_OT_UseSelectionCollection(bpy.types.Operator):
+    """把「集合」下拉设为当前选中对象最常出现的集合"""
+    bl_idname = "dshbb.use_selection_collection"
+    bl_label = "用选中对象的集合"
+    bl_description = "当前选中对象分布在多个集合时，自动挑最相关的一个填进「集合」下拉"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return _best_collection_for_selection() is not None
+        except Exception:
+            return False
+
+    def execute(self, context):
+        best = _best_collection_for_selection()
+        if best is None:
+            self.report({'WARNING'}, "当前选中对象不属于任何集合")
+            return {'CANCELLED'}
+        try:
+            context.scene.dshbb_collection_target = best
+        except Exception as exc:
+            self.report({'WARNING'}, "设置集合失败：%s" % str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "已选集合「%s」（%d 件）" % (best.name, len(best.objects)))
+        try:
+            context.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
+class DSHBB_OT_SendCollectionToDSH(bpy.types.Operator):
+    """把一个集合整体发送到 DSH（大装配体推荐）"""
+    bl_idname = "dshbb.send_collection_to_dsh"
+    bl_label = "发送集合到 DSH"
+    bl_description = "把 N 面板「集合」下拉里选中的集合整体发送到 DSH（不要求先选中对象）"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return getattr(context.scene, "dshbb_collection_target", None) is not None
+        except Exception:
+            return False
+
+    def execute(self, context):
+        target = getattr(context.scene, "dshbb_collection_target", None)
+        name = getattr(target, "name", None) if target else None
+        result = _record_selection_send(send_collection_to_dsh(collection_name=name))
+        if result.get("ok"):
+            self.report({'INFO'}, "已发送集合「%s」到 DSH（seq %s）" % (name, result.get("seq")))
+        else:
+            self.report({'WARNING'}, "发送集合失败：%s"
+                        % (result.get("error") or result.get("hint") or "unknown"))
+        try:
+            context.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
 class DSHBB_OT_StartServer(bpy.types.Operator):
     bl_idname = "dshbb.start_server"
     bl_label = "Connect to Claude"
@@ -5950,6 +6745,29 @@ def register():
         name="Auto-Start Server",
         description="Automatically start the MCP server when Blender loads",
         default=True
+    )
+
+    bpy.types.Scene.dshbb_backend_url = bpy.props.StringProperty(
+        name="DSH Backend URL",
+        description="DSH 插件后端地址（默认 http://127.0.0.1:9877；留空用默认 / 环境变量 DSH_BLENDER_BACKEND_URL）",
+        default=""
+    )
+
+    bpy.types.Scene.dshbb_collection_target = bpy.props.PointerProperty(
+        name="Collection",
+        description="要发送给 DSH 的集合（大装配体不必逐个选对象）",
+        type=bpy.types.Collection
+    )
+
+    bpy.types.Scene.dshbb_selection_mode = bpy.props.EnumProperty(
+        name="Selection Mode",
+        description="发送到 DSH 的模式：多选（当前选中的对象）/ 集合（整组）",
+        items=[
+            ("MULTI", "多选", "发送当前选中的多个对象", 'RESTRICT_SELECT_OFF', 0),
+            ("COLLECTION", "集合", "发送一个集合（大装配体推荐）", 'OUTLINER_COLLECTION', 1),
+        ],
+        default="MULTI",
+        update=_on_selection_mode_update
     )
 
     bpy.types.Scene.dshbb_use_polyhaven = bpy.props.BoolProperty(
@@ -6092,6 +6910,9 @@ def register():
     bpy.utils.register_class(DSHBB_PT_Panel)
     bpy.utils.register_class(DSHBB_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.register_class(DSHBB_OT_StartServer)
+    bpy.utils.register_class(DSHBB_OT_SendSelectionToDSH)
+    bpy.utils.register_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.register_class(DSHBB_OT_UseSelectionCollection)
     bpy.utils.register_class(DSHBB_OT_StopServer)
     bpy.utils.register_class(DSHBB_OT_OpenTerms)
     for cls in PREMIUM_CLASSES:
@@ -6107,6 +6928,7 @@ def unregister():
     _dshbb_unregister_auto_start()
 
     _unregister_edit_capture_handlers()
+    _unregister_activity_handlers()
 
     # Stop the server if it's running
     if hasattr(bpy.types, "dshbb_server") and bpy.types.dshbb_server:
@@ -6116,6 +6938,9 @@ def unregister():
     bpy.utils.unregister_class(DSHBB_PT_Panel)
     bpy.utils.unregister_class(DSHBB_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.unregister_class(DSHBB_OT_StartServer)
+    bpy.utils.unregister_class(DSHBB_OT_SendSelectionToDSH)
+    bpy.utils.unregister_class(DSHBB_OT_SendCollectionToDSH)
+    bpy.utils.unregister_class(DSHBB_OT_UseSelectionCollection)
     bpy.utils.unregister_class(DSHBB_OT_StopServer)
     bpy.utils.unregister_class(DSHBB_OT_OpenTerms)
     for cls in PREMIUM_CLASSES:
@@ -6125,6 +6950,9 @@ def unregister():
     del bpy.types.Scene.dshbb_port
     del bpy.types.Scene.dshbb_server_running
     del bpy.types.Scene.dshbb_auto_start_server
+    del bpy.types.Scene.dshbb_backend_url
+    del bpy.types.Scene.dshbb_collection_target
+    del bpy.types.Scene.dshbb_selection_mode
     del bpy.types.Scene.dshbb_use_polyhaven
     del bpy.types.Scene.dshbb_use_hyper3d
     del bpy.types.Scene.dshbb_hyper3d_mode

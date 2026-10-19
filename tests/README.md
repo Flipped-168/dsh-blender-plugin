@@ -112,11 +112,11 @@ PARAMS 静默变空）；单键信封 `{"args":{…}}` 的向后兼容仍在。
 ## DSH 更新后先跑这三条（v0.9.2 起）
 
 工具是用 `defineTool`（来自宿主的 `@deepseek-ai/dsh-tools`）声明的，所以 **DSH 每次升级都要先验"工具契约"**：
-失败方式是 `fiber failed → 16 个工具整体消失`，而 Blender 与插件包看起来都没坏。
+失败方式是 `fiber failed → 15 个工具整体消失`，而 Blender 与插件包看起来都没坏。
 
 ```bash
 node tests/protocol_selftest.mjs              # ① addon 协议层：28 项，不需要 Blender / DSH
-node tests/dsh_api_compat_probe.mjs           # ② 工具契约：16 个工具 + 16 个 timeoutMs + 0 报错
+node tests/dsh_api_compat_probe.mjs           # ② 工具契约：15 个工具 + 静态 timeoutMs + 0 报错
 node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.json   # ③ 对"待升级版本"预演
 ```
 

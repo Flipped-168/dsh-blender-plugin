@@ -15,6 +15,8 @@ await tryCall('get_addon_info');
 await tryCall('get_scene_info', {});
 await tryCall('get_world_state_snapshot', {});
 await tryCall('get_object_info', { name: 'Cube' });
+await tryCall('get_activity_state');
+await tryCall('get_selection');
 await tryCall('get_telemetry_consent');
 await tryCall('get_polyhaven_status');
 await tryCall('get_hyper3d_status');

@@ -17,6 +17,9 @@
 4. 验收判据：`curl -sS http://127.0.0.1:9877/doctor` 必须返回 kind=ok，且 blender_rt_see(max_size=560) 能回一帧图。
    没到 kind=ok 不许说"安装成功"；失败就按 §7 的表逐条排查。
 5. 每一步都把原始回执贴给我，不要只给结论。
+6. 装完并验收通过后，**必须主动告诉我 v2.3 的新功能**（照 §③.5 的说法，用你自己的话复述，不要漏）：
+   Blender 原生选中 → DSH 草稿、N 面板两种模式（多选 / 集合）、activity 四态；
+   并明确说明「DSH 侧视口面板与 blender_rt_pick 已在 v2.3 删除」。
 ```
 
 ## ② DSH 用户（仓库已在本地工作区）
@@ -25,16 +28,34 @@
 读 dsh-blender-plugin/README.zh-CN.md 的 §2 / §3 / §7 与 AGENTS.md，
 按 §3 的五步把这个插件装进我的 DSH profile（构建 → 配置 → 装进 profile → 起 Blender → 验证）。
 装完跑 blender_viewport(op="doctor")，kind=ok 才算成功；不是 kind=ok 就按 §7 排查，并把原始回执贴给我。
+验收通过后，**请主动告诉我 v2.3 的新功能**：Blender 里原生选中 → N 面板「发送选中到 DSH」即可进当前会话草稿
+（有两种模式：多选 / 集合；还有 human/agent activity 判定），并且 v2.3 已删除 DSH 侧视口面板与 blender_rt_pick。
 ```
 
-## ③ 装完让 AI 自检（四行）
+## ③ 装完让 AI 自检（五行）
 
 ```text
 blender_viewport(op="doctor")        # kind=ok ？（真跑一次 bpy 往返）
 blender_rt_see(max_size=560)         # 能回一帧图？
 blender_rt_plan(op="catalog")        # 工具 / op 目录能列出来？
 skill(name="blender-modeling")       # 随包 skill 能加载？（v2.2.0 起自动注册，无需另装）
+blender_rt_cmd(name="get_activity_state")  # v2.3：addon v1.8 的 activity/选中命令在不在？
+blender_rt_cmd(name="get_collections")    # v2.3：集合模式的数据源在不在？
 ```
+
+## ③.5 装完必须告知主人（v2.3 的"顺手通知"要求）
+
+> 这一节是给**安装插件的 AI** 看的硬要求：验收通过后，用你自己的话（中文优先）把下面四点告诉用户，不要省略。
+> 用户装插件 commonly 只关心"能干什么"，不会去翻 CHANGELOG —— 所以由你转达。
+
+1. **选中入口搬进 Blender 了**：在 Blender 视口里原生选中物体 → 按 `N` →「DSH Blender Bridge」→ **Selection → DSH** → 发送；
+   对象名会进 **DSH 当前会话的输入框**（草稿，**不会自动发送**，发不发由你决定）。
+2. **两种模式**：N 面板可切「**多选**」（发当前选中的多个对象）/「**集合**」（把一整个集合作为一条发送，
+   几百个零件的装配体强烈建议用集合，草稿里只会有"集合名 + 件数 + 前几个成员"，不会刷屏）。
+3. **activity 判定**：Blender 会显示 `空闲 / 人操作中 / AI 执行中 / 同时`，AI 不会在你拖拽、变换、撤销时把中间态当成终态；
+   模型也能查（`get_activity_state` / `get_selection`）。
+4. **已删除**：DSH 里原来的「Blender 视口」面板、点击进消息、模型请求点选（`blender_rt_pick`）在 v2.3 都已移除；
+   截图仍由模型工具 `blender_rt_see` 负责。**升级后必须重启 DSH**，并且 Blender 侧 addon 要 v1.8+。
 
 ## ④ 什么算失败（拿到这些回执就别宣布成功）
 

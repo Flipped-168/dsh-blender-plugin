@@ -412,6 +412,12 @@ export const COMMAND_CATALOG = {
   describe_node_type: { d: '查节点类型的全部 socket/属性（bl_idname, property_overrides）—— 建着色器/几何节点前先查，别猜 socket 顺序', gate: null },
   bpy_api_lookup: { d: '查 bpy API 参考（query，如 "bpy.ops.mesh.primitive_cube_add"）', gate: null },
   export_scene: { d: '导出场景/选择/名单到 glb|fbx|obj（filepath, format, object_names, selection_only, apply_modifiers）', gate: null },
+  // v1.8（插件 v2.3）：Blender 原生选中 → DSH / 统一活动状态
+  get_activity_state: { d: '统一活动状态 human/agent/idle/both + 原生选中摘要（无参；查询自身不算 agent）', gate: null },
+  get_selection: { d: '当前 Blender 原生选中（名字/类型/活动对象/模式/场景；无参）', gate: null },
+  send_selection_to_dsh: { d: '把当前选中 POST 给 DSH 后端（N 面板按钮的同一实现；timeout 可选）', gate: null },
+  get_collections: { d: '列场景集合：名字 / 对象数 / 其中选中数（limit 可选；大装配体先选集合）', gate: null },
+  send_collection_to_dsh: { d: '把整个集合 POST 给 DSH（collection 可选，缺省用 N 面板下拉的 dshbb_collection_target）', gate: null },
   get_tripo_status: { d: 'Tripo 集成状态（premium 通道）', gate: null },
   execute_code: { d: '执行任意 Python（万能通道，预置 K/bpy/math/mathutils）', gate: null },
   drain_human_activity: { d: '取走"人类操作"事件缓冲', gate: null },

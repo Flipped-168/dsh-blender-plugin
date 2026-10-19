@@ -24,10 +24,10 @@ If it saved you some time, you're welcome to support its development on Afdian: 
 >
 > 🧩 **Bundled modeling skill (v2.2.0+): [`blender-modeling`](skills/blender-modeling/)** — ships inside this package and is **registered automatically** with DSH's skill registry when the plugin loads, so installing the plugin is all you need (no separate repo, no download, no symlink). It owns the process and acceptance criteria (multi-agent division of labour, reference-image-driven shapes, six pitfalls, numeric assembly gates); the plugin owns the *channel*. The standalone [dsh-skill-blender-modeling](https://github.com/sixtysevenlf/dsh-skill-blender-modeling) repo is kept as a mirror for non-DSH hosts.
 >
-> 🏷 **Version: v2.2.0** (package `2.2.0`) — stable release + the bundled `blender-modeling` skill (auto-registered) + the dsh-TUI side viewport panel / picking (§4.2). The model-facing surface is frozen at **16 tools**, and the plan channel exposes **28 families · 186 ops**.
+> 🏷 **Version: v2.3.0** (package `2.3.0`) — bundled `blender-modeling` skill (auto-registered) + **native Blender selection → DSH draft with a unified human/agent activity state** (§4.2, addon v1.8+, two modes: multi-select / collection). The model-facing surface is now **15 tools**, and the plan channel exposes **28 families · 186 ops**.
 
 > **Let an AI model actually drive Blender** — no clicking, no screenshots-into-prompt, no MCP server.
-> One direct TCP channel (addon `127.0.0.1:9876` · backend `127.0.0.1:9877`) gives the model 16 tools: **see the viewport · edit the scene · watch a time window · run an inner search loop · profile and fix render perf · decimate objects safely · offload heavy work to a headless process · batch long work as jobs · roll back · store parameter presets · call any addon command · judge / verify / export through the contract layer · operate the channel itself.**
+> One direct TCP channel (addon `127.0.0.1:9876` · backend `127.0.0.1:9877`) gives the model 15 tools: **see the viewport · edit the scene · watch a time window · run an inner search loop · profile and fix render perf · decimate objects safely · offload heavy work to a headless process · batch long work as jobs · roll back · store parameter presets · call any addon command · judge / verify / export through the contract layer · operate the channel itself.**
 >
 > Acceptance is unchanged and unforgiving: `blender_viewport(op="doctor")` must return `kind=ok`. If it does not, it is not installed — walk §9.
 
@@ -82,7 +82,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 
 ## 3. Install (5 steps)
 
-> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.2.0.tgz` (1.5 MB / 161 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
+> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.3.0.tgz` (1.4 MB / 159 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
 > Full third-party checklist: [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md).
 
 ```bash
@@ -124,58 +124,50 @@ blender_rt_see(max_size=560)                           # what the model sees rig
 blender_rt_see(from="9,-9,6", look_at="0,0,1")         # a different angle, user viewport untouched
 ```
 
-### 4.1 Host integration: viewport panel · click-to-message · `@` mentions
+### 4.1 Host integration: `@` mentions + native selection (viewport panel removed in v2.3)
 
-Besides the model tools, the package ships a **user-side** half for the DSH UI (its own `/host/*` routes — it does **not** enter the op catalog and adds **no** model tools, so the 16-tool / 186-op capability surface is unchanged):
+The package contributes a **user-side** half for DSH's Web client (its own `/host/*` routes — no op catalog entry, no model tools, so the **15-tool / 186-op** surface is unchanged):
 
-- **Viewport panel** — a "Blender 视口" tab in the conversation view, showing the latest captured frame (1500 ms polling; 600 ms while the frame is stale).
-- **Click into your message** — click an object, then press "加入消息" to drop the **screenshot + object-name text** into your draft (nothing is sent automatically).
 - **`@` mentions** — type `@` to pick scene objects / materials / collections (refs are prefixed: `object:<name>` / `material:<name>` / `collection:<name>`); the `codec` strips the prefix and serializes to `<blender-object>Cube</blender-object>`, so the model stops guessing object names.
-- Three disciplines: the panel only reads the backend store (**never occupies Blender's main thread**) · file/scene **mismatch is refused** (`*_mismatch`, never re-projected onto the current scene) · the 0.8 s quiet window is a **backend** semantic.
-
-> ⚠ **Stated as-is (unverified)**: the panel is registered on the `conversation.view` slot and is **most likely a View tab in the conversation area**, not a persistent sidebar; `section` grouping headers, `codec.serialize` reaching the model text, the `inject` business-face merge, and quiet-window auto-recapture (**currently manual refresh only**) are all **unverified**. See [操作教程 §9.9](docs/操作教程.md#9-宿主集成) for the itemized list.
+- **Native selection → draft** (v2.3, addon v1.8+): select in Blender → press `N` → **Selection → DSH** → send. The selection lands in the **current session draft** and is **not auto-sent**. The N panel has two modes: **多选 (Multi)** sends the current selected objects; **集合 (Collection)** sends one collection as a whole — best for large assemblies (the draft text collapses to "collection + count + first members" instead of hundreds of object names).
+- **Activity state** (v2.3): Blender reports `idle / human / agent / both` (modal operators, recent human edits/undo/selection changes, agent command window). The N panel shows it live; the model can query `blender_rt_cmd get_activity_state` / `get_selection` (the query itself is excluded from `agent`).
+- **Removed in v2.3**: the DSH-side viewport panel (Web sidebar + TUI side panel), click-to-message, and the 16th tool `blender_rt_pick`. Use native selection instead; the model still has `blender_rt_see` for screenshots. The backend `/host/view/*`, `/host/pick*` and `/host/ready` routes remain for compatibility but have **no UI consumer** in this repo.
 
 > ⚠ **Restart DSH after any change/upgrade**: the client half (`lib/client.js`) is loaded at DSH startup; only a backend-only change can use `blender_viewport(op="restart")`.
-> The panel calls `9877` cross-origin from `http://127.0.0.1:3080`, so the backend only echoes CORS for **loopback** origins (`https://` or a non-loopback hostname is refused).
+> The client half calls `9877` cross-origin from `http://127.0.0.1:3080`, so the backend only echoes CORS for **loopback** origins (`https://` or a non-loopback hostname is refused).
 > Usage, CORS/port requirements and the **troubleshooting table** live in [操作教程 §9 宿主集成](docs/操作教程.md#9-宿主集成) (Chinese).
 
-**Added in v1.2**: a **right-sidebar** viewport panel (appears only while `/host/ready` is true — it disappears when Blender is closed) plus **model-requested picking** (the 16th tool, `blender_rt_pick`: the model asks you to click an object and gets its name back). Usage, the answer/cancel banner, troubleshooting and the unverified list live in [操作教程 §10 右侧栏视口面板 + 模型请求点选](docs/操作教程.md#10-右侧栏视口面板--模型请求点选v12) (Chinese).
+### 4.2 Native Blender selection → DSH (v2.3, addon v1.8+)
 
-### 4.2 Using it from dsh-TUI (side viewport panel + picking)
+Select objects in the viewport natively, then press `N` → **DSH Blender Bridge** → **Selection → DSH** → send.
+The addon POSTs the selection to the backend (`POST /host/selection`) and the Web client half inserts it into the
+**current session draft** — **not auto-sent**. Two modes:
 
-dsh-TUI ≥ 0.16 exposes the experimental `ctx.tuiPanels` service. When the plugin sees it, it
-registers a **"Blender 视口"** side panel; on Web / headless no TUI panel is registered and the
-16 model tools are unchanged. v2.2 adds `ui`/`watching` fields to `/host/*` and makes
-`blender_rt_pick` fail fast (2.5–6 s) when no panel is polling; a visible Web page still counts
-via `/host/ready`, so a collapsed sidebar keeps the old wait.
+| Mode | What it sends |
+|---|---|
+| **多选 / Multi** | the current selected objects — the N panel shows a scrollable **list** of them (name + type, up to 30 rows); the draft text collapses to first 24 + total |
+| **集合 / Collection** | one collection as a whole — the N panel shows its **member list** + count + child collections; the draft text is "collection + count + first members" (best for hundreds of parts) |
 
-- **Open it**: `Ctrl+B`, then the "Blender 视口" tab; or `/panel <id>`.
-  The host assigns the actual id (e.g. `act1:viewport` when the bundle has no Component identity).
-  `blender_viewport(op="doctor")` prints
-  `宿主面板：✅ dsh-TUI 侧栏已注册（act1:viewport）`.
-- **Inside the panel**: `c` captures a frame (`max_size=1600`) · `r` refreshes · click the image to
-  pick an object · `Esc` cancels a pending pick request.
-- **Model-requested picking**: after `blender_rt_pick` creates a request, the panel is opened/focused
-  automatically and shows a banner; the clicked object name goes straight back to the model. If no
-  panel is polling (TUI < 0.16 / panel registration failed / `tuiPanel: false`), the tool returns
-  `PICK 无人应答` in ~**2.5 s** instead of waiting 120–600 s.
-- **Images**: rendered for real on Kitty/Sixel terminals; otherwise the panel falls back to an
-  **auto-contrast ASCII preview** (one character per cell, readable even on Blender's dark-grey
-  viewport) — capture, picking and the model's own view keep working (the model always receives the
-  PNG attachment).
-- **Not yet available**: click-to-message (`sendToChat` is not authorized), `@` mentions, and the
-  v2.1 multi-select UI / zoom / jobs area.
-- **Kill switch**: profile row `config.tuiPanel: false` (default `true`; only applies to hosts that
-  provide `tuiPanels`).
+The same N-panel section shows a unified **activity state**:
 
-Install, keybindings, troubleshooting and the local acceptance record:
-[docs/TUI-适配.md](docs/TUI-适配.md) (Chinese).
+| State | Meaning |
+|---|---|
+| `idle` | nobody is operating |
+| `human` | modal operator running (drag / transform / menu) or a human edit / undo / selection change within 1.5 s |
+| `agent` | an agent command is running, or one finished within 1.5 s |
+| `both` | both signals are live |
+
+- Requirements: **addon v1.8+** (bundled here) and a DSH restart after upgrading; Web client half only.
+- The model can ask for the same state with `blender_rt_cmd get_activity_state` / `get_selection`
+  (both report `state` **excluding the query itself**, so a query does not always read back `agent`).
+- **Not available in TUI** (no composer dock there), and the bridge always targets the *currently open* session.
+- Contract: [docs/宿主集成-接口契约-v2.3增补.md](docs/宿主集成-接口契约-v2.3增补.md).
 
 ---
 
 ## 5. What's new in v1.0
 
-- **First stable release.** The model-facing surface is frozen at **16 tools**; the plan channel is **28 families · 186 ops**. A **capability lock** inside `npm test` pins both numbers and the 16 tool names — losing a family, an op or a tool turns the build red.
+- **First stable release.** The model-facing surface is **15 tools** as of v2.3 (the viewport panel / `blender_rt_pick` were removed); the plan channel is **28 families · 186 ops**. A **capability lock** inside `npm test` pins both numbers and the tool names — losing a family, an op or a tool turns the build red.
 - **macOS is a first-class host**: identity path mapping, `.app` auto-detection, `~/.dsh-blender-rt` working dir, and a `/proc`-free backend kill path. `blender_viewport(op="launch")` cold-starts a connected GUI Blender (measured 2.5 s). `npm run test:mac` = **45 assertions**; `npm run test:gui` = **11/11** on a real machine.
 - **Five capability families landed — 21 ops, zero new tools**: `sculpt_*` (numpy displacement brushes; `bpy.ops.sculpt.brush_stroke` does not work from Python on Blender 5.2 — don't try it), `fix_*` (repair / decimate), `uv_*` (smart project / unwrap / project / pack), `print_*` (wall thickness + overhang, with a `resolution_mm` warning), `sweep_*` (parallel-transport sweep; bend radius computed before building).
 - **Materials and render state**: `material_build` (10 presets) → `material_apply` → `material_bake` (bakes procedural nodes to PNG, engine restored afterwards); `render_state` / `render_wait` / `render_reset` turn "Blender is rendering" into a seconds-level fact instead of a timeout — a write command during a render is refused with `BUSY_RENDER` in ~71 ms.
@@ -189,7 +181,7 @@ Install, keybindings, troubleshooting and the local acceptance record:
 
 ## 6. Tool reference
 
-All 16 tools require the backend to be running (the plugin starts it for you) and the addon to be connected. Parameter names are the schema's own names, identical on WSL, Windows and macOS.
+All 15 tools require the backend to be running (the plugin starts it for you) and the addon to be connected. Parameter names are the schema's own names, identical on WSL, Windows and macOS.
 
 ### `blender_rt_see` — look
 
@@ -241,7 +233,7 @@ blender_rt_cmd(name="get_object_info", params={"name": "Cube"}, timeout_ms=12000
 blender_rt_commands()
 ```
 
-Signatures are the addon's real ones (`get_scene_info()` takes no args; `get_object_info(name)` uses `name`). There is no schema layer to rename things for you. The catalog currently names **34** commands — **19 always-on + 15 gated** by the five integrations (PolyHaven · Sketchfab · Poly Pizza · Hyper3D/Rodin · Hunyuan3D) — including several the MCP layer does not expose: `get_world_state_snapshot`, `drain_human_activity`, `get_telemetry_consent`, `set_telemetry_consent`, `get_addon_info`, plus addon v1.7's `describe_node_type` / `bpy_api_lookup` / `export_scene`. `blender_rt_commands` reports what is actually available right now and each integration's real on/off state — ask it before you call.
+Signatures are the addon's real ones (`get_scene_info()` takes no args; `get_object_info(name)` uses `name`). There is no schema layer to rename things for you. The catalog currently names **39** commands — **24 always-on + 15 gated** by the five integrations (PolyHaven · Sketchfab · Poly Pizza · Hyper3D/Rodin · Hunyuan3D) — including several the MCP layer does not expose: `get_world_state_snapshot`, `drain_human_activity`, `get_telemetry_consent`, `set_telemetry_consent`, `get_addon_info`, plus addon v1.8's `get_activity_state` / `get_selection` / `send_selection_to_dsh` / `get_collections` / `send_collection_to_dsh`, and v1.7's `describe_node_type` / `bpy_api_lookup` / `export_scene`. `blender_rt_commands` reports what is actually available right now and each integration's real on/off state — ask it before you call.
 
 ### `blender_rt_perf` — render performance
 
@@ -380,7 +372,7 @@ Decoding a failure is a three-level diagnosis: TCP unreachable → Blender/addon
 
 ```text
 dsh-blender-plugin/
-├── src/index.ts                # DSH host: the 16 tools, backend watchdog (15 s), lease heartbeat
+├── src/index.ts                # DSH host: the 15 tools, backend watchdog (15 s), lease heartbeat
 ├── runtime/
 │   ├── config.mjs              # env → config file → auto-detect → defaults (WSL / Windows / macOS)
 │   ├── engine.mjs              # addon socket client, op routing, command catalog, view/headless

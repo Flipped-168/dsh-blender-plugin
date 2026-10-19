@@ -27,6 +27,10 @@
  *   POST /host/pick/remove   多选：从累积里移除一件（保持 pending）
  *   GET  /host/jobs          headless 作业列表（**只读台账，零 Blender 往返**）
  *   GET  /host/jobs/log      某作业的 stdout/stderr 尾部（**只读**）
+ *   ── v2.3（契约 v2.3 增补 §S1–§S3：Blender 原生选中 → DSH）──
+ *   POST /host/selection         addon 推当前选中（N 面板「发送选中到 DSH」）
+ *   GET  /host/selection/latest  客户端轮询未消费的选中（**零 Blender 往返**）
+ *   POST /host/selection/consume 标记已插入草稿（seq）
  *   （多选语义：`request{multi:true}` → `answer` 命中累积、仍 pending；`answer{done:true}` 收单）
  *   POST /headless       body: {script, file, outdir, args, timeoutMs} → 无头 Blender 独立进程跑脚本
  *   GET  /who            JSON：租约持有者 + 通道指标（多会话共存时先看它）
@@ -48,8 +52,10 @@ import { CFG, describeConfig } from './config.mjs';
 import { viewStore, clampItemsLimit, clampUnit } from './viewstore.mjs';
 // S13（宿主集成 v1.2 · §7.2）：点选请求状态机（全局至多一个 pending）
 import { pickRequestStore } from './pickrequest.mjs';
-// v2.2：有没有 UI 在轮询 /host/*（零 I/O；`blender_rt_pick` 无人应答时快速失败）
+// v2.2：有没有 UI 在轮询 /host/*（零 I/O；v2.3 已删除 pick 工具，/host/ready 路由为兼容保留）
 import { createHostPresence } from './host_presence.mjs';
+// v2.3（Blender 原生选中 → DSH）：addon 推来的选中事件（纯内存；轮询方零 Blender 往返）
+import { createSelectionStore } from './selectionstore.mjs';
 
 const argv = process.argv.slice(2);
 const portArg = argv.indexOf('--port');
@@ -59,7 +65,9 @@ const HOST = '127.0.0.1';
 const engine = createEngine();
 // 面板轮询的“最后见到时间”：只在面板会轮询的 GET 路由上更新（见 handleHost）。
 const hostPresence = createHostPresence();
-const stats = { frames: 0, acts: 0, cmds: 0, loops: 0, views: 0, headless: 0, plan: 0, worker: 0, txn: 0, preset: 0, job: 0, lastPlanMs: null, lastViewMs: null, lastHeadlessMs: null, lastFrameMs: null, lastActMs: null, lastError: null, startedAt: Date.now() };
+// v2.3：Blender 原生选中事件（N 面板「发送选中到 DSH」→ 这里 → 客户端插入草稿）
+const selectionStore = createSelectionStore();
+const stats = { frames: 0, acts: 0, cmds: 0, loops: 0, views: 0, headless: 0, plan: 0, worker: 0, txn: 0, preset: 0, job: 0, selections: 0, lastSelectionMs: null, lastPlanMs: null, lastViewMs: null, lastHeadlessMs: null, lastFrameMs: null, lastActMs: null, lastError: null, startedAt: Date.now() };
 
 /**
  * v0.9.4（P2-1）：各路由最近 20 次耗时的 p50/p95 —— **只观测，不自动重启**。
@@ -499,6 +507,37 @@ async function handleHost(req, res, url, p) {
                          stdout: (snap.stdoutTail === undefined ? null : snap.stdoutTail),
                          stderr: (snap.stderrTail === undefined ? null : snap.stderrTail),
                          job: trimJob(snap) }, origin);
+    return;
+  }
+
+  // ── v2.3（Blender 原生选中 → DSH，契约 v2.3 增补 §S1–§S3）──────────────
+  // addon 的 N 面板「发送选中到 DSH」直接 POST 到这里；客户端半边轮询 latest 并插入草稿。
+  // 三条都**零 Blender 往返**：addon 主动推，轮询方只读内存。
+  if (req.method === 'POST' && p === '/host/selection') {
+    const raw = await readBody(req);
+    let payload = null;
+    try { payload = JSON.parse(raw); } catch (e) { payload = null; }
+    const t0 = Date.now();
+    const stored = selectionStore.put(payload);
+    if (!stored.ok) {
+      hostJson(res, 400, { ok: false, error: stored.error || 'invalid_payload' }, origin);
+      return;
+    }
+    stats.selections = (stats.selections || 0) + 1;
+    stats.lastSelectionMs = Date.now() - t0;
+    hostJson(res, 200, stored, origin);
+    return;
+  }
+  if (req.method === 'GET' && p === '/host/selection/latest') {
+    hostJson(res, 200, selectionStore.snapshot(), origin);
+    return;
+  }
+  if (req.method === 'POST' && p === '/host/selection/consume') {
+    const raw = await readBody(req);
+    let payload = null;
+    try { payload = JSON.parse(raw); } catch (e) { payload = null; }
+    const consumed = selectionStore.consume(payload && payload.seq, payload || {});
+    hostJson(res, consumed.ok ? 200 : 400, consumed, origin);
     return;
   }
 

@@ -130,10 +130,9 @@ export function classGuideStats() {
   return { classes: MODELING_CLASS_GUIDE.length, keys: MODELING_CLASS_GUIDE.map((r) => r.c), missing };
 }
 
-/** 模型侧工具清单（16 个）—— 与 capability.lock.json 的 tools 逐名对拍（guidance_selftest 守） */
+/** 模型侧工具清单（15 个；v2.3 删除 blender_rt_pick）—— 与 capability.lock.json 逐名对拍（guidance_selftest 守） */
 export const MODEL_FACING_TOOLS = [
   "blender_rt_see", "blender_rt_do", "blender_rt_watch", "blender_rt_loop",
-  "blender_rt_pick",
   "blender_rt_cmd", "blender_rt_commands", "blender_rt_perf", "blender_rt_opt",
   "blender_rt_headless", "blender_rt_plan", "blender_rt_worker", "blender_rt_txn",
   "blender_rt_preset", "blender_rt_job", "blender_viewport",
