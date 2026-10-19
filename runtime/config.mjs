@@ -315,14 +315,6 @@ export const CFG = {
   // 通道
   addonHost: process.env.DSH_BLENDER_ADDON_HOST || FILE.cfg.addonHost || '127.0.0.1',
   addonPort: num(process.env.DSH_BLENDER_ADDON_PORT || FILE.cfg.addonPort, 9876),
-  // Blender 侧 addon 的线上协议：auto（默认，探测一次）/ flat / category-action。
-  // 见 runtime/addon-protocol.mjs；探测结果会出现在 /doctor 与 /who 里。
-  // 旧值 'ahujasid' 是**已弃用别名**（v2.0.0 协议判别 id 改名 'flat'）：归一化为 'flat'，旧配置文件不炸。
-  addonProtocol: (function () {
-    const v = String(process.env.DSH_BLENDER_ADDON_PROTOCOL || FILE.cfg.addonProtocol || 'auto').trim().toLowerCase();
-    if (v === 'ahujasid') return 'flat';   // 已弃用别名（兼容，不是痕迹）
-    return v === 'flat' || v === 'category-action' ? v : 'auto';
-  })(),
   httpPort: num(process.env.DSH_BLENDER_HTTP_PORT || FILE.cfg.httpPort, 9877),
   /**
    * Windows 侧启动代理（D:/DSH/blender/launch-agent.mjs，默认 127.0.0.1:9878）。
@@ -377,7 +369,6 @@ export function describeConfig(over) {
     // WSL 报发行版名（UNC 里用的就是它）；原生 Linux 报自己的发行版 —— 别再把 Manjaro 报成 'Ubuntu'（issue #11）
     distro: (IS_WIN || IS_MAC) ? null : (IS_WSL ? DISTRO : linuxDistroName()),
     addon: CFG.addonHost + ':' + String(CFG.addonPort),
-    addonProtocol: CFG.addonProtocol,
     http: '127.0.0.1:' + String(o.httpPort || CFG.httpPort),
     workDir: { win: CFG.workDirWin, wsl: CFG.workDirWsl, from: CFG.source.workDir, fallback: CFG.workDirFallback,
                // v0.9.6（D3）：这个工作目录 Windows 侧看不看得见（false = 无头脚本会打不开，必须换目录）

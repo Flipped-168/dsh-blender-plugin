@@ -2,7 +2,7 @@
 /**
  * tests/discoverability_selftest.mjs —— v0.9.6（D1）：工具可发现性
  *
- * 动机（实测，见 CHANGELOG v0.9.6 / docs/上游整合评估-*.md）：
+ * 动机（实测，见 CHANGELOG v0.9.6）：
  *   10 天 8,116 次真实调用里 plan 通道只占 1.6%（剔掉自检后），sculpt/fix/uv/print/sweep 五族真实使用 0 次；
  *   111 条失败里 68% 是超时，真正的"选错通道/参数"只有 3 条。
  *   ⇒ 瓶颈是"不知道有"，不是"报错"。于是：描述压成索引 + op="catalog" 目录 + 错误即纠正。

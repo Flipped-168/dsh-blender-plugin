@@ -24,7 +24,6 @@
 
 ```bash
 cd ~/DSH/dsh-blender-plugin
-node tests/protocol_selftest.mjs        # ① addon 协议层：28 项，不需要 Blender / DSH
 npm run test:dsh-api                    # ② 工具契约：15 工具 + 15 timeoutMs + 0 报错 + 前缀 [v0.9.2]
 npm run test:dsh-api -- --version 0.1.7-alpha.2   # ③ 升级前预演：把待升级版本的 dsh-tools 拉下来先测
 ```

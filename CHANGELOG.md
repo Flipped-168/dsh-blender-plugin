@@ -66,7 +66,11 @@
   命令后 `agent`、模拟人类操作/模态时 `human`/`both`（`last_human_kind=selection` / `modal:…` 实测）。
 - 端到端：Blender 选中 Cube+Camera → 面板按钮 → 后端 `seq` → **当前会话草稿收到文本**；
   `/host/selection/latest.last_consume` 回 `{ok:true, how:"actions"}`（真实 Web 客户端插入成功）。
-- 打包：**1.4 MB / 159 文件**（v2.2 为 1.5 MB/161；删 TUI 面板 3 个文件 + 新增 selectionstore/契约/测试；`skills/blender-modeling/` 8 文件仍在包内）。
+- 打包：**1.3 MB / 142 文件**（v2.2 为 1.5 MB/161；删 TUI 面板 + 视口/点选路由 + 旧 addon 适配/文档/测试；新增 selectionstore/契约/测试；`skills/blender-modeling/` 8 文件仍在包内）。
+- **清理（v2.3 精简）**：删除旧 `MCP for Blender` / harveyxiacn category-action addon 支持、双名回退与 `addonProtocol` 配置；
+  删除 `/host/view/*`、`/host/pick*`、`/host/ready` 路由与 `runtime/{viewstore,pickrequest,host_presence}.mjs`；
+  删除 `blender_rt_pick` 工具、Web/TUI 视口面板、`tests/{tui_panel,protocol,pick_presence,host_cors,acceptance_v093}_selftest.mjs`；
+  删除历史契约文档（v1.2/v2.1/v2.2）、上游整合/改名方案/评估文档、`tmp/` 与 `.bak` 备份。
 
 ### 未证实 / 已知边界
 

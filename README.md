@@ -55,16 +55,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 ## 2. Requirements
 
 1. **Blender 4.x / 5.x running in GUI mode** — this channel needs a live GUI session (`-b` is only used by the headless tools).
-2. **Blender addon** — the repo **bundles** [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) (**`DSH Blender Bridge` v1.8**, module `dsh_blender_bridge`), or you can use the upstream **`MCP for Blender`** (module `blender_mcp`). The plugin does a **dual-name fallback**, so both connect. It listens on `127.0.0.1:9876` and provides `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(...)`, `execute_code(code)` plus the 5 optional asset integrations (PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D).
-
-   **Do you need to switch addons? (v2.3 compatibility)**
-
-   | Addon in Blender | Model tools (see / edit / batch / plan…) | Native selection → draft · collection · activity | `@` mentions |
-   |---|---|---|---|
-   | **MCP for Blender** (upstream, module `blender_mcp`) | ✅ works | ❌ missing (no N-panel entry, no v1.8 commands) | ✅ |
-   | **Bundled `DSH Blender Bridge` v1.8+** | ✅ | ✅ | ✅ |
-
-   Both addons listen on `127.0.0.1:9876` — **enable only one at a time**. If you only want the AI to drive Blender, keeping `MCP for Blender` is fine; switch to the bundled addon only if you want the v2.3 selection features.
+2. **Blender addon — only the bundled [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) is supported** (**`DSH Blender Bridge` v1.8**, module `dsh_blender_bridge`). It listens on `127.0.0.1:9876` and provides `ping`, `get_scene_info`, `get_world_state_snapshot`, `get_object_info(name)`, `get_viewport_screenshot(...)`, `execute_code(code)` plus the 5 optional asset integrations (PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D). Upstream `MCP for Blender` / harveyxiacn `blender_mcp_addon` are **not supported** since v2.3 (the old dual-name and category-action adapters were deleted) — if you have one installed, disable it and install the bundled addon (see [MIGRATIONS.md](MIGRATIONS.md)).
 3. **Node.js ≥ 20** (runs the backend).
 4. **DSH (DeepSeek Harness)** — this package is a DSH plugin (`inject: ['tools']`, declares `dsh.bundle` via `cordis.patch.yml`). WSL host + Windows Blender needs WSL interop (on by default); same-OS setups (Windows / native Linux / macOS) are supported and auto-detected.
 5. **A DSH source checkout only if you rebuild** (`DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh`); the repo commits `lib/`, so a plain clone is ready to install.
@@ -73,7 +64,7 @@ Detailed walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) �
 
 ## 3. Install (5 steps)
 
-> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.3.0.tgz` (1.4 MB / 159 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
+> **No build, no npm?** Grab `dsh-external-dsh-blender-plugin-2.3.0.tgz` (1.3 MB / 142 files) from [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases): unpack it into `<profile>/node_modules/@dsh-external/dsh-blender-plugin`, or `npm i ./that.tgz`. The skill is inside the tarball (`skills/blender-modeling/`).
 > Full third-party checklist: [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md).
 
 ```bash
@@ -93,7 +84,7 @@ cp dsh-blender.config.example.json dsh-blender.config.json
 # 4) Start Blender and connect the addon — two routes:
 #    agent / unattended: blender_viewport(op="launch")   # boot script + spawn + polls 9876, idempotent
 #    manual: start Blender → press N → "DSH Blender Bridge" → Connect (127.0.0.1:9876)
-#    (v2.0.0 rename: the old "MCP for Blender" entry is a dead reference — re-enable `DSH Blender Bridge`; see MIGRATIONS.md)
+#    (v2.3: the old "MCP for Blender" addon is no longer supported — disable it and install the bundled one; see MIGRATIONS.md)
 
 # 5) Verify — the ONLY acceptance criterion: doctor returns kind=ok (otherwise it is NOT installed; walk §9)
 curl -sS http://127.0.0.1:9877/health    # backend alive + provenance (is this process the disk copy?)
@@ -146,7 +137,7 @@ blender_rt_txn  {op:"snapshot", label:"before-edit"}
 - Blender addon v1.8: `ActivityTracker` (`idle / human / agent / both`) + 5 commands (`get_activity_state`, `get_selection`, `send_selection_to_dsh`, `get_collections`, `send_collection_to_dsh`).
 - N panel `Selection → DSH` with **Multi** (object list) / **Collection** (member list, count, child collections, auto-infer) modes; sends into the current DSH draft, never auto-sends.
 - Backend `/host/selection{,/latest,/consume}` (pure memory, zero Blender round-trips) + `last_consume` diagnostics.
-- **Removed**: Web/TUI viewport panel, click-to-message, `blender_rt_pick` → **15 model tools**; capability lock updated.
+- **Removed**: Web/TUI viewport panel, click-to-message, `blender_rt_pick` → **15 model tools**; capability lock updated. Also removed: upstream `MCP for Blender` / category-action addon support, dual-name fallbacks, and the `addonProtocol` config.
 - Docs: contract supplement, install AI now **must tell its owner** about the new features (`docs/AI-安装提示词.md` §③.5).
 - Also in 2.3: large-list collapse (first 24 names + total; collection summaries), @ mentions kept.
 
@@ -195,7 +186,7 @@ Common chains (details in [`docs/操作教程.md`](docs/操作教程.md) and the
 
 Config sources (highest first): plugin config → `DSH_BLENDER_*` env → `$DSH_BLENDER_CONFIG` file → package root `dsh-blender.config.json` → `~/.dsh/dsh-blender.config.json` → auto-detected defaults.
 
-Key knobs: `port` (backend, 9877), `addonHost`/`addonPort` (9876), `addonProtocol` (`auto|flat|category-action`), `blenderExe`, `workDir`, `holder`, `workerPort` (9879). Full table: [`docs/配置参考.md`](docs/配置参考.md).
+Key knobs: `port` (backend, 9877), `addonHost`/`addonPort` (9876), `blenderExe`, `workDir`, `holder`, `workerPort` (9879). Full table: [`docs/配置参考.md`](docs/配置参考.md).
 
 ---
 
@@ -208,7 +199,7 @@ Key knobs: `port` (backend, 9877), `addonHost`/`addonPort` (9876), `addonProtoco
 | Backend unreachable (`9877`) | Backend process not running | `blender_viewport(op="start")` |
 | `value is not lossless JSON` | Old plugin (< v0.9.4) | Upgrade, **restart DSH** |
 | `409 leased` on writes | Another session holds the write lease | `blender_viewport(op="who")`; don't steal |
-| N panel has no “Selection → DSH” | Addon < v1.8 (e.g. upstream `MCP for Blender`) | Install the bundled addon v1.8, restart DSH |
+| N panel has no “Selection → DSH” | You are running the old `MCP for Blender` addon (unsupported since v2.3) | Disable it, install the bundled addon v1.8, restart DSH |
 | Selection sent but no text in draft | DSH not restarted after upgrade / draft locked | Restart DSH; check `/host/selection/latest.last_consume` |
 | Old “Blender 视口” tab still shows | DSH not restarted (v2.3 removed the panel) | Restart DSH |
 
@@ -237,12 +228,11 @@ docs/                         # tutorial, config, host-integration contracts, ch
 npm test                                  # offline suite (capability lock, schemas, runtime guards, selection store, client bundle, skill provider)
 node tests/client_bundle_selftest.mjs     # bundle shape + @ codec + selection text/insertion
 node tests/selection_store_selftest.mjs   # selection store: sanitize / seq / consume / last_consume
-node tests/host_routes_selftest.mjs       # live HTTP routes (judges 1–8, S1–S3; needs the backend)
-npm run test:acceptance                   # real-machine acceptance (needs Blender + backend)
-npm run test:routes                       # route contract (static)
+node tests/host_routes_selftest.mjs       # live /host routes incl. selection S1–S3 + deleted-route 404 guards
+npm run test:routes                       # static route contract
 ```
 
-Release gate: `npm test` green + `npm pack --dry-run` ≈ **1.4 MB / 159 files** + `blender_viewport(op:"doctor")` → `kind=ok`.
+Release gate: `npm test` green + `npm pack --dry-run` ≈ **1.3 MB / 142 files** + `blender_viewport(op:"doctor")` → `kind=ok`.
 
 ---
 

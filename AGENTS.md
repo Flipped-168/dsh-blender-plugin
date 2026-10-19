@@ -9,7 +9,7 @@
 
 | 读哪节 | 为什么 |
 |---|---|
-| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧 addon `DSH Blender Bridge`（**旧名 `MCP for Blender`**，模块名 `blender_mcp`）**本包附带 v1.8**（`addon/dsh_blender_bridge.py`），也可用上游原版；必须在 Blender 里 Connect。v2.0.0 改名后模块名变了，需在偏好设置里**重新启用**（旧条目是死引用，见 [MIGRATIONS.md](MIGRATIONS.md)） |
+| **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧 addon **只支持本包附带的 `addon/dsh_blender_bridge.py`（v1.8+）**；旧 `MCP for Blender` 自 v2.3 起不支持，必须停用旧 addon 再启用本包 addon（见 [MIGRATIONS.md](MIGRATIONS.md)） |
 | **§3 安装（5 步）** | 构建 → 配置 → 装进 profile → 起 Blender → 验证 |
 | **§8 常见故障**（英文 README 为 §9） | 报错先查表，别自己发明修法 |
 
@@ -44,14 +44,14 @@
 ## 3. 改这个仓库本身
 
 - 构建：`DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh`（`src/` → `lib/`）。
-- 离线自检：`npm test`；真机验收：`npm run test:acceptance`（需要 Blender 在跑）。
+- 离线自检：`npm test`；真机 HTTP 验收：`node tests/host_routes_selftest.mjs`（需要后端在跑）。
 - 改 `runtime/*.py` 前先看 `tests/README.md`；每个能力族都有对应的 `*_selftest`。
 - 文档事实源在包内：`README.zh-CN.md` · `docs/操作教程.md` · `docs/配置参考.md` · `CHANGELOG.md`。
 - **发版流程**（v1.0.0 起）：① 版本号**三处同步**（`package.json` / `src/index.ts` 的 `PLUGIN_VERSION` / 重建后的 `lib/`）；
   ② `npm test` 全绿；③ 提交 → `git tag -a vX.Y.Z` → 推 `main` 与 tag → `gh release create`。
 - **发布 npm**：`npm pack` → `npm publish <tgz> --access public`（包名 `@dsh-external/dsh-blender-plugin`，需维护者 npm 登录）。
   打包面靠 `runtime/.npmignore` + `package.json` 的 `files` 否定模式把 `runtime/ext/venv`（1.2 G）挡在包外 ——
-  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：v2.3.0 起约 **1.4 MB / 159 文件**（删掉 TUI 面板后变小），含随包 skill + 选中桥；v2.2 为 1.5 MB/161、v2.1 为 1.3 MB/144；
+  **改 `files` 后必须 `npm pack --dry-run` 核对**（健康值：v2.3.0 起约 **1.3 MB / 142 文件**（删掉面板/点选/旧 addon 支持后变小），含随包 skill + 选中桥；v2.2 为 1.5 MB/161、v2.1 为 1.3 MB/144；
   曾经漏成 458 MB / 12638 文件）。
 - **随包 skill 的真源**：`skills/blender-modeling/`（SKILL.md + references + MIT LICENSE/NOTICE）。插件加载时注册 bundled provider
   （`ctx.inject(['skills'], …)`，rank 600；用户 `~/.dsh/skills` 的 400 副本仍优先）。**改 skill 直接改这里**，独立仓库

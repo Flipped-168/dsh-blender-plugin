@@ -250,7 +250,7 @@ function resolveHttpPort(): number {
   return 9877
 }
 /** 后端未就绪时的统一提示（不假设任何本机路径） */
-const BACKEND_HINT = '先确认 Blender 在运行且 addon（DSH Blender Bridge，旧名 MCP for Blender）已 Connect；然后 blender_viewport op=start 拉起后端。'
+const BACKEND_HINT = '先确认 Blender 在运行且本仓 addon（DSH Blender Bridge v1.8+）已 Connect；然后 blender_viewport op=start 拉起后端。'
   + '端口/工作目录/blender.exe 可用 DSH_BLENDER_* 环境变量或包根 dsh-blender.config.json 配置（见 docs/配置参考.md）。'
 
 /**

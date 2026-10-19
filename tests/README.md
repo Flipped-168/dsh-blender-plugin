@@ -115,7 +115,6 @@ PARAMS 静默变空）；单键信封 `{"args":{…}}` 的向后兼容仍在。
 失败方式是 `fiber failed → 15 个工具整体消失`，而 Blender 与插件包看起来都没坏。
 
 ```bash
-node tests/protocol_selftest.mjs              # ① addon 协议层：28 项，不需要 Blender / DSH
 node tests/dsh_api_compat_probe.mjs           # ② 工具契约：15 个工具 + 静态 timeoutMs + 0 报错
 node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.json   # ③ 对"待升级版本"预演
 ```
@@ -126,19 +125,15 @@ node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.jso
 ## 0. addon 协议适配（不需要 Blender / DSH，最省事）
 
 ```bash
-node tests/protocol_selftest.mjs      # 或 npm test
 ```
 
-用两个 mock addon（扁平协议 / category-action）把适配层跑一遍，共 39 项断言：
+（协议适配自检已随旧 addon 支持一起删除：v2.3 只支持本仓 addon 的扁平协议，真机连通性由 launch_selftest 覆盖。）
 
 | 覆盖 | 断言要点 |
 |---|---|
 | 协议探测 | 两种 mock 各判对；死端口 → `null`；**扁平 addon 第一轮没回时按封套形状纠错**回 `flat` |
-| 协议解析 | `auto` 探测出正确结果；显式 `addonProtocol` 不探测、立即返回；未知协议名报错；**已弃用别名** `'ahujasid'` 被接受并归一化为 `'flat'`（旧配置文件不炸） |
-| addon 标识双名探测 | 5 个集成开关在**旧 addon（`blendermcp_use_*`）**与**新 addon（`dshbb_use_*`）**下都读得到；双名都在时**新名优先**；回执键用新名 |
 | 两种协议下的调用 | `ping` / `get_scene_info` / `execute_code`（形状必须是 `{executed,result}`）/ 视口帧 |
 | 错误传播 | 两种协议各自把 addon 的错误变成 reject |
-| 缺能力不假装 | category-action 侧的资产集成命令明确报错；遥测类是本地桩（不占 socket） |
 
 ## 1. view.py 自检（矩阵 + 离屏 + PNG 字节）
 

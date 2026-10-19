@@ -75,22 +75,12 @@
 ## 2. 前置条件（Requirements，5 条，缺一不可）
 
 1. **Blender 4.x / 5.x 以 GUI 模式运行** —— 这条通道需要活的 GUI 会话（`-b` 只给无头工具用）。
-2. **Blender 里的 addon** —— 本仓**附带** [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)
-   （**`DSH Blender Bridge` v1.8**，模块名 `dsh_blender_bridge`），也可用上游原版 **`MCP for Blender`**（模块名 `blender_mcp`）。
-   插件对 addon 标识做了**双名回退**，两条都能连；它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
+2. **Blender 里的 addon —— 只支持本仓附带的 [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)**
+   （**`DSH Blender Bridge` v1.8**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
    `get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(...)`、`execute_code(code)`，
    外加 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D）。
-
-   **要不要换 addon（v2.3 兼容矩阵）**
-
-   | 你装的 Blender addon | 模型工具（看 / 改 / 批处理 / 计划层…） | 原生选中 → 草稿 · 集合 · activity | `@` 提及 |
-   |---|---|---|---|
-   | **MCP for Blender**（上游原版，模块名 `blender_mcp`） | ✅ 能连能用 | ❌ **没有**（缺 5 条新命令与 N 面板入口） | ✅ |
-   | **本仓 `DSH Blender Bridge` v1.8+** | ✅ | ✅ | ✅ |
-
-   两个 addon 都默认监听 `127.0.0.1:9876`，**不要同时启用**（端口冲突，同一时间只能有一个在服务）。
-   **只想让 AI 驱动 Blender** ⇒ 不换也行，继续用 `MCP for Blender`；
-   **想要"在 Blender 里选好 → 一键进 DSH 草稿"、集合发送、human/agent 判定** ⇒ 换成本仓 v1.8 addon。
+   **上游 `MCP for Blender` / harveyxiacn `blender_mcp_addon` 自 v2.3 起不再支持**（旧的双名回退与 category-action 适配已删除）；
+   如果装的是旧 addon，请停用它并改成本仓 addon（见 [MIGRATIONS.md](MIGRATIONS.md)）。
 3. **Node.js ≥ 20**（跑后端与插件宿主）。
 4. **DSH（DeepSeek Harness）** —— 本包以 DSH 插件形态提供工具（`inject: ['tools']`，按 `dsh.bundle` 声明装配）。
    WSL 里跑 DSH、Blender 在 Windows：需要 WSL 互操作（默认开）；Windows / 原生 Linux / macOS 同机部署都支持并自动探测。
@@ -102,7 +92,7 @@
 ## 3. 安装（Install，5 步）
 
 > **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的
-> `dsh-external-dsh-blender-plugin-2.3.0.tgz`（1.4 MB / 159 文件）：解包后放进
+> `dsh-external-dsh-blender-plugin-2.3.0.tgz`（1.3 MB / 142 文件）：解包后放进
 > `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
 > 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
 
@@ -238,7 +228,7 @@ blender_rt_txn  {op:"snapshot", label:"before-edit"}
 | 后端不可用（9877 连不上） | 后端进程没起来 | `blender_viewport(op="start")` |
 | `value is not lossless JSON` | 插件版本旧（< v0.9.4） | 升级后**重启 DSH** |
 | 写操作 409 `leased` | 别的会话持有写租约 | `blender_viewport(op="who")`，别强抢 |
-| N 面板没有「Selection → DSH」 | addon < v1.8（如上游 `MCP for Blender`） | 装本仓 addon v1.8，再重启 DSH |
+| N 面板没有「Selection → DSH」 | 装的是旧 `MCP for Blender`（v2.3 不支持） | 停用旧 addon，装本仓 v1.8，再重启 DSH |
 | 已发送但草稿没字 | 升级后没重启 DSH / 草稿被锁 | 重启 DSH；看 `/host/selection/latest.last_consume` 的 `ok/reason` |
 | 旧「Blender 视口」tab 还在 | DSH 没重启（v2.3 已删面板） | 重启 DSH |
 
@@ -268,11 +258,10 @@ npm test                                  # 离线全套（能力锁 / schema / 
 node tests/client_bundle_selftest.mjs     # bundle 形状 + @ codec + 选中文本 / 插入路径
 node tests/selection_store_selftest.mjs   # 选中存储：消毒 / seq / consume / last_consume
 node tests/host_routes_selftest.mjs       # 真 HTTP 路由（判据 1–8、S1–S3；需要后端在跑）
-npm run test:acceptance                   # 真机验收（需要 Blender + 后端）
 npm run test:routes                       # 路由契约（静态）
 ```
 
-发版门：`npm test` 全绿 + `npm pack --dry-run` ≈ **1.4 MB / 159 文件** + `blender_viewport(op="doctor")` → `kind=ok`。
+发版门：`npm test` 全绿 + `npm pack --dry-run` ≈ **1.3 MB / 142 文件** + `blender_viewport(op="doctor")` → `kind=ok`。
 
 ---
 

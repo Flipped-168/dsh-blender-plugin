@@ -25,8 +25,7 @@ import { createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CFG, PATHS, winToWsl, wslToWin, describeConfig, IS_WIN, IS_MAC, IS_WSL, PKG_ROOT, wslPathShared } from './config.mjs';
-// 协议适配层：直连通道支持两种 addon 实现（扁平协议 / harveyxiacn category-action），
-// 由 CFG.addonProtocol 选择，默认 auto 自动探测。差异与映射见 runtime/addon-protocol.mjs。
+// 协议：v2.3 起只支持本仓 addon 的扁平协议（旧 MCP for Blender / category-action 支持已删除）。
 import { resolveProtocol, detectProtocol, resetProtocolCache } from './addon-protocol.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -148,7 +147,6 @@ import { baseChildEnv, withWslEnv, workdirStagingWarning } from './proc_env.mjs'
 // S12（宿主集成）：视口状态存储（/host/*）。engine 侧**只接线**：
 // 在 addon 通道的 send 包装里记「在飞命令」与「场景变更」，并把捕获结果交给 store。
 // 目录面（15 工具 / 186 op）**不动** —— 宿主集成是用户侧能力，不进 op 目录。
-import { viewStore, isSceneChangingCommand } from './viewstore.mjs';
 export { writeHeadlessScript };
 export { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER };
 
@@ -238,8 +236,8 @@ export function catalogPayload(opts) {
 
 /**
  * 5 个资产集成开关的**逻辑名**（= `/commands` 回执里 `gates` 的键，与 COMMAND_CATALOG 的 `gate` 对齐）。
- * v2.0.0 addon 改名后标识前缀是 `dshbb_`；读取时**先新名、取不到回退旧名 `blendermcp_*`**（旧 addon 回退）。
- * 注意：结构与这 5 个逻辑名不得变（测试与 handoff 依赖它），只改前缀策略。
+ * 本仓 addon 的标识前缀固定是 `dshbb_`（v2.3 起不再兼容改名前的旧 addon）。
+ * 注意：结构与这 5 个逻辑名不得变（测试与 handoff 依赖它）。
  */
 export const GATE_FLAGS = [
   'dshbb_use_polyhaven',
@@ -248,12 +246,6 @@ export const GATE_FLAGS = [
   'dshbb_use_polypizza',
   'dshbb_use_hunyuan3d',
 ];
-
-/** 旧 addon（改名前的版本）的开关前缀 —— 只用于**兼容回退读取**，不是本插件的品牌。 */
-const LEGACY_GATE_PREFIX = 'blendermcp_';
-
-/** 把 GATE_FLAGS 的逻辑名映射成旧 addon 的开关名（回退读用） */
-const LEGACY_GATE_FLAGS = GATE_FLAGS.map((n) => n.replace(/^dshbb_/, LEGACY_GATE_PREFIX));
 
 const REGION_CODE = [
   'import bpy, json',
@@ -268,21 +260,15 @@ const REGION_CODE = [
 
 /**
  * 读 5 个集成开关的 python 载荷（`/commands` 用）。
- * **双名探测**：先读新名 `dshbb_use_*`，取不到（None）再回退旧名 `blendermcp_use_*`
- * —— addon 未改名（旧 addon 回退）与已改名两种情况下都能读到。
- * 回执的键用**新名**（与 GATE_FLAGS / COMMAND_CATALOG.gate 对齐）。
+ * 只读本仓 addon 的 `dshbb_use_*`（v2.3 起不再兼容旧 addon）。
  */
 export const FLAGS_CODE = [
   'import bpy, json',
   's = bpy.context.scene',
   'names = ' + JSON.stringify(GATE_FLAGS),
-  'legacy = ' + JSON.stringify(LEGACY_GATE_FLAGS),
   'flags = {}',
-  'for i, n in enumerate(names):',
-  '    v = getattr(s, n, None)',
-  '    if v is None:',
-  '        v = getattr(s, legacy[i], None)   # 旧 addon 回退（改名前的版本）',
-  '    flags[n] = bool(v)',
+  'for n in names:',
+  '    flags[n] = bool(getattr(s, n, None))',
   'print(json.dumps({"scene": s.name, "file": bpy.data.filepath, "flags": flags}))',
 ].join('\n');
 
@@ -558,7 +544,7 @@ export async function tcpProbe(host = ADDRESS.host, port = ADDRESS.port, timeout
 
 export async function freshPing(host = ADDRESS.host, port = ADDRESS.port, timeoutMs = 2500) {
   const t0 = Date.now();
-  const { proto } = await resolveProtocol({ host, port, prefer: CFG.addonProtocol, timeoutMs: Math.min(timeoutMs, 1500) });
+  const { proto } = await resolveProtocol({ host, port, prefer: 'flat', timeoutMs: Math.min(timeoutMs, 1500) });
   const plan = proto.plan("ping", {});
   return new Promise((resolve, reject) => {
     const s = net.connect({ host, port });
@@ -579,7 +565,7 @@ export async function freshPing(host = ADDRESS.host, port = ADDRESS.port, timeou
 }
 
 export async function diagnose() {
-  const proto = (await resolveProtocol({ host: ADDRESS.host, port: ADDRESS.port, prefer: CFG.addonProtocol }).catch(() => null));
+  const proto = (await resolveProtocol({ host: ADDRESS.host, port: ADDRESS.port, prefer: 'flat' }).catch(() => null));
   const panel = (proto && proto.proto.panelHint) || "「DSH Blender Bridge」面板 → Connect";
   const tcp = await tcpProbe();
   if (!tcp) {
@@ -597,37 +583,22 @@ export async function diagnose() {
       fix: "等它空下来再调用；长渲染改走 blender_rt_headless（独立进程，不占 GUI 通道）",
       hint: "addon 活着、ping 通，但 bpy 命令超时 → Blender 主线程被占（渲染 / 模态操作 / 重活）。等它空下来，或把长渲染改用 blender_rt_headless（独立进程，不占 GUI 通道）" };
   } catch (e) {
-    // TCP 通但 ping 不回：除了"addon 线程卡住"，还有一种高频原因是**协议不匹配**
-    // （装了另一套 addon，或 addonProtocol 配错）。这里再探一次协议，把结论写进诊断。
-    const detected = await detectProtocol(ADDRESS.host, ADDRESS.port, 1200).catch(() => null);
-    const mismatch = detected && proto && detected.id !== proto.proto.id;
-    if (!detected) {
-      return { kind: "addon-thread-stuck", tcp: true, ping: false, error: String((e && e.message) || e),
-        summary: "端口通但 ping 无响应 —— addon 客户端线程卡在上一条长命令上",
-        fix: "不要连发；等它结束（agent 模式下可 blender_rt_loop op=stop 急停），仍无响应再重启 Blender。若 addon 面板显示的并不是「已连接」，先点一次 Connect",
-        hint: "TCP 通但 ping 无响应 → addon 的客户端线程卡住（通常上一次长命令仍在执行）；不要连发，等它结束或重启 Blender" };
-    }
+    // TCP 通但没有扁平 JSON 回包：addon 线程卡住，或对面根本不是本仓 addon。
     return { kind: "addon-thread-stuck", tcp: true, ping: false, error: String((e && e.message) || e),
-      detected_protocol: detected.id, configured_protocol: CFG.addonProtocol,
-      summary: mismatch
-        ? "端口通、addon 也活着，但按 " + (proto && proto.proto.id) + " 协议发 ping 没有回包 —— 协议不匹配"
-        : "端口通但 ping 无响应 —— addon 客户端线程卡在上一条长命令上",
-      fix: mismatch
-        ? "把 dsh-blender.config.json 的 addonProtocol 改成 \"" + detected.id + "\"（或设 \"auto\"）后重启后端：blender_viewport op=restart"
-        : "不要连发；等它结束，仍无响应再重启 Blender",
-      hint: mismatch
-        ? "探测到的 addon 实际讲 " + detected.id + " 协议，与当前配置不一致 → 改 addonProtocol 或设 auto"
-        : "TCP 通但 ping 无响应 → addon 的客户端线程卡住；不要连发，等它结束或重启 Blender" };
+      summary: "端口通但 ping 无响应 —— addon 客户端线程卡住，或当前 addon 不是本仓「DSH Blender Bridge」",
+      fix: "不要连发；等它结束（agent 模式下可 blender_rt_loop op=stop 急停），仍无响应再重启 Blender。"
+        + "若 Blender 里装的是旧「MCP for Blender」，v2.3 起已不支持：请换成 addon/dsh_blender_bridge.py（v1.8）",
+      hint: "TCP 通但 ping 无响应 → addon 线程卡住，或装的不是本仓 addon；v2.3 起只支持 DSH Blender Bridge v1.8+" };
   }
 }
 
 /** 通道运行时实际使用的协议（给 /doctor、/who、工具输出用） */
 export async function protocolInfo() {
   try {
-    const r = await resolveProtocol({ host: ADDRESS.host, port: ADDRESS.port, prefer: CFG.addonProtocol });
-    return { id: r.proto.id, label: r.proto.label, from: r.from, detected: r.detected || null, configured: CFG.addonProtocol };
+    const r = await resolveProtocol({ host: ADDRESS.host, port: ADDRESS.port, prefer: 'flat' });
+    return { id: r.proto.id, label: r.proto.label, from: r.from, detected: r.detected || null, configured: 'flat' };
   } catch (e) {
-    return { id: null, error: String((e && e.message) || e), configured: CFG.addonProtocol };
+    return { id: null, error: String((e && e.message) || e), configured: 'flat' };
   }
 }
 
@@ -644,7 +615,7 @@ export class AddonClient {
   }
   async protocol() {
     if (!this.proto) {
-      this.protocolInfo = await resolveProtocol({ host: this.addr.host, port: this.addr.port, prefer: CFG.addonProtocol });
+      this.protocolInfo = await resolveProtocol({ host: this.addr.host, port: this.addr.port, prefer: 'flat' });
       this.proto = this.protocolInfo.proto;
     }
     return this.protocolInfo;
@@ -716,18 +687,6 @@ export function createEngine(opts = {}) {
   const injected = new Set();
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
   const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0 };
-  /**
-   * S13（宿主集成 v1.2 · 契约 §7.1）：`/host/ready` 的**只读缓存**。
-   *
-   * 为什么必须是缓存而不是"问一下 Blender"：面板每 2 s 轮询它做门控（契约 §7.3），
-   * 实测 `/doctor` 205 ms（它要发 ping 命令、占 addon 主线程）vs `/health` 2.6 ms。
-   * 本对象的每个字段都是**别人已经付过的代价**顺手记下来的：
-   *   · `addon` 连接态来自 AddonClient 的**常驻 socket**（`addon.sock`，socket 的 close 事件会置空）
-   *     —— 于是 Blender 一死，下一个 `/host/ready` 立刻看到 `addon:false`，**零 I/O**；
-   *   · `protocol` 来自任何一次成功的 `get_addon_info` 回包（`protocol_version`，实测 addon v1.7 = 11）；
-   *   · `handshakeFrom` 来自 addon 客户端自己的协议解析缓存（'config'/'auto'/'fallback'）。
-   */
-  const readiness = { protocol: null, protocolAt: null, handshakeFrom: null, handshakeId: null, lastTransportErrorAt: null };
   const rawSend = addon.send.bind(addon);
   /**
    * @param {object} [opts] `{noMark:true}` = 这条命令**不算"会改场景"**（不参与 scene_version 计数）。
@@ -735,7 +694,7 @@ export function createEngine(opts = {}) {
    * ② `/host/*` 宿主集成原语（取帧/点击反投影/@列表 —— 全是只读）。
    * 为什么必须显式排除：契约把 `execute_code` 整条计入"会改场景"（保守口径），
    * 于是"点一下视口"会经由 ensureView() 的 execute_code 把**刚抓的那帧**标成 stale，
-   * 面板随即自动重拍 —— 点击自己把自己弄脏。见 docs/宿主集成-接口契约.md §3。
+   * v2.3 起面板/点选已删除，`noMark` 仍保留给插件自身模块加载（纯 plumbing）使用。
    */
   addon.send = async (type, params, timeoutMs, opts) => {
     // v0.9.6（A7）：渲染中把主线程命令**秒回 busy**，不再排队到超时（实测 76/111 条失败是超时）
@@ -757,26 +716,17 @@ export function createEngine(opts = {}) {
     metrics.inflight++;
     metrics.lastCmd = type;
     metrics.lastCmdAt = Date.now();
-    // S12（宿主集成 · 契约 §3）：在飞计数（blender_quiet 的判据）+「会改场景」的命令完成后
-    // scene_version += 1。opts.noMark 的两类例外见 addon.send 的注释。
-    viewStore.beginCommand();
-    const sceneChanging = isSceneChangingCommand(type) && !(opts && opts.noMark);
     try {
       const r = await rawSend(type, params, timeoutMs);
       metrics.lastOkAt = Date.now();
       metrics.lastDiagnosis = null;
-      // S13（§7.1）：顺手记"握手证据"—— `/host/ready` 之后只读这份缓存，绝不再发包
-      noteHandshake(type, r);
-      if (sceneChanging) viewStore.noteSceneChange();
       return r;
     } catch (e) {
       const msg = String((e && e.message) || e);
       metrics.errors++;
       metrics.lastError = msg;
-      // 半途失败也可能已经改到了场景（execute_code 跑到一半抛错）→ 保守标记，宁可多标 stale
-      if (sceneChanging) viewStore.noteSceneChange();
       const transport = /timeout|closed|ECONN|ECONNRESET|socket/i.test(msg);
-      if (transport) { metrics.timeouts++; readiness.lastTransportErrorAt = Date.now(); }
+      if (transport) metrics.timeouts++;
       // v0.7.0：只有**传输/超时类**错误才做三级判定；执行类错误（代码抛错/编译错）不该被误判成 main-thread-busy
       if (transport) {
         try { e.diagnosis = await diagnose(); metrics.lastDiagnosis = e.diagnosis; } catch (x) { /* 诊断自身失败不影响原错误 */ }
@@ -786,49 +736,8 @@ export function createEngine(opts = {}) {
       throw e;
     } finally {
       metrics.inflight--;
-      viewStore.endCommand();
     }
   };
-  /**
-   * S13（§7.1）：把"刚刚确实握过手"的证据记进 `readiness`（**免费** —— 只是读已经拿到的东西）。
-   * 只做两件事：① 任何成功的 `get_addon_info` 回包 → 记 addon 自己报的协议号；
-   * ② addon 客户端的协议解析缓存（`addon.protocolInfo`）→ 记它是不是"探测失败回退"。
-   */
-  function noteHandshake(type, result) {
-    try {
-      if (String(type) === 'get_addon_info' && result && typeof result === 'object') {
-        const pv = Number(result.protocol_version !== undefined ? result.protocol_version : result.protocolVersion);
-        if (Number.isFinite(pv)) { readiness.protocol = pv; readiness.protocolAt = Date.now(); }
-      }
-      const pi = addon.protocolInfo;
-      if (pi && typeof pi === 'object') {
-        readiness.handshakeFrom = pi.from || null;
-        readiness.handshakeId = (pi.proto && pi.proto.id) || null;
-      }
-    } catch (e) { /* 记证据失败绝不影响命令本身 */ }
-  }
-  /**
-   * S13（宿主集成 v1.2 · 契约 §7.1）：`GET /host/ready` 的**全部**逻辑。
-   * **同步、零 I/O、零 Blender 往返** —— 只读上面那份缓存 + 常驻 socket 的存活态。
-   * `ready=false` 的两种 reason（契约只允许这两个）：
-   *   · `addon-unreachable`：常驻 socket 不在了（后端启动时就没连上，或 Blender 中途死了 —— socket 的 close 事件会把 sock 置空）
-   *   · `handshake-stale`：socket 在，但协议解析是 `fallback`（端口通、探测不回包 ⇒ 对面不是我们认的 addon，或线程卡住）
-   */
-  function hostReady() {
-    const sock = addon.sock;
-    const connected = !!(sock && !sock.destroyed);
-    let reason = null;
-    if (!connected) reason = 'addon-unreachable';
-    else if (readiness.handshakeFrom === 'fallback') reason = 'handshake-stale';
-    return {
-      ok: true,
-      ready: reason === null,
-      addon: connected,
-      protocol: readiness.protocol,
-      backend: PLUGIN_VERSION,
-      reason: reason,
-    };
-  }
   /** 把 Blender 侧 python 模块注入运行中的 Blender（模块自己把 API 挂到 K 上） */
   const MODULE_ATTR = { RUNNER_READY: 'dsh_loop_api', PERF_READY: 'dsh_perf_api', VIEW_READY: 'dsh_view_api',
                         CONTRACT_READY: 'dsh_contract_api', PLAN_READY: 'dsh_plan_api',
@@ -2141,10 +2050,8 @@ export function createEngine(opts = {}) {
   const TRAJ_OFF = process.env.DSH_TRAJ === '0' || process.env.DSH_TRAJ === 'false';
   const TRAJ_FULL = process.env.DSH_TRAJ_FULL === '1';
   const TRAJ_MAX_BYTES = Number(process.env.DSH_TRAJ_MAX_BYTES || 16000000);
-  // S13（§7.1）：`hostReady` 必须便宜 —— 它每 2 s 被面板轮询一次做门控。
-  // 轨迹台账是 `fs.appendFileSync` 到 workDir（本机是 drvfs 挂载），实测一次 ~35 ms：
-  // 不加进来会让 /host/ready 从 ~1.5 ms 变成 ~37 ms（比 /health 慢 14 倍），直接违背 §7.1。
-  const TRAJ_SKIP = new Set(['metrics', 'status', 'protocol', 'sceneEpoch', 'hostReady']);
+  // 轨迹跳过只读诊断（轨迹台账是 appendFileSync 到 workDir，几十 ms；诊断路由不该被拖慢）。
+  const TRAJ_SKIP = new Set(['metrics', 'status', 'protocol', 'sceneEpoch']);
   function trajShortHash(s) {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
@@ -2222,8 +2129,6 @@ export function createEngine(opts = {}) {
     /** v0.9.4：拉起 GUI Blender + 自动 Connect addon（server.mjs /launch 路由用） */
     launchBlender: (opts) => launchBlender(opts || {}),
     sceneEpoch: sceneEpoch,
-    /** S13（§7.1）：`GET /host/ready` 的唯一实现 —— 同步、零 I/O、零 Blender 往返 */
-    hostReady: () => hostReady(),
     /** 通道指标快照（inflight / last_cmd / 超时计数） */
     metrics() {
       return { ...metrics, lastCmdAgeMs: metrics.lastCmdAt ? Date.now() - metrics.lastCmdAt : null };
@@ -2445,26 +2350,6 @@ export function createEngine(opts = {}) {
      * 本方法是"用户现在看到的就是这一帧"（矩阵直接取 region_3d）→ 面板显示 + 点击反投影。
      * 零场景/零视口改动；拿不到矩阵时 view.py 回 ok=false（上层据此把 pickable 置 false，不撒谎）。
      */
-    async hostCapture(opts = {}) {
-      await ensureView();
-      const spec = { max_size: Number(opts.maxSize) || 1000, path: VIEW_PNG_WIN };
-      const body = 'print("HOSTCAP " + K.dsh_view_api["host_capture"](' + JSON.stringify(JSON.stringify(spec)) + '))';
-      const info = extractTag(await addon.send('execute_code',
-        { code: KERNEL_BOOTSTRAP + '\n' + body }, Math.max(30000, Number(opts.timeoutMs) || 120000), { noMark: true }), 'HOSTCAP');
-      if (!info || info.ok === false) throw new Error('宿主视口捕获失败: ' + JSON.stringify(info).slice(0, 300));
-      return { png: fs.readFileSync(winToWsl(info.path)), meta: info };
-    },
-    /**
-     * 宿主集成（/host/view/pick，契约 §1.5）：归一化点击 → 反投影 → 命中对象。
-     * ⚠ 错配（file/scene）由 Blender 侧**先判**并回 *_mismatch —— 本方法原样把结论带回去，不降级。
-     */
-    async hostPick(spec = {}) {
-      await ensureView();
-      const body = 'print("HOSTPICK " + K.dsh_view_api["host_pick"](' + JSON.stringify(JSON.stringify(spec)) + '))';
-      const info = extractTag(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\n' + body }, 60000, { noMark: true }), 'HOSTPICK');
-      if (!info) throw new Error('pick 无回执');
-      return info;
-    },
     /** 宿主集成（/host/scene-items，契约 §1.6）：`@` 提及的数据源（objects/materials/collections）。 */
     async hostSceneItems(spec = {}) {
       await ensureView();
@@ -2898,8 +2783,7 @@ export function createEngine(opts = {}) {
         result: parsed, stdout: clipMiddle(stdout, 4000, 4000), stderr: clipMiddle(stderr, 2000, 2000), artifacts: artifacts };
     },
     /**
-     * S13（§7.1）：启动时连上常驻 socket，并**尽力**补一次 `get_addon_info` 把协议号记进
-     * `readiness`（`/host/ready` 的 `protocol` 字段就靠它；不 await、失败即忽略 ——
+     * 启动时连上常驻 socket，并**尽力**补一次 `get_addon_info`（不 await、失败即忽略 ——
      * 绝不让"addon 没起来"或"addon 正忙"拖慢后端启动）。
      */
     async start() {

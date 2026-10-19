@@ -24,20 +24,14 @@ await tryCall('get_sketchfab_status');
 await tryCall('get_polypizza_status');
 await tryCall('get_hunyuan3d_status');
 await tryCall('get_polyhaven_categories', { asset_type: 'hdris' }, 25000);
-// 5 个集成开关：**双名探测**（先新名 dshbb_use_*，取不到回退旧名 blendermcp_use_*）——
-// 与 engine.mjs 的 FLAGS_CODE 同口径；回执键用新名。
-const LEGACY_GATE_FLAGS = GATE_FLAGS.map((n) => n.replace(/^dshbb_/, 'blendermcp_'));
+// 5 个集成开关：只读本仓 addon 的 dshbb_use_*（v2.3 起不再兼容旧 addon）
 const code = [
   'import bpy, json',
   's = bpy.context.scene',
   'names = ' + JSON.stringify(GATE_FLAGS),
-  'legacy = ' + JSON.stringify(LEGACY_GATE_FLAGS),
   'out = {}',
-  'for i, n in enumerate(names):',
-  '    v = getattr(s, n, None)',
-  '    if v is None:',
-  '        v = getattr(s, legacy[i], None)   # 旧 addon 回退（改名前的版本）',
-  '    out[n] = v',
+  'for n in names:',
+  '    out[n] = bool(getattr(s, n, None))',
   'print(json.dumps(out))',
 ].join('\n');
 await tryCall('execute_code', { code });
