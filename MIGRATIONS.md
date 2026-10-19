@@ -1,9 +1,17 @@
-# MIGRATIONS —— 从旧版本迁到 v2.3
+# MIGRATIONS —— 从旧版本迁到 v2.4
 
 > v2.3 是**收缩版**：删除了 DSH 侧视口面板 / 点选 / TUI 面板，**不再兼容**上游 `MCP for Blender`
-> 与 harveyxiacn `blender_mcp_addon`。下面是从各旧状态迁到 v2.3 的唯一路径。
+> 与 harveyxiacn `blender_mcp_addon`。v2.4 在不扩模型工具的前提下，补上了编辑模式子元素选中
+> （点/线/面、骨骼、曲线/晶格点）。下面是从各旧状态迁到 v2.4 的唯一路径。
 
-## 1. Blender 侧 addon：必须换成 `DSH Blender Bridge` v1.8+
+## 0. 如果你从 v2.1 直接升上来（最短路径）
+
+1. 更新 DSH 插件包 → **重启 DSH**；旧「Blender 视口」tab / 点击进消息在 v2.3 已删除，这是预期。
+2. Blender 里停用旧 addon → 安装本仓 `addon/dsh_blender_bridge.py`（**v1.9**）→ 启用 → N → Connect。
+3. `blender_rt_cmd get_addon_info` → `addon_version=[1,9]`；`curl http://127.0.0.1:9877/doctor` → `kind=ok`。
+4. 选中入口：Blender 原生选中 → `N` →「Selection → DSH」→ 发送（多选 / 集合）；编辑模式选点/面、姿态选骨骼也会一起发。
+
+## 1. Blender 侧 addon：必须换成 `DSH Blender Bridge` v1.9+
 
 v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N 面板入口，旧 addon 没有。
 两个 addon 都默认监听 `127.0.0.1:9876`，**不能同时启用**。
@@ -11,7 +19,7 @@ v2.3 的原生选中 / 集合 / activity 依赖本仓 addon 的 5 条命令与 N
 1. `Edit ▸ Preferences ▸ Add-ons` → 停用旧条目（`MCP for Blender` / `blender_mcp` / `blender_mcp_addon`）。
 2. `Install...` → 选本仓 [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py) → 勾选启用 **DSH Blender Bridge**。
 3. 3D 视图按 `N` →「DSH Blender Bridge」→ **Connect**（端口 9876）；或直接 `blender_viewport(op="launch")`。
-4. `blender_rt_cmd get_addon_info` → `addon_version` 应为 `[1,8]`，capabilities 含
+4. `blender_rt_cmd get_addon_info` → `addon_version` 应为 `[1,9]`，capabilities 含
    `get_activity_state` / `get_selection` / `get_collections` / `send_*_to_dsh`。
 
 > 旧名 `blender_mcp` 的"已启用"记录是死引用，可以移除；插件**不再做双名回退**。

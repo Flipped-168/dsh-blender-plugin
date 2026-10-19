@@ -13,10 +13,10 @@
 |---|---|
 | 文件名 / 模块名 | `dsh_blender_bridge.py` / `dsh_blender_bridge` |
 | 显示名（Blender 插件列表里） | **DSH Blender Bridge** |
-| 版本 / 协议 | addon **v1.8 / protocol 11**（2026-10-19 活进程实测：Blender 5.2.2 LTS） |
+| 版本 / 协议 | addon **v1.9 / protocol 11**（2026-10-19 活进程实测：Blender 5.2.2 LTS） |
 | 标识前缀 | `dshbb_`（注册类 `bpy.types.dshbb_server`、5 个集成开关 `dshbb_use_*`） |
 | TCP 端口 | `127.0.0.1:9876`（只监听本机） |
-| 命令面 | 39 条（24 常驻 + 15 集成门控；v1.8 新增 `get_activity_state` / `get_selection` / `send_selection_to_dsh` / `get_collections` / `send_collection_to_dsh`） |
+| 命令面 | 39 条（24 常驻 + 15 集成门控；v1.8 新增 `get_activity_state` / `get_selection` / `send_selection_to_dsh` / `get_collections` / `send_collection_to_dsh`；v1.9 选中 payload 增加 `selection.sub`） |
 
 ## 来源与许可（MIT）
 

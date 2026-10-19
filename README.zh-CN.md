@@ -7,10 +7,10 @@
 > 15 个模型工具，不用装 MCP、不用 CLI 适配层：AI 能看、能改、能批处理、能验收、能回滚；
 > 而**你**在 Blender 里原生选中物体，按一个按钮就把它们送进 DSH 当前会话的输入框。
 >
-> 🏷 **v2.3.0** · 15 个模型工具 · 28 family / 186 个 plan op · addon **v1.8**（protocol 11）· 包体 **1.4 MB / 159 文件**
+> 🏷 **v2.4.0** · 15 个模型工具 · 28 family / 186 个 plan op · addon **v1.9**（protocol 11）· 包体 **1.3 MB / 142 文件**
 >
-> **v2.3 变了什么**：选中入口搬进 Blender（多选 / 集合两种模式 + human/agent 判定）；
-> DSH 侧视口面板、点击进消息、`blender_rt_pick` **已删除**。详见下方「v2.3 亮点」。
+> **v2.4 变了什么**：选中入口在 Blender（多选 / 集合），v2.4 起**编辑模式点/线/面、姿态骨骼、曲线/晶格点也能一起发送**；
+> N 面板列表可折叠 / 滚动 / 调高度。v2.3 已删除 DSH 侧视口面板、点击进消息、`blender_rt_pick`。
 
 ---
 
@@ -20,22 +20,19 @@
 
 ---
 
-## v2.3 亮点（What's new in v2.3）
+## v2.4 亮点（What's new in v2.4）
 
-- **选中入口搬进 Blender**：在视口里原生选中 → `N` →「DSH Blender Bridge」→ **Selection → DSH** → 发送；
-  选中进 **DSH 当前会话草稿**，**不自动发送**。
-- **两种模式**：**多选**（当前选中对象）/ **集合**（整组发送）。
-  对象 / 集合成员列表**默认折叠**；展开后是带滚动条的 UIList，高度用「高度（行）」滑杆调（3–30 行，默认 8）——不固定、不铺长列。
-- **子元素选中**（v2.4）：编辑模式里选**顶点 / 边 / 面**、姿态模式选**骨骼**、编辑模式选**曲线/晶格控制点**，
-  发送时 payload 会带上 `selection.sub`（索引数组 + 选择模式 + 截断标记）；草稿文本会写明"已选哪些元素"，
-  模型可用 `bmesh` / `pose.bones[...]` 精确修改。完整数组用 `blender_rt_cmd get_selection` 查。
-  切到集合模式会自动推断最相关集合，⟳ 可重新推断。
-  几百个零件的装配体直接发集合，草稿文本只给"集合名 + 件数 + 前几个成员"。
-- **activity 判定**：Blender 统一判定 `idle / human / agent / both`（模态操作、最近人类编辑/撤销/选区变化、
-  agent 命令窗口），面板实时显示，模型可查 `get_activity_state` / `get_selection`（查询自身不计入 agent）。
-- **删除**：DSH 侧视口面板（Web 右侧栏 + TUI 侧栏）、点击进消息、模型请求点选 → 模型工具 **16 → 15**。
+- **子元素选中（v2.4 新增）**：编辑模式里选**顶点 / 边 / 面**、姿态模式选**骨骼**、编辑模式选**曲线/晶格控制点**，
+  发送时 payload 带 `selection.sub`（索引数组 + 点/边/面模式 + 截断标记）；草稿文本写明"已选哪些元素"，
+  模型可用 `bmesh` / `pose.bones[...]` 精确修改；完整数组用 `blender_rt_cmd get_selection` 查。
+- **N 面板列表可伸缩**：对象 / 集合成员列表默认折叠；展开后是带滚动条的 UIList，高度用「高度（行）」滑杆
+  或「− 矮一点 / + 高一点」调整（3–30 行），不固定、不铺长列；后端地址收进「后端 / 高级」折叠。
+- **选中入口（v2.3 起）**：Blender 原生选中 → `N` →「DSH Blender Bridge」→ **Selection → DSH** → 发送；
+  进 **DSH 当前会话草稿**（**不自动发送**）；两种模式：**多选** / **集合**（大装配体推荐，自动推断集合）。
+- **activity 判定（v2.3 起）**：`idle / human / agent / both`（模态操作、人类编辑/撤销/选区变化、agent 命令窗口），
+  面板实时显示，模型可查 `get_activity_state` / `get_selection`。
+- **v2.3 已删除**：DSH 侧视口面板（Web 右侧栏 + TUI 侧栏）、点击进消息、模型请求点选 → 模型工具 **16 → 15**。
 - **安装型 AI 必须转达**：`docs/AI-安装提示词.md` §③.5 已把"装完主动告诉用户这些新功能"写成硬要求。
-- 另含：大名单收敛（草稿最多列 24 个名字 + 总数）、集合 payload 消毒、`last_consume` 诊断字段。
 
 > 历史：v2.2 随包 skill + TUI 面板（面板 v2.3 删除）；v2.1 作业层 / 配方库 / 多选点选；v2.0 addon 改名
 > `DSH Blender Bridge`；v1.0 冻结模型工具面。带实测数据的逐版记录见 [`CHANGELOG.md`](CHANGELOG.md)。
@@ -80,7 +77,7 @@
 
 1. **Blender 4.x / 5.x 以 GUI 模式运行** —— 这条通道需要活的 GUI 会话（`-b` 只给无头工具用）。
 2. **Blender 里的 addon —— 只支持本仓附带的 [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)**
-   （**`DSH Blender Bridge` v1.8**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
+   （**`DSH Blender Bridge` v1.9**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，至少提供 `ping`、`get_scene_info`、
    `get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(...)`、`execute_code(code)`，
    外加 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D）。
    **上游 `MCP for Blender` / harveyxiacn `blender_mcp_addon` 自 v2.3 起不再支持**（旧的双名回退与 category-action 适配已删除）；
@@ -96,7 +93,7 @@
 ## 3. 安装（Install，5 步）
 
 > **不想构建、也不想走 npm？** 直接下 [Releases](https://github.com/sixtysevenlf/dsh-blender-plugin/releases) 里的
-> `dsh-external-dsh-blender-plugin-2.3.0.tgz`（1.3 MB / 142 文件）：解包后放进
+> `dsh-external-dsh-blender-plugin-2.4.0.tgz`（1.3 MB / 142 文件）：解包后放进
 > `<profile>/node_modules/@dsh-external/dsh-blender-plugin`，或 `npm i ./那个tgz`。skill 就在包里（`skills/blender-modeling/`）。
 > 完整第三方清单见 [`docs/给第三方的安装清单.md`](docs/给第三方的安装清单.md)。
 
@@ -116,10 +113,10 @@ cp dsh-blender.config.example.json dsh-blender.config.json        # 见 docs/配
 
 # ④ 装 addon + 启动 Blender + Connect —— 推荐一键：
 #    blender_viewport(op="launch")  ← 拉起 GUI Blender + 自动扫到并启用 addon
-#      （dsh_blender_bridge 与 blender_mcp 两种名字都能扫到）+ 轮询 9876，幂等；实测约 11 秒连上
+#      （只扫本仓 dsh_blender_bridge）+ 轮询 9876，幂等；实测约 11 秒连上
 #    人工（三条，缺一不可）：
 #      a) 装 addon：Edit ▸ Preferences ▸ Add-ons ▸ Install... → 选 addon/dsh_blender_bridge.py
-#         （或改用上游原版 MCP for Blender —— 两条都能连，但 v2.3 新功能只有改名版有，见 §2）
+#         （v2.3 起只支持本仓 addon；上游 MCP for Blender 已不再支持，见 §2 / MIGRATIONS.md）
 #      b) 启用它（勾选）；v2.0.0 改名后旧的「MCP for Blender」条目是**死引用**，需重新启用「DSH Blender Bridge」（见 MIGRATIONS.md）
 #      c) 3D 视图按 N → 找到「DSH Blender Bridge」面板 → Connect（端口 9876）
 
@@ -151,7 +148,7 @@ blender_rt_see(from="9,-9,6", look_at="0,0,1")               # 换个角度：�
 
 - **`@` 提及**：输入框敲 `@` 出对象 / 材质 / 集合候选（引用带前缀 `object:<name>` / `material:<name>` /
   `collection:<name>`），选中后由 `codec` 拆掉前缀、序列化成 `<blender-object>Cube</blender-object>`，模型不再猜对象名。
-- **Blender 原生选中 → 草稿**（v2.3，需 addon v1.8+）：在 Blender 里选中 → `N` → **Selection → DSH** → 发送；
+- **Blender 原生选中 → 草稿**（v2.3+；子元素选中 v2.4，需 addon v1.9+）：在 Blender 里选中 → `N` → **Selection → DSH** → 发送；
   选中进**当前会话草稿**，**不自动发送**。两种模式：**多选**（当前选中对象）/ **集合**（整组发送，大装配体推荐）。
   - **列表可伸缩**：默认折叠，展开后带滚动条；高度用「高度（行）」滑杆调整，不固定。
   - 后端地址收进折叠的「后端 / 高级」。
@@ -235,7 +232,7 @@ blender_rt_txn  {op:"snapshot", label:"before-edit"}
 | 后端不可用（9877 连不上） | 后端进程没起来 | `blender_viewport(op="start")` |
 | `value is not lossless JSON` | 插件版本旧（< v0.9.4） | 升级后**重启 DSH** |
 | 写操作 409 `leased` | 别的会话持有写租约 | `blender_viewport(op="who")`，别强抢 |
-| N 面板没有「Selection → DSH」 | 装的是旧 `MCP for Blender`（v2.3 不支持） | 停用旧 addon，装本仓 v1.8，再重启 DSH |
+| N 面板没有「Selection → DSH」 | 装的是旧 `MCP for Blender`（v2.3 不支持） | 停用旧 addon，装本仓 v1.9，再重启 DSH |
 | 已发送但草稿没字 | 升级后没重启 DSH / 草稿被锁 | 重启 DSH；看 `/host/selection/latest.last_consume` 的 `ok/reason` |
 | 旧「Blender 视口」tab 还在 | DSH 没重启（v2.3 已删面板） | 重启 DSH |
 
