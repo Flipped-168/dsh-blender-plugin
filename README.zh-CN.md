@@ -83,6 +83,16 @@
 1. **Blender 4.x / 5.x（GUI 模式）** —— 本通道要的是"能看见的 Blender"；后台 `-b` 只用于无头工具那条线。
 2. **Blender 里的 addon**：**两条路任选** —— ① **本仓附带**（推荐）：[`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)（改名版，模块名 `dsh_blender_bridge`，见 [`addon/README.md`](addon/README.md)）；② **上游原版**：`MCP for Blender`（模块名 `blender_mcp`，[ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)）。**两条都能用** —— 插件对 addon 标识做了**双名回退**（新名优先、旧名回退），所以用哪条都连得上。它在 Blender 内起一个 TCP 服务，默认监听 `127.0.0.1:9876`；命令面实测 39 条（24 常驻 + 15 集成门控），至少提供 `ping`、`get_scene_info`、`get_world_state_snapshot`、`get_object_info(name)`、`get_viewport_screenshot(max_size, filepath, format)`、`execute_code(code)`；另有 5 个可选集成（PolyHaven / Hyper3D / Sketchfab / Poly Pizza / Hunyuan3D），开关由 addon 自己的 scene 属性控制。
    - **也支持 harveyxiacn 增强版 `blender_mcp_addon`**（协议不同，插件侧自动适配，配置项 `addonProtocol`，默认 `auto`；见 `docs/配置参考.md` §6）。该实现没有上面那 5 条资产集成通道，相关命令会明确报错。
+   - **要不要换 addon（v2.3 兼容矩阵）**：
+
+     | 你装的 Blender addon | 模型工具（看 / 改 / 批处理 / 计划层…） | v2.3 原生选中 → 草稿 / 集合 / activity | `@` 提及 |
+     |---|---|---|---|
+     | **MCP for Blender**（上游原版，模块名 `blender_mcp`） | ✅ 能连能用 | ❌ **没有**（缺 5 条新命令与 N 面板入口） | ✅ |
+     | **本仓 `DSH Blender Bridge` v1.8+** | ✅ | ✅ | ✅ |
+
+     两个 addon 都默认监听 `127.0.0.1:9876`，**不要同时启用**（端口冲突，同一时间只能有一个在服务）。
+     **只想让 AI 驱动 Blender**（看/改/跑脚本/批处理）⇒ 不换也行，继续用 `MCP for Blender`；
+     **想要"在 Blender 里选好 → 一键进 DSH 草稿"、集合发送、human/agent 判定** ⇒ 换成本仓 v1.8 addon（旧的无缝禁用，插件会自动认新名）。
    - 装好后：3D 视图按 `N` → 找到「DSH Blender Bridge」面板 → **Connect**；兼容性自检 `node runtime/_probe_tools.mjs`（逐条探测命令，输出 ok / 耗时）；协议自检 `node tests/protocol_selftest.mjs`（不需要 Blender）。
    - ⚠️ **改名迁移（v2.0.0）**：旧版本叫 `MCP for Blender`（模块名 `blender_mcp`）；改名后模块名变了，需在 Blender 偏好设置里**重新启用 `DSH Blender Bridge`**（`Edit ▸ Preferences ▸ Add-ons`）—— 旧的"已启用"记录指向 `blender_mcp`，是**死引用**，可移除。完整迁移要点见 [MIGRATIONS.md](MIGRATIONS.md)。
 3. **Node.js ≥ 20**（跑后端与插件宿主）。
@@ -396,7 +406,7 @@ node tests/host_routes_selftest.mjs      # 打契约 §4 判据 1–8（CORS / P
 
 ## 11. 安全、许可与致谢（Security, license, credits）
 
-- 本包**不含** Blender addon 本体（`DSH Blender Bridge`，旧名 `MCP for Blender`），也不含任何模型 / 贴图资源；addon 需自备并遵守其自身许可。
+- 本包**附带** Blender addon（`addon/dsh_blender_bridge.py`，`DSH Blender Bridge` v1.8，旧名 `MCP for Blender`），也可改用上游原版；不含任何模型 / 贴图资源；addon 遵守其自身许可（上游 MIT + 保留版权声明）。
 - 通道只监听 `127.0.0.1`（默认），**不要**对外网开放；`execute_code` 是有意留下的"万能通道"—— 它会在 Blender 进程里跑任意 Python，请只在可信环境使用。
 - 不含人肉面板 / MJPEG 推流 / 鼠标键盘注入（这条路线已明确移除：注入输入容易把系统按键状态搞坏）。
 - 写通道有租约保护：别的会话持有时写路由返回 409（只读 op 豁免），`force=true` 才抢。

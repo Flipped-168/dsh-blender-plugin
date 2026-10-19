@@ -73,6 +73,8 @@
 - **必须重启 DSH**（客户端半边是启动时装载的模块）；开发期 HMR 可能热加载，正式升级以重启为准。
 - **DSH 视口面板已删除**：老用户的侧栏 tab 会消失（代码不再注册）；`/host/view/*` 等路由仍在但无 UI。
 - **装完必须通知用户**：`docs/AI-安装提示词.md` §③.5 已要求安装型 AI 主动介绍原生选中 / 两种模式 / activity / 删除项。
+- **addon 兼容矩阵**：上游 `MCP for Blender`（`blender_mcp`）仍可用模型工具，但**没有** v2.3 的选中/集合/activity；
+  两 addon 同占 9876，不可同时启用。已写入 README §2 / `addon/README.md` / AI 安装提示词。
 - **TUI 暂不支持草稿插入**（无 composer dock；与 `sendToChat` 未授权的既有边界一致）。
 - 桥只写**当前打开的会话**；多标签页极端情况下同一选中可能各插一次（服务端 `last_consume` 保留最后一条）。
 - 宿主面板在 Blender 主线程之外无法逐帧刷新（面板显示随 Blender 重绘更新）。

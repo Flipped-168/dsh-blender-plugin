@@ -39,6 +39,11 @@
 按上游仓库说明装 `MCP for Blender`（模块名 `blender_mcp`）即可 —— 插件会自动识别（双名回退），
 只是 Blender 里显示的名字是上游那个。
 
+> ⚠ **v2.3 新功能只在改名版里有**：`Selection → DSH`（原生选中 / 集合两种模式）、`get_activity_state` /
+> `get_selection` / `get_collections` / `send_*_to_dsh` 命令都只在本文件（v1.8+）里；上游原版没有这些，
+> 所以"模型工具"照常可用，但"在 Blender 里选好一键进草稿"用不了。
+> 两个 addon 默认都监听 `127.0.0.1:9876`，**不要同时启用**。
+
 > 也可以让插件**一键拉起**：`blender_viewport(op="launch")` —— 它会拉起 GUI Blender 并**自动扫到并启用**
 > addon（`dsh_blender_bridge` 与 `blender_mcp` 两种名字都能扫到），实测约 11 秒连上。
 

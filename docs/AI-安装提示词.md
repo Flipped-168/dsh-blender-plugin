@@ -56,6 +56,10 @@ blender_rt_cmd(name="get_collections")    # v2.3：集合模式的数据源在�
    模型也能查（`get_activity_state` / `get_selection`）。
 4. **已删除**：DSH 里原来的「Blender 视口」面板、点击进消息、模型请求点选（`blender_rt_pick`）在 v2.3 都已移除；
    截图仍由模型工具 `blender_rt_see` 负责。**升级后必须重启 DSH**，并且 Blender 侧 addon 要 v1.8+。
+5. **addon 兼容性（重要）**：如果 Blender 里装的是上游原版 **`MCP for Blender`**（模块名 `blender_mcp`），
+   模型工具照常能用，但上面 1–3 的新功能**用不了**（缺少 5 条新命令与 N 面板入口）。
+   要新功能就换成本仓附带 `addon/dsh_blender_bridge.py`（v1.8+）；两个 addon 默认都监听 9876，**不要同时启用**。
+   —— 请把这条也如实告诉用户，不要让他以为旧 addon 也有新功能。
 
 ## ④ 什么算失败（拿到这些回执就别宣布成功）
 
