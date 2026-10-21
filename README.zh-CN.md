@@ -77,7 +77,8 @@
 
 详细教程：[`docs/操作教程.md`](docs/操作教程.md) · 配置参考：[`docs/配置参考.md`](docs/配置参考.md) ·
 部署 SOP：[`docs/部署SOP.md`](docs/部署SOP.md) · headless 路线：[`docs/headless优先-路线决定.md`](docs/headless优先-路线决定.md) ·
-接口契约 v2.3：[`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md)。
+接口契约 v2.3：[`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md) ·
+v2.6.0 更新说明：[`docs/v2.6.0-更新说明.md`](docs/v2.6.0-更新说明.md)。
 
 ---
 

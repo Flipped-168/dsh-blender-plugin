@@ -53,7 +53,8 @@ reference-image reconstruction SOP and multi-view calibration.
 
 Walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) · configuration: [`docs/配置参考.md`](docs/配置参考.md) ·
 deployment SOP: [`docs/部署SOP.md`](docs/部署SOP.md) · headless-first rationale: [`docs/headless优先-路线决定.md`](docs/headless优先-路线决定.md) ·
-host contract v2.3: [`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md).
+host contract v2.3: [`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md) ·
+what changed in v2.6.0: [`docs/v2.6.0-更新说明.md`](docs/v2.6.0-更新说明.md).
 
 ---
 
