@@ -27,18 +27,22 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 
 ## 快速开始
 
+**先做这一步：安装随包 addon。** 只能用本仓库提供的 **addon/dsh_blender_bridge.py**，不要安装 MCP for Blender 或任何其他 Blender addon。请先在 Blender 里安装并启用它，再做后面的步骤。如果按下面安装后仍然用不了，先回来检查是不是这个 addon、有没有启用、有没有 Connect。
+
 ### 前置条件
 
 - 已安装并可用的 DSH（DeepSeek Harness）。
 - Node.js 20 或更高版本（后端运行环境）。
-- Blender 4.x 或 5.x。GUI 模式需要随包 addon；无头模式只需要能找到 Blender 可执行文件。
+- Blender 4.x 或 5.x。GUI 模式必须先安装随包 addon；无头模式只需要能找到 Blender 可执行文件。
 - 可选：如果你想重新构建插件，需要 DSH 源码 checkout。
 
 ### 方案 A：让 AI 帮你装
 
 把下面这段提示词交给能执行命令的 AI：
 
-    请从 https://github.com/sixtysevenlf/dsh-blender-plugin
+    请先安装并启用本仓库提供的 addon：addon/dsh_blender_bridge.py；
+    不要使用 MCP for Blender 或其他 Blender addon。
+    然后从 https://github.com/sixtysevenlf/dsh-blender-plugin
     安装 DSH × Blender 插件到我的 DSH profile。
     先读 docs/AI-安装提示词.md 并严格照做；
     最后必须验收：GUI 路线 doctor 返回 kind=ok，
@@ -55,14 +59,20 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 
 ### 方案 B：手动安装
 
-1. 克隆仓库；一般不需要构建。仓库已提交构建后的 lib 目录。
+1. **先安装随包 addon。**
+
+   从本仓库的 addon/ 目录下载 **addon/dsh_blender_bridge.py**。打开 Blender，进入 Edit > Preferences > Add-ons > Install，选择该文件，启用 DSH Blender Bridge；在 3D 视图按 N 打开面板，点 Connect。addon 监听 127.0.0.1:9876。
+
+   只能用这个 addon。继续之前请停用 MCP for Blender 或其他 Blender addon。如果后面的安装用不了，先回来检查这一步。
+
+2. 克隆仓库；一般不需要构建。仓库已提交构建后的 lib 目录。
 
         git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
         cd dsh-blender-plugin
         # 可选：只有改了 src/ 才需要
         DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh
 
-2. 把插件加入 DSH profile。先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
+3. 把插件加入 DSH profile。先把 checkout 软链到 profile，再在 profile 的 package.json 里加依赖和 bundle 条目。
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/@dsh-external/dsh-blender-plugin
 
@@ -83,12 +93,6 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 
         dsh --profile <profile> --dump-config
 
-3. 连接 Blender（GUI 路线）。
-
-    打开 Blender，进入 Edit > Preferences > Add-ons > Install，选择 addon/dsh_blender_bridge.py，启用 DSH Blender Bridge；在 3D 视图按 N 打开面板，点 Connect。addon 监听 127.0.0.1:9876。
-
-    也可以等 DSH 重启后，调用 blender_viewport 的 launch 操作：它会自动拉起 Blender、启用 addon 并 Connect。
-
 4. 验收。
 
     GUI 路线：
@@ -97,6 +101,8 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
         curl -sS http://127.0.0.1:9877/doctor
 
     GUI 路线唯一验收判据：doctor 返回 kind=ok。没到就是没装好。
+
+    也可以等 DSH 重启后，调用 blender_viewport 的 launch 操作：它会自动拉起 Blender、启用 addon 并 Connect。
 
     纯无头路线（不装 addon）：
 
@@ -168,6 +174,7 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 | 另一个会话正在写同一个场景 | 用 blender_viewport 拿写租约；并行建模用独立无头 worker。 |
 | 装过旧 MCP for Blender | 停用它，改用随包的 DSH Blender Bridge addon。 |
 | 图生成了但没附上 | 升级到最新构建（已包含 Windows 路径修复）；仍不行就直接打开返回的路径。 |
+| 按下面步骤装完还是用不了 | 先检查 addon：只支持 addon/dsh_blender_bridge.py，并且必须启用、必须 Connect。 |
 
 ## 开发
 

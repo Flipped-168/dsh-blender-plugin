@@ -27,18 +27,22 @@ DSH × Blender connects DeepSeek Harness to Blender so an agent can build, inspe
 
 ## Quick start
 
+**Before anything else: install the bundled addon first.** Use only the addon shipped in this repository: **addon/dsh_blender_bridge.py**. Do not install MCP for Blender or any other Blender addon. Install and enable this addon in Blender before the other steps. If the installation below does not work, first check that this exact addon is installed, enabled, and connected.
+
 ### Requirements
 
 - DSH (DeepSeek Harness) installed and working.
 - Node.js 20 or newer for the backend.
-- Blender 4.x or 5.x. GUI mode needs the bundled addon; headless mode only needs the Blender executable.
+- Blender 4.x or 5.x. GUI mode requires the bundled addon (install it first); headless mode only needs the Blender executable.
 - Optional: a DSH source checkout if you want to rebuild the plugin.
 
 ### Option A: ask an AI agent
 
 Copy this prompt into an agent that can run commands:
 
-    Install the DSH × Blender plugin from
+    First install and enable the bundled addon addon/dsh_blender_bridge.py
+    from this repository; do not use MCP for Blender or any other addon.
+    Then install the DSH × Blender plugin from
     https://github.com/sixtysevenlf/dsh-blender-plugin
     for my DSH profile. Read docs/AI-安装提示词.md first, follow it exactly,
     and finish with the acceptance check: doctor must return kind=ok for the
@@ -55,14 +59,20 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
 ### Option B: manual setup
 
-1. Clone the repository and, if needed, build it. The repository commits the built lib directory, so a normal clone is ready to use.
+1. **Install the bundled addon first.**
+
+   Download **addon/dsh_blender_bridge.py** from the addon/ folder of this repository. In Blender, open Edit > Preferences > Add-ons > Install, select that file, enable DSH Blender Bridge, open the N panel in the 3D view, and click Connect. The addon listens on 127.0.0.1:9876.
+
+   Use only this addon. Disable MCP for Blender or any other Blender addon before continuing. If the rest of the installation does not work, check this step first.
+
+2. Clone the repository and, if needed, build it. The repository commits the built lib directory, so a normal clone is ready to use.
 
         git clone https://github.com/sixtysevenlf/dsh-blender-plugin.git
         cd dsh-blender-plugin
         # Optional: only after changing src/
         DSH_CHECKOUT=/path/to/dsh-harness bash scripts/build.sh
 
-2. Add the package to your DSH profile as a bundle. Link the checkout into the profile, then add the dependency and bundle entry to the profile package.json.
+3. Add the package to your DSH profile as a bundle. Link the checkout into the profile, then add the dependency and bundle entry to the profile package.json.
 
         ln -s /absolute/path/to/dsh-blender-plugin <profile>/node_modules/@dsh-external/dsh-blender-plugin
 
@@ -83,12 +93,6 @@ Install the standalone modeling skill (only needed for hosts that do not load th
 
         dsh --profile <profile> --dump-config
 
-3. Connect Blender for the GUI route.
-
-    Start Blender, open Edit > Preferences > Add-ons > Install, select addon/dsh_blender_bridge.py, enable DSH Blender Bridge, open the N panel in the 3D view, and click Connect. The addon listens on 127.0.0.1:9876.
-
-    Alternatively, after restarting DSH, call blender_viewport with op equal to launch. It starts Blender, enables the addon, and connects automatically.
-
 4. Verify the installation.
 
     GUI route:
@@ -97,6 +101,8 @@ Install the standalone modeling skill (only needed for hosts that do not load th
         curl -sS http://127.0.0.1:9877/doctor
 
     The only acceptance criterion for the GUI route is doctor returning kind equal to ok. If it does not, the plugin is not installed correctly.
+
+    After DSH restarts, you can also use blender_viewport with op equal to launch. It starts Blender, enables the addon, and connects automatically.
 
     Headless-only route (no addon):
 
@@ -168,6 +174,7 @@ The plugin exposes 15 tools. All planning, audit, assembly, export, and evaluati
 | Another session is writing to the same scene | Take the write lease with blender_viewport, or use separate headless workers for parallel work. |
 | An old MCP for Blender addon is installed | Disable it and install the bundled DSH Blender Bridge addon instead. |
 | Images are generated but not attached | Update to the latest build; the Windows path fix is included. If it persists, open the returned path directly. |
+| Followed the steps and it still does not work | Check the bundled addon first: only addon/dsh_blender_bridge.py is supported, and it must be enabled and connected. |
 
 ## Development
 
