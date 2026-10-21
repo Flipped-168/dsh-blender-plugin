@@ -95,6 +95,16 @@ export const VEHICLE_PATH = path.join(HERE, 'vehicle.py');
 export const SHAPE_PATH = path.join(HERE, 'shapegen.py');
 /** S5 流水线：工件注册表 + 步骤编排 */
 export const PIPELINE_PATH = path.join(HERE, 'pipeline.py');
+/** P0 装配：manifest / 全对全分类扫描 / 合并 / 装配门 */
+export const ASSEMBLY_PATH = path.join(HERE, 'assembly.py');
+/** P0 白模：声明式 blockout + 3 视图 + GLB 导出 */
+export const BLOCKOUT_PATH = path.join(HERE, 'blockout.py');
+/** P1 同机位 QC 视觉报告（verdict-first） */
+export const VISUALREPORT_PATH = path.join(HERE, 'visualreport.py');
+/** P1 无头多视轮廓拟合（解析投影，不渲染） */
+export const SHAPESOLVE_PATH = path.join(HERE, 'shapesolve.py');
+/** P2 缺陷注入/基线回放评估（evalharness） */
+export const EVALHARNESS_PATH = path.join(HERE, 'evalharness.py');
 /**
  * 用户 Blender 配置目录（GPU 偏好所在）—— 无头进程默认读不到它，Cycles 会静默回落 CPU。
  * 分享版默认 null（用系统默认配置）；要继承某套配置就设 DSH_BLENDER_USER_CONFIG / 配置项 blenderUserConfig。

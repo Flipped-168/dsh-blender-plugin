@@ -150,7 +150,7 @@ export function renderHandoff() {
   L.push("# Blender 工具指路（子代理必读 · 30 秒）");
   L.push("");
   L.push("**别猜工具**：先 `blender_rt_plan(op=\"catalog\")` 看 28 个能力族；按建模类型查 `args={classes:true}`（或单类 `args={class:\"recon\"}`）。");
-  L.push("模型侧 " + String(MODEL_FACING_TOOLS.length) + " 个工具：" + MODEL_FACING_TOOLS.map((t) => "`" + t + "`").join(" "));
+  L.push("模型侧 " + String(MODEL_FACING_TOOLS.length) + " 个工具：" + MODEL_FACING_TOOLS.join(" "));
   L.push("");
   L.push("## 12 类建模：第一步 | 禁止自造");
   L.push("");
@@ -163,16 +163,22 @@ export function renderHandoff() {
   L.push("2. 车壳/外壳类**禁止自造放样**（自造只能出一张连续光滑面，没棱没缝）；板缝与棱线用 `vehicle_panels` + `crease_lines`/`inset_lines`；");
   L.push("3. 验收一律**机械门**（`gate_run` 顶层读 verdict 三态；`degraded` ≠ 通过），别用\"看起来像\"代替。");
   L.push("");
-  L.push("## 几何底座 geo（常驻，任何路径都在，别自己写一套）");
+  L.push("## 几何底座 geo（常驻，别自己写一套）");
   L.push("");
-  L.push("KERNEL_BOOTSTRAP 已注入 geo ⇒ 公开名直接可用，**不需要 preload**：");
+  L.push("KERNEL_BOOTSTRAP 已注入 geo（无需 preload）：");
   L.push("造 box/cyl/tube/prism/loft/stack ｜ 切 boolean（**带退化守卫**）、hole_cut/slots_cut（批量一次布尔） ｜ 组 mirror/linear_array/join ｜ 收边 bevel/shade_auto（**自动平滑不改拓扑**）｜ 量 mesh_stats/tri_count/bbox_all ｜ 看 quick_views ｜ 登记 own(ob,coll,owner)（COL_/dsh.owner）");
-  L.push("**它只给动词、不给名词**：齿距 / 站表 / 截面函数 / 坐标一律由项目 spec.py 给 —— 底座不含任何形状默认值。");
-  L.push("速查与自检：K.dsh_geo_api 的 help / selftest 两个 op；分层声明见 runtime/geo.py 头注释。");
+  L.push("**只给动词不给名词**：齿距/站表/截面/坐标一律由 spec.py 给。");
+  L.push("速查：K.dsh_geo_api 的 help/selftest；分层见 runtime/geo.py 头注释。");
   L.push("");
   L.push("## 通道纪律");
   L.push("- 长活（>1 min / 长渲染 / 批量几何）走 `blender_rt_job` / `blender_rt_headless`，别同步硬等；");
   L.push("- 写场景**同一时刻只能一个写者**（写租约；别的会话持有时回 409，只读 op 豁免）；");
-  L.push("- 改一步看一眼用 `blender_rt_see`（~100 ms）；量尺寸用 `img_*`/`audit_*`，**别用眼睛估**。");
+  L.push("- 改一步看一眼用 `blender_rt_see`；量尺寸用 `img_*`/`audit_*`，**别用眼睛估**。");
+  L.push("");
+  L.push("## 本插件不覆盖（别在这找工具）");
+  L.push("生物/有机造型：无放样/雕刻配方 → 自写 bmesh 放样 + 场雕刻（先冻结 spec.py 的解剖标定）；电影级布光/体积/合成：曝光与灯光自己标定；不做角色动画绑定。");
+  L.push("");
+  L.push("## 对象归属（写作用域第二维：前缀 + 集合）");
+  L.push("LGT-/LIGHT- → COL_Lights、CAM- → COL_Camera、GEO-VFX- → COL_VFX；若你只有单一集合的写权限，就按前缀命名，装配前 K.route_collections() 一次归位。");
   return L.join(String.fromCharCode(10));
 }

@@ -1,5 +1,105 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.6.0（2026-10-21）—— 33 family / 217 op · headless-first · 文档与 skill 重写
+
+> v2.5.0 之后的四轮工作（P0 / P1 / P2 + 文档与 skill 重写）并入本版一次发布。
+> 模型工具仍为 **15 个**；plan catalog 从 28 family / 186 op 扩到 **33 family / 217 op**。
+> 新增能力全部走 plan catalog，**不新增模型工具**；GUI 由「必需」改为可选（headless-first）。
+
+### 测试与文档修正（issue #32 / #33）
+
+- **#32** `tests/linux_selftest.mjs`：裸 `import(path.join(...))` 在 Windows 上抛 `ERR_UNSUPPORTED_ESM_URL_SCHEME`，
+  `npm test` 链式中断、其后 13 个用例静默跳过 → 改 `pathToFileURL(...).href`。
+- **#33** `tests/workdir_shared_selftest.mjs`：C5 用 `path.sep` 切 POSIX 风格路径，Windows 上恒红
+  → 改 `path.posix.basename(...)`。
+- **文档口径**：改正「`/host/view/*`、`/host/pick*`、`/host/ready` 路由为兼容保留」的错误表述 ——
+  这些路由在 v2.3 已随面板删除，现存宿主路由只有 `/host/selection`（+`/latest`、`/consume`）、
+  `/host/scene-items`、`/host/jobs`（+`/log`）。
+
+### 文档与 skill 重写（2026-10-21）
+
+- **全量文本校正**：README 中英、操作教程、配置参考、安装/部署/迁移/AGENTS/CLAUDE 全部对齐 v2.6.0（15 工具 · 33 family / 217 op · addon v1.10 / protocol 11）；删除 28/186、v2.5/v0.9.x 旧口径与“必须 GUI”旧承诺。
+- **skill 架构优先重写**：SKILL.md 以“插件就是建模流程”为主线（catalog → plan op → worker session → 回执/verdict → 门/交付），新增架构铁律、标准状态机、工具选择矩阵、P0–P2 配方、反模式、多 Agent 协议；通用 Blender 知识降为附录 A。
+- **references 校正**：验收清单补 asm/visualreport/eval/强制门；参考图 SOP 改为 img_digest/measure/calib + shapesolve + visualreport；multiview 与英文 overview 标明与当前插件的关系。
+- **工具描述**：rt_do/rt_see/rt_watch/rt_worker/rt_headless/rt_plan 明确 GUI 可选、session 无头、worker see/watch/TTL、plan session=auto；package description 同步 v2.6.0。
+- 文档 grep：用户文档无 28/186/v2.5/v0.9.x 旧口径；skill >50KB 且 skill_bundle_selftest 61/61；npm test 全绿。
+
+### P2 第三轮（2026-10-20）
+
+- **装配交付导出** `asm_export`：GLB/FBX/OBJ + manifest.json + append-only merge_ledger.jsonl；`merge=true` 先 `asm_merge`（gate+snapshot，不过门不导出）；67 evidence 真机全绿。
+- **低风险修复策略** `asm_repair(policy=safe|manual|aggressive)`：safe 只做 translate/snap、硬禁布尔；manual 只规划不执行；回归 88 evidence 全绿。
+- **缺陷注入/基线评估** `eval_run`（evalharness.py）：assembly D1/D3/D4/D5/D7/D8 + reference 12 例 + calib core；缺模块 skipped/degraded 不假通过；assembly capture=1.0、reference 12/12、core degraded 0.875。
+- **Seedance 参考包** `blockout_refsheet`（4 正交/透视 PNG + 2x2 拼图 + refsheet.json + 可选转台）+ `blockout_turntable`（Blender 内置 FFMPEG MP4/H264）；22 通过/0 失败；256x256/12 帧 MP4 9192B。
+- **无头 watch** `rt_watch(session=...)` + worker `_watch`：逐帧 Workbench 离屏 + hash + 最多 6 帧图；真机 3 帧动画 distinct=3/58ms。
+- **无头 plan 路由** 扩展 eval/blockout/asm 等 family；真机 `asm_export` 161ms、`blockout_refsheet` 331ms、`turntable` 334ms。
+- catalog 33 family / 217 op；`npm test` 全绿；capability lock / 只读白名单 / 计数同步。
+
+### P1 第二轮（2026-10-20）
+
+- **装配修复**：`asm_repair` + `fix_clash`（执行器，dry_run 默认）+ `fix_interference`（只读规划器）；2mm 互穿 dry 不动场景→执行后 clash=0/float=0/有 snapshot；contained/布尔 subtract/浮块 snap 计划；88 条真机断言。
+- **强制门/flow op**：`gate_preflight / gate_checkpoint / gate_deliver`；`deliver_export(require_gate=true)` 真机验证（pass 才写盘，bad gate blocked；deliver+verify 18 项）。
+- **无头 plan 路由**：`blender_rt_plan(..., session="auto")` 按 family 自动起持久 worker + preload + dispatch，不依赖 GUI；首次冷启动 ~2s，之后同步复用。
+- **会话池**：worker idle TTL（默认 15 min，`DSH_WORKER_TTL_MS`）+ `idleMs` 回执。
+- **同机位 QC**：`visualreport_report`（verdict-first，qc→imgtools→numpy 三级降级）；32/32；同图 pass，平移/缺角 fail，缺陷 crop + mm 定位，72–96ms。
+- **无头轮廓拟合**：`shapesolve_solve`（正交解析投影+numpy 光栅化，不渲染）；三视反演 40/20/30→误差 0.98%/1.55%/0.35%、IoU [1,1,1]，solve 793ms。
+- catalog 32 family / 211 op；`npm test` 全绿；capability lock / 只读白名单 / 计数已同步。
+
+### P0 第一轮（2026-10-20）
+
+- **交互式 headless（重点）**：`rt_worker` 支持 `preload` 启动前导 + `see`（临时相机 + Workbench 离屏）+ `reset` + `warmup`；实测 start 2.24s（含 1.1s 首帧初始化），之后 exec 0–2ms、see 往返 53–85ms（320×180），**不是 job/异步回合**。
+- `rt_do` 在 GUI 不可达/显式 `session` 时自动降级到持久无头 worker（exec + see，图片直接回模型）；`rt_see` 增加 `session/auto`；`rt_loop` 增加 `target="session"` 的 `dsh_loop_sync` 阻塞内环（20 次 56ms，不依赖 timers）。
+- `rt_headless` 支持 `attach_images`（true/"sheet"）；`rt_plan` 增加单行 receipt.v2 信封（verdict/top_defects/next）+ `attach_images`（≤2 张），plan 主通道不再只有 12KB 文本。
+- `imgtools.py` v2：新增 `img_digest`（原生分辨率量测/轮廓/Hough/孔/对称/可读性/原生裁剪/标注 + 可确认数字表）、`img_probe`、`img_measure`、`img_calib`；真机 61/61 断言。
+- 新增 `runtime/assembly.py`：`asm_scan`（全对全分类：clash/hidden_ok/contact/gap/float/contained/unresolved + 完全包含补测）、`asm_manifest`（md5/接口帧/allow 校验）、`asm_merge`（id 序 append + 法线 + snapshot + 自动 gate，dry-run 默认）、`asm_gate`（verdict-first，export_allowed 仅 pass）；模块自检 + 测试脚本全绿。
+- 新增 `runtime/blockout.py`：`blockout_base/batch/export`（声明式 parts、mm/anchor、Workbench 3 视图、GLB）；真机 33/33，20 件 geom 9ms、3 视 512 约 1.1s（首帧后 25ms/张）、GLB 117KB。
+- **可交互 headless 真机建模测试**：参考图→img_digest（2m×0.8m 盒子：width 2000mm/height 800mm/px_per_mm 0.16）→ 12 件白模（GLB 70KB）→ 装配两件 2mm 互穿 scan 检出 depth=2mm/volume≈2.0e6mm³，移开 10mm 后 clash=0。
+- 目录 30 family / 201 op；`npm test` 全绿；`capability.lock` / `plan_readonly.baseline` / provenance 计数已同步。
+
+### 主线：七条实测反馈 —— 台账对账 / 5.2 合成器 / 多灯卫生 / 进度通道 / 第五态 / 不覆盖声明 / 写作用域两维
+
+**来源**：一次 4 小时、3 个子代理、479 对象的真实项目（120 m 哥斯拉 + 被毁城市 + 原子吐息）后，
+Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条都有独立自检。
+
+1. **台账以文件为准（`runtime/recover.mjs`）**：后端重启/被杀后，磁盘台账里只剩 `status=running`、pid 已死，
+   但**子进程其实已经跑完、产物/日志都在**。旧行为一律判 `stale`，模型只能自己去 `Get-Process` + `ls` 破案
+   （实测两次，各赔一轮往返）。现在 `reconcileLedger` 先做磁盘对账（`summary.json` → `resultPath` → stdout 终态
+   `DSH_STAGE done` / `HEADLESS` / `Traceback`），对得上就返回 `status=done|failed` + `recovered:true` +
+   `recoveredFrom/recoveredEvidence`；对不上才 `stale`，并附 `evidence` / `evidenceChecked`。
+   run 与 job 的台账 running 记录也补了 `stdoutLog`/`stderrLog`/`dir`，后端重启后不用扫目录猜。
+2. **Blender 5.2 合成器迁移（skill §6.5.6）**：补 5 行踩坑表 + 一段最小可跑片段 ——
+   `scene.node_tree` 已删（改 `compositing_node_group` + `NodeGroupOutput`；`CompositorNodeComposite` 不存在）、
+   Glare 的 Type/Quality 变 MENU 插座、`CompositorNodeMixRGB`/`CompositorNodeMath` 被删（改用 `ShaderNodeMix`/`ShaderNodeMath`）、
+   `mat.cycles.displacement_method` → `mat.displacement_method`、`surface_render_method` 只有 DITHERED/BLENDED。
+3. **多灯卫生**：识别 `Shadow buffer full (N / M)` 并产出结构化 warning（`code=eevee_shadow_pool_full`，含次数/用量/上限/可粘贴修法）；
+   新增常驻 `K.light_hygiene(apply=True, max_shadow=4)`（只保留能量最高的 N 盏点/聚光灯投影 + 池设 2048）。
+   实测：36 盏灯 → 控制台每帧刷错且 `shadow_pool_size='4096'` 静默无效（枚举上限 2048）。
+4. **进度通道**：`dsh_progress(**fields)` / `DSH_PROGRESS {json}` 与 stage 分开（stage=阶段跃迁，progress=阶段内高频进度，留最近 20 条）；
+   运行期每 5 s 心跳（`heartbeat`：elapsedMs/logBytes/lines/stage/progressAgeMs，作业还会 append `heartbeat.jsonl`）；
+   `op=status/collect` 与 headless 回执都带 `progress/progressAt/heartbeat/progressHistory`。
+5. **`audit_mesh` 第五态 `pass_multi_shell`**：多壳件不再一律 `degraded`。判据改为「每个壳自己闭合+绕向一致+体积符号可确证」，
+   AABB 相交（碎块簇/火球鳞瓣/布景多壳件）不再等于“判不出来”；合法空腔仍标 `nested` 豁免。
+   对象 `state` 仍是 `pass`（新增 `multi_shell`/`state_detail`），totals 增 `normals_multi_shell`。
+   实测：两个分离壳/嵌套空腔 → `pass_multi_shell` + `clean=true`；真互穿仍按自交判 fail。
+6. **catalog 不覆盖声明**：`catalog` 默认页与 `args={handoff:true}` 都明确写「生物/有机造型、电影级布光/体积/合成、角色动画绑定」不覆盖，
+   省掉“在这里找不到工具”的探索成本（handoff 仍守 3500 字符上限）。
+7. **写作用域两维（集合 + 对象前缀）**：`blender_viewport op="lease" scope="collection:COL_Lights,prefix:LGT-"`；
+   `/who`、`/lease`、409 回执（`holderScope`）都可见；裸 token 会按形态推断（`COL_*`→集合，带 `-`/`*`→前缀）。
+   配套常驻 `K.route_collections(rules=None)`：按前缀把灯/相机/各资产归位到 COL_Lights / COL_Camera / COL_VFX / …
+   —— 子代理只有单一集合写权限时，按前缀命名、装配前一行归位。
+
+#### 自检（新增 4 个用例）
+
+- `tests/ledger_recover_selftest.mjs`（18 断言，纯逻辑）
+- `tests/ledger_recover_e2e_selftest.mjs`（10 断言，独立后端 + 真 headless：对账三态 + progress + heartbeat）
+- `tests/scene_hygiene_selftest.mjs`（8 断言）
+- `tests/lease_scope_selftest.mjs`（6 断言，独立后端 HTTP 契约）
+
+#### 兼容性
+
+- 回执只**增字段**（`recovered` / `progress` / `heartbeat` / `warnings` / `scope`），不改旧字段语义；
+- `stale` 语义保留：没找到终态证据时仍然判 `stale`（不谎报完成）；
+- 宿主侧 `lib/index.js` 已同步（recovered/progress 文案、lease scope 参数），**升级后需重启 DSH**；只改后端可 `blender_viewport op=restart`。
+
 ## v2.5.0（2026-10-20）—— N 面板重排（活动置顶 / 环境与模型 API 子面板）+ 暂停 AI 操作（addon v1.10）
 
 **来源**：用户要求把活动状态移到上面、资产库与 AI Model Generation 合并成「环境与角色模型API调用」父面板

@@ -57,8 +57,8 @@ ok('catalog 覆盖 >= 26 个 family 且含关键家族',
 ok('catalog 覆盖 >= 100 个 op', cat.ops_count >= 100, cat.ops_count)
 // 体量门：**按家族摊**（每个 family 一个"什么时候用/ops/最小骨架/别用"块），避免"加一族就得改常数"
 const perFamily = cat.text.length / cat.families.length
-ok('catalog 默认是短文本（3k–9600 字符，且每个 family <= 360 字符）',
-  cat.text.length >= 3000 && cat.text.length <= 9600 && perFamily <= 360,
+ok('catalog 默认是短文本（3k–按 family 数缩放的上限，且每个 family <= 360 字符）',
+  cat.text.length >= 3000 && cat.text.length <= Math.max(9600, cat.families.length * 320) && perFamily <= 360,
   cat.text.length + ' / family=' + perFamily.toFixed(1))
 ok('catalog 默认不带结构化明细（要 full:true 才给）', !cat.detail && !cat.tools)
 ok('catalog 文本含"什么时候用"与"别用"判据', cat.text.indexOf('别用') > 0, true)

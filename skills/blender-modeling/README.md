@@ -25,13 +25,15 @@ ln -s "$PLUGIN/skills/blender-modeling" ~/.dsh/skills/blender-modeling   # 或�
 
 > ⚠ `SKILL.md` **必须保留 YAML frontmatter**（`name` / `description` / `license`）——加载器靠它建技能目录。
 
-## 内容
+## 内容（v2.6 · 架构优先）
 
-- `SKILL.md` —— 建模 / 装配作业指导书（决策树、24 条编号配方、六条必踩的坑、数值门清单、多 Agent 分工范式）。
-- `references/modeling-overview.md` —— 上游英文原文收录（深水参考）。
-- `references/multiview-calibration.md` —— 三视图联立标定脚本（可 `--selftest`）。
-- `references/参考图通用还原SOP.md` —— 参考图还原九步（含 S0 草稿评估）。
-- `references/验收清单.md` —— 独立验证子代理专用（约 4.2k 字符，别让它加载整本 SKILL.md）。
+- `SKILL.md` —— **插件架构优先的建模/装配作业指导书**：先 catalog → plan op → worker session → 回执/verdict → 门/交付；含标准状态机、工具选择矩阵、参考图量测、装配修复/门/导出、白模与 Seedance 参考包、同机位 QC、缺陷评估、无头 watch、多 Agent 协议与反模式。通用 Blender 配方降为附录 A（深水参考，不是首选路径）。
+- `references/modeling-overview.md` —— 上游英文原文收录（深水参考；不替代插件架构）。
+- `references/multiview-calibration.md` —— 三视图联立标定脚本（可 `--selftest`；与 img_calib/shapesolve 配套）。
+- `references/参考图通用还原SOP.md` —— 参考图还原九步（优先 img_digest/probe/measure/calib；无标定不写 mm）。
+- `references/验收清单.md` —— 独立验证子代理专用（优先 audit/asm_gate/gate_run/visualreport/eval；约 4.2k 字符）。
+
+> **架构优先**：有 plugin op 就不许手写等价几何/验收；catalog 里没有对应能力才写 bpy，并且仍必须回插件门验收。
 
 ## 许可与来源
 
@@ -44,5 +46,4 @@ ln -s "$PLUGIN/skills/blender-modeling" ~/.dsh/skills/blender-modeling   # 或�
 
 ---
 
-**同步口径**：本目录内容于 2026-10-19 从独立仓库工作区（HEAD `10d78cd` + v9 未提交改动）镜像而来；
-此后**以本仓库为真源**维护，独立仓库仅作镜像/历史。
+**同步口径**：v2.6（2026-10-21）已按插件架构重写 SKILL.md 并校正 references；此后**以本仓库为真源**维护，独立仓库仅作镜像/历史。

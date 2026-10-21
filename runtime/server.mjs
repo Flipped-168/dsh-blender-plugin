@@ -79,13 +79,39 @@ function rttView() {
  * 语义：不持有租约时不拦（单机单 agent 完全无感）；一旦有人显式拿到租约，别人的写操作会被 409 挡住。
  * 过期即自动失效（TTL，默认 10 min，每次写操作自动续期）。
  */
-const LEASE = { holder: null, token: null, acquiredAt: null, expiresAt: null, ttlMs: CFG.leaseTtlMs, renewals: 0 };
+const LEASE = { holder: null, token: null, acquiredAt: null, expiresAt: null, ttlMs: CFG.leaseTtlMs, renewals: 0,
+               // v2.6（本轮反馈 #7）：写作用域的**第二维** —— 不只有"谁在写"，还有"写到哪"。
+               scope: null };
 /**
  * v0.9.4：租约持有者**是否还活着**（实测踩到：DSH 会话崩了/被关掉之后，它的租约在内存里
  * 继续生效到 TTL（默认 1 h），把别的会话的写通道整段挡死 —— 而那个会话早就不存在了）。
  * holder 约定是 `plugin-pid-<pid>`（插件前端 HOLDER，见 src/index.ts），后端与它同机 → 能直接探活。
  * 返回 true/false；**查不出来返回 null**（按"活着"处理，绝不误抢别人的租约）。
  */
+/**
+ * v2.6（本轮反馈 #7）：把写作用域声明规范化成 [{kind:'collection'|'prefix', value}]。
+ *
+ * 现场：子代理只有单一集合的写权限，于是灯（LGT-*）被迫塞进资产集合，装配时再逐个人工搬 ——
+ * 「写作用域」只按集合一刀切，和「对象名前缀」这个真正的归属信号脱节。
+ * 这里允许两种维度同时声明：
+ *   collection:COL_Lights   或裸 COL_Lights        → 集合维度
+ *   prefix:LGT-             或裸 LGT-* / LGT-      → 对象名前缀维度
+ * 语义是**声明式**（advisory）：不拦写入，但会出现在 /who、/lease 与 409 回执里，
+ * 让"谁该写哪"在协议层可见；强制归属由装配层的 K.route_collections() 一次归位。
+ */
+function normalizeScope(scope) {
+  const raw = Array.isArray(scope) ? scope : String(scope == null ? '' : scope).split(',');
+  const out = [];
+  for (const item of raw) {
+    const s0 = String(item || '').trim();
+    if (!s0) continue;
+    if (/^collection:/i.test(s0)) { out.push({ kind: 'collection', value: s0.slice(11).trim() }); continue; }
+    if (/^prefix:/i.test(s0)) { out.push({ kind: 'prefix', value: s0.slice(7).trim() }); continue; }
+    if (s0.endsWith('*') || s0.includes('-')) { out.push({ kind: 'prefix', value: s0.replace(/\*$/, '') }); continue; }
+    out.push({ kind: 'collection', value: s0 });
+  }
+  return out.length ? out : null;
+}
 function holderAlive(holder) {
   const m = /^plugin-pid-(\d+)$/.exec(String(holder || ''));
   if (!m) return null;
@@ -105,6 +131,7 @@ function leaseView() {
     since: LEASE.acquiredAt,
     renewals: LEASE.renewals,
     holderAlive: active ? holderAlive(LEASE.holder) : null,   // null = 无法判断 / 非本机约定命名
+    scope: active ? LEASE.scope : null,                       // v2.6：写作用域（collection / prefix 两维）
     staleReclaimed: stats.staleLeasesReclaimed || 0,
   };
 }
@@ -118,7 +145,7 @@ function releaseStaleLease(why) {
   stats.lastLeaseNote = '已回收死会话的写租约（holder=' + dead + '，' + String(why || '') + '）';
   return dead;
 }
-function leaseAcquire(holder, ttlMs, force) {
+function leaseAcquire(holder, ttlMs, force, scope) {
   const now = Date.now();
   const h = String(holder || 'anonymous');
   const v = leaseView();
@@ -134,12 +161,13 @@ function leaseAcquire(holder, ttlMs, force) {
   }
   LEASE.holder = h;
   if (ttlMs) LEASE.ttlMs = Math.max(5000, Math.min(86400000, Number(ttlMs) || LEASE.ttlMs));
+  if (scope !== undefined) LEASE.scope = normalizeScope(scope);   // v2.6：声明式写作用域（省略则保留）
   LEASE.expiresAt = now + LEASE.ttlMs;
   return { granted: true, lease: leaseView() };
 }
 /** 只读 op：即便别人持有租约也放行（否则连"看看现状"都会被挡） */
 const READ_ONLY_OPS = { '/perf': ['status', 'help'], '/loop': ['status', 'board', 'help'], '/opt': ['opt_analyze', 'analyze', 'help'],
-  '/plan': PLAN_READ_ONLY_OPS,'/worker': ['status', 'list'],
+  '/plan': PLAN_READ_ONLY_OPS,'/worker': ['status', 'list', 'see', 'ping'],
   '/txn': ['list', 'marks', 'help', 'edit_status'],
   '/preset': ['list', 'get', 'help'],
   // v0.9.3（D6）：wait 只是"阻塞读"，kill 只作用于作业自己的子进程（不碰 live 场景）——
@@ -158,7 +186,7 @@ function leaseGate(payload) {
   const reclaimed = releaseStaleLease('写请求到达时按 plugin-pid-<pid> 探活发现进程不存在');
   const v = leaseView();
   if (v.active && v.holder !== h && !force) {
-    return { ok: false, error: 'leased', holder: v.holder, expiresInMs: v.expiresInMs, holderAlive: v.holderAlive,
+    return { ok: false, error: 'leased', holder: v.holder, expiresInMs: v.expiresInMs, holderAlive: v.holderAlive, holderScope: v.scope || null,
       hint: '另一个会话正在驱动这个 Blender。要么等它（剩余 ' + Math.round(v.expiresInMs / 1000) + 's），要么 body 加 force:true 抢占，或 blender_viewport op=lease force=true' };
   }
   // 放行时顺手续期：holder 匹配或无人持有时自动接管
@@ -559,16 +587,17 @@ const server = http.createServer(async (req, res) => {
         // 心跳：只有本来就持有租约时才续期 —— 不在空闲时抢占，避免多会话互相锁死
         const v = leaseView();
         if (v.active && v.holder === holder) {
-          const rr = leaseAcquire(holder, payload.ttlMs, false);
+          const rr = leaseAcquire(holder, payload.ttlMs, false, payload.scope);
           json(res, 200, { ok: true, lease: rr.lease, renewed: true });
         } else {
           json(res, 200, { ok: true, lease: v, renewed: false });
         }
         return;
       }
-      const r = leaseAcquire(holder, payload.ttlMs, !!payload.force);
+      const r = leaseAcquire(holder, payload.ttlMs, !!payload.force, payload.scope);
       if (r.denied) {
-        json(res, 409, { ok: false, error: 'leased', holder: r.holder, expiresInMs: r.expiresInMs,
+        const otherScope = leaseView().scope || null;
+        json(res, 409, { ok: false, error: 'leased', holder: r.holder, expiresInMs: r.expiresInMs, holderScope: otherScope,
           hint: '另一个会话持有写权限租约；force:true 可抢占，或等 ' + Math.round(r.expiresInMs / 1000) + 's 后重试' });
         return;
       }
@@ -664,7 +693,9 @@ const server = http.createServer(async (req, res) => {
       let payload = {};
       try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
       const op = String(payload.op || 'status');
-      const gate = isReadOnly('/worker', op) ? null : leaseGate(payload);
+      // P0：worker 是**独立无头进程**，不碰 live GUI 场景 ⇒ 显式 isolated:true 时不占全局写租约，
+      // 否则多会话并行建模会互相 409（C 组调研的 P0 阻塞项）。同一 worker 仍由自身串行。
+      const gate = (payload.isolated || isReadOnly('/worker', op)) ? null : leaseGate(payload);
       if (gate) { json(res, 409, gate); return; }
       stats.worker = (stats.worker || 0) + 1;
       await streamJson(res, async () => {
@@ -680,6 +711,16 @@ const server = http.createServer(async (req, res) => {
             // v0.8.4：错误/回溯提到信封层，避免客户端只看到 unknown
             return { ok: !!r.ok, op: op, result: r, error: (r && r.error) ? String(r.error) : null,
                      traceback: (r && r.traceback) ? String(r.traceback) : null };
+          }
+          if (op === 'see') {
+            // P0 无头 see：临时相机 + Workbench 离屏；返回 png_b64 + coverage + ms
+            return { ok: true, op: op, result: await engine.worker.see(payload.spec || payload.see || {}, payload && payload.name) };
+          }
+          if (op === 'watch') {
+            return { ok: true, op: op, result: await engine.worker.watch(payload.spec || payload.watch || {}, payload && payload.name) };
+          }
+          if (op === 'reset') {
+            return { ok: true, op: op, result: await engine.worker.reset(payload && payload.name) };
           }
           return { ok: true, op: 'status', result: await engine.worker.status(payload && payload.name) };
         } catch (e) {

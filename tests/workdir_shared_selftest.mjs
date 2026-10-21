@@ -118,7 +118,9 @@ if (c.error) {
   ok('C4 requestedShared 被记进回执（布尔、可对拍）',
     typeof st.requestedShared === 'boolean' && typeof st.usedShared === 'boolean', JSON.stringify(st))
   ok('C5 回执里的 Windows 路径 = 替换后目录（usedWin 与 win 一致，别让调用方拿到旧 UNC）',
-    !!st.usedWin && st.usedWin === c.win && String(c.win).indexOf(st.used.split(path.sep).pop()) >= 0,
+    // st.used 恒为 POSIX 风格，末段必须按 posix 规则取；用 path.sep 在 Windows 上根本不切
+    // （issue #33：split('\\') 把整串原样返回，indexOf 恒 -1 ⇒ C5 在 Windows 恒红）。
+    !!st.usedWin && st.usedWin === c.win && String(c.win).indexOf(path.posix.basename(st.used)) >= 0,
     JSON.stringify({ win: c.win, usedWin: st.usedWin, used: st.used }))
 }
 

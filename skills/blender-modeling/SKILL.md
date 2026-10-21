@@ -1,1352 +1,577 @@
 ---
 name: blender-modeling
-description: Blender 建模流程与装配教程——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → Blockout → 粗形精修 → 修改器栈 → 清理 → 交接），配 24 个编号配方（含 2a/2b/3b/6b 变体；基本体 / 分面装甲板 / Bevel+SubSurf 光滑栈 / bmesh 编辑 / 布尔开孔 / 镜像 / Array 沿曲线 / 参数化销轴弦长节距阵列 / 装配审计门 / 固定机位对照验收 / 程序化雕刻 / 网格修复 / 打印检查 / 沿路径扫掠 / 人形素体 / 头型 / 车辆与参考图放样 / 照片校正 / 折线族拟合 / 特征线层 / 多步链 pipe_run / 参数搜索内环），覆盖六条必踩的坑（长轴·宽轴·薄轴语义、可视拼接用隐藏交叠并按项目 spec 复核而非固定倍数/不由可视脚本裁定结构连接、收尖压中线再合并、headless 慎用 bpy.ops、法线方向是一切穿模判据的前提、预览装置默认光照要看得清板缝），并含多 Agent 并行建模的分工范式（冻结 spec.py / 写作用域协议 / 接口表 / 隐藏交叠+复检 / 数值门装配审计 / 归属标签与可并行性判据）与参考图驱动的形体还原（三视图标定 + 双证据验收 + IoU 只是单视轮廓必要条件 / 单应只校正一个平面 / 跨深度误差按 Δz/(D+Δz) 算），以及交接前必跑清单与可复制的验收回执、参数块+生成脚本（generator_*）、本机 blender_rt_* 直连通道语义、参数搜索内环（`blender_rt_loop`：目标 + 区间 → 搜索，收敛后必须换通路复核），以及渲染/动画/长活的取景投影自检、可续跑长活、渲染耗时实测口径与 Blender 5.2 API 变更（§6.5）。用于「做一个 / 建一个 / 捏一个 3D 物体」「加个立方体 / 球 / 圆柱」「挤出 / 内插 / 倒角这个面」「加个修改器」「挖个洞」「做个剑 / 椅子 / 门」等几何创建与网格编辑请求，也用于「多个 agent 分工造一台机器」「按参考图还原外形 / 量比例」「装配体检：查穿模 / 浮空 / 按 spec 复核隐藏交叠量」等大件建模与装配任务。
+description: Blender 建模与交付教程（v2.6，headless-first）——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → 白模 → 粗形精修 → 修改器栈 → 清理 → 装配/验收 → 交付）。覆盖参考图量测（img_digest/probe/measure/calib）、无头多视轮廓拟合（shapesolve）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout_*，含 4 视图与转台 MP4）、同机位 QC（visualreport_report）、缺陷注入评估（eval_run）、交互式无头会话（worker see/watch，rt_do/rt_see session）与强制门（gate_/deliver_export require_gate）。用于做 3D 物体、按参考图还原、量比例、装配体检、修穿模/浮空、批量白模、交付导出与验收。
 license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，见 NOTICE.md）
 ---
 
 # Blender 建模流程
 
-> **v1.0 · 2026-09-28**：对外版本号冻结为 **1.0**，配套插件 `@dsh-external/dsh-blender-plugin` **v1.0.0**。
-> 下面 v2 / v3 的标注是**正文的历史落点**（哪段是哪次实测加的），留作对账；对外不再按版本罗列。
->
-> **v2 · 2026-09-25**：按《M1A1 分件建模》实测反馈扩写（500 对象 / 7 个 agent / 全程 headless）。
-> 新增 **§0.5 多 Agent 并行建模的分工范式**、**§0.6 参考图驱动的形体还原**、坑四/坑五/坑六，
-> 修正配方 2 / 3 / 6 的「载体不匹配」（分面硬表面不要上 SubSurf、headless 慎用 bpy.ops、本配方口径的 `FIT_CURVE` Array 做不出精确闭环节距），
-> 并把 §6 清理清单升级成**数值门清单**。逐条对照见 §9。
->
-> **v3 · 2026-09-26**：按《实测驱动的通道 + Skill 优化方案》的 **§4 Skill 侧**做定点增补（流程骨架不动）：
-> §0.5.5 增**交接前必跑清单 + 可复制的验收回执**（P0-4）· §0.6.3 增**读图纪律（420/900 与 hash）**（P0-5）·
-> §0.6.1 扩成**三视图联立标定**（P1-3，脚本见 `references/multiview-calibration.md`）·
-> §0.5.7 增**可并行性判据 + 归属标签 + 单 builder 回滚**（P1-5）· §3.0 增**参数块 + 生成脚本**（P1-4）·
-> §4.0 增**六条坑分流 + 写代码前 checklist**（P2-3）。逐条对照见 §10。
->
-> **v7 · 2026-09-30**：按《QBZ-191 全程分解视频》实测补 **§6.5 渲染 / 动画 / 长活**（全新一节，
-> §0–§6 流程骨架不动）。起因：该项目几何阶段 138 件一次过网格门（8 个计数全 0），
-> 而**渲染阶段返工两轮**——取景按 AABB 估（3/4 视角全切边）、改 `location` 没刷依赖图（差 2.2 倍）、
-> 居中解符号写反（发散到 1e15）、米/毫米混算。修法全部落成可复制的自检代码。
-> 同时**修正 §0.5.5 的一处错口径**：`audit_mesh` **不吃 `file=`**（原文误列，4 个 agent 独立踩过）。
+> **v2.6 · 2026-10-21**：配套插件 @dsh-external/dsh-blender-plugin v2.6.0，15 个模型工具，plan 通道 33 family / 217 op。本轮起 **headless-first**：GUI 只是可选加速器，不是前置条件；无头持久会话同样能“改一步、同步看一步”。
+> 旧版按 v2/v3/v7 记录的“哪段是哪次实测加的”不再写在正文；需要追溯看 CHANGELOG。下面只写**当前有效口径**。
 
 先定形状，再走流程，改一步看一眼。**不要一口气写完整个模型再回来看**——每一步都要有画面或数字证据。
 
 ## 0. 本机工具与通道语义（先读，这决定你怎么写代码）
 
-| 要做的事 | 用哪个工具 | 关键语义 |
+### 0.1 当前工具面（15 个模型工具）
+
+| 工具 | 什么时候用 | 关键点 |
 |---|---|---|
-| **拉起 Blender（GUI 会话）** | `blender_viewport(op="launch")` | **v0.9.4 起 agent 能自己点亮 GUI**：写 boot 脚本（GUI 里 enable addon → 起 socket server）→ detached spawn blender.exe → **轮询 9876 端口**（唯一可信判据）→ 顺手 doctor；幂等（已在监听只回 already，不会堆出第二个 Blender）。参数：wait_ms / file / exe / addon_module / addon_file / dry_run |
-| 迭代建模、改一步看一眼 | `blender_rt_do` | **常驻 GUI 会话 + 持久内核 K**：整步约 105ms，变量**跨调用保留**；可选立刻回一帧 |
-| **参数搜索 / 拟合 / 反推尺寸**（要试几十~几千组参数、让某个误差最小） | `blender_rt_loop` | **搜索跑在 Blender 侧（160 tick/s），不花模型回合**：`spec={setup,step,measure,iterations,budget_ms,…}`，setup/step/measure 共享 `ns`，`measure` 必须给 `ns["score"]`（现成目标函数 `K.dsh_measure`：`silhouette_iou` / `aabb_err` / `profile_err`）；**只在 GUI 会话有效**（无头下 timers 不触发）；`op=board` 看候选 → `op=export` 落可复现脚本 → **换通路复核**（Recipe 24）；**不想手写 spec 就用 `blender_rt_plan(op="shape_search", args={objective, params, apply})`** —— 声明式「目标 + 区间」，内部跑同一条内环 |
-| 批处理 / 重活（**第一路径**） | `blender_rt_headless` | **每次都是全新 Blender 进程**（blender -b）：变量**不保留**，每次重新 import；shots 参数可一次出多视角；引擎默认 EEVEE + 光追 |
-| 跑很久的活 | `blender_rt_job` | 作业层：op=start / **wait** / status / collect；日志落 `jobs/<id>/`；超时不丢结果（回 promoted + jobId） |
-| 反复跑同一个脚本 | `blender_rt_worker` | 热无头会话：冷启动 + EEVEE 着色器编译只付一次。**单例串行** → 多 agent 并行时**不要共用**（会互相串场景） |
-| 看画面 / 看动没动 | `blender_rt_see` / `blender_rt_watch` | see 回一帧（给 from/look_at 走自定义视角，带 coverage_estimate）；watch 在时间窗内采样 ≤6 帧 + 逐帧 hash |
-| 回退到改动前 | `blender_rt_txn` | mark/revert 是对象级、毫秒；**拓扑改动**（布尔 / 删面 / 新建对象）必须 snapshot/restore |
-| **装配体检（数值门）** | `blender_rt_plan(op="audit_*")` | audit_mesh · audit_scene · audit_connectivity · audit_gate · **audit_interference** · audit_overlap · audit_measure · audit_drift · audit_duplicates · audit_snap_floaters（见 §6） |
-| **对照图 / 逐部件配色** | `blender_rt_plan(op="qc_render_views")` | 按 AABB 自动取景 + 临时三点光 + 逐张 md5 + coverage_estimate；`mode="parts_color"` 出逐部件配色图（图例写 parts_color_meta.txt） |
-| **交付导出** | `blender_rt_plan(op="deliver_*")` | 单位盒归一化 + 多组 OBJ/MTL + manifest md5 |
-| **参数化配方（生成器）** | `blender_rt_plan(op="generator_*")` | `generator_save/run/list/get/diff`：配方 = **参数块 + 生成脚本**（§3.0）。**改参不用改代码**；`generator_run` 在**全新无头进程**里复现并给三态 verdict（supported / refuted / unresolved）；源码一改，上次回执即 `stale` |
-| 查场景 / 对象 / 引擎 | `blender_rt_cmd` `rt_commands` `rt_perf` | cmd 传 get_scene_info / get_object_info；commands 列全部 addon 命令；perf status 看引擎与采样 |
+| blender_rt_see | 看一眼画面 | GUI 可用时走视口；**GUI 不在/传 session 时自动走持久 worker 的 Workbench 离屏**，50–150 ms；给 from/look_at 走自定义视角，不动用户视口 |
+| blender_rt_do | 改一步看一眼 | 持久内核 K；传 session 时在同一个无头 worker 里 exec+see；GUI 不可达自动降级；不是异步 job |
+| blender_rt_watch | 判断“动没动/对不对” | GUI 时间窗采样；传 session 走无头帧序列（逐帧 hash + 最多 6 帧图），支持 frames/帧范围/动画默认范围 |
+| blender_rt_loop | 参数搜索内环 | GUI timers 或 target=session 的同步阻塞内环；收敛后必须换通路（渲染/量测/装配门）复核 |
+| blender_rt_worker | 热无头会话 | start/preload/warmup/exec/see/watch/reset/status/stop/restart；preload 后可直接调 K.dsh_*_api；空闲 TTL 默认 15 min |
+| blender_rt_headless | 批处理/重活 | 独立 blender -b；preload/outdir/args/attach_images/shots；长活走 as_job；不占 GUI |
+| blender_rt_job | 超长作业 | start/status/wait/collect/kill；超时不等于失败，按 id 回收 |
+| blender_rt_txn | 回滚 | 对象级 mark/revert 不含拓扑；拓扑改动前用文件级 snapshot |
+| blender_rt_plan | 契约层 + 判定/验收/导出/造型 | op=catalog 先查 33 family / 217 op；传 session="auto" 时按 family 自动起无头 worker 同步执行，不依赖 GUI |
+| blender_rt_perf | 渲染性能 | analyze/apply/revert；persistent_data 等 |
+| blender_rt_opt | 对象精简 | analyze/join 安全合并；几何零损失 |
+| blender_rt_preset | 配方库 | save/list/get/apply/delete/export/import |
+| blender_rt_cmd / blender_rt_commands | addon 命令透传/查能力 | 需要 GUI addon 的命令才走这里；不确定先 commands |
+| blender_viewport | 通道运维 | status/doctor/start/stop/restart/launch/lease/release；写 op 过租约 |
 
-**改一步看一眼的正确节奏**：调 `blender_rt_do` 并在同一次调用里 see=true → 看图 → 不对就改 → 再看。局部修正只看问题视角加受影响的邻视角，不做每次全场景重建。
+**硬规则**：
+1. **先查目录，不要猜 op**：blender_rt_plan(op="catalog")；单族 args={family:"audit"}；算子细节 <family>_help。写错 op 会回 did_you_mean，参数名错会回“不认识的参数”。
+2. **写操作要过写租约**（blender_viewport op=lease/who/release）；只读 op 豁免；多会话并行时必须先声明写作用域。
+3. **回执先读 verdict，不读 ok**：gate/audit/asm/visualreport/eval 都是 pass|fail|degraded 三态；degraded ≠ 通过；ok 只表示“跑完了”。
+4. **数字必须可复算**：尺寸、px_per_mm、bbox、md5、IoU 要带来源；没有标定就不许把像素当毫米。
+5. **headless 里优先 bpy.data/bmesh，慎用 bpy.ops**：依赖 screen/context 的 GUI 型 ops 在无头会话可能失败；必须用时先小步验证。
 
-> 通道差异是本节最容易出错的地方：老式 MCP 教程会让你"每次调用重新 import 一切"——那对 `blender_rt_headless` 成立，对 `blender_rt_do` **不必要**（内核 K 和已导入的名字都还在）。但**依赖上一次调用留下的变量本身是脆的**：跨会话、后端重启、走 job 之后都会丢。稳妥写法是在**当次调用内**重新取一遍对象引用（`bpy.data.objects['GEO-x']`），不要假设 `obj` 这个变量还在。
+### 0.2 GUI 可选：两种交互式回路
 
-**写通道租约（多 agent 必读）**：写操作自动带 holder 租约；别的会话持有时返回 **409 leased**，只读 op 豁免。
-`blender_viewport(op="who")` 先看谁在写 → `op="lease"` 拿 → 真要抢再加 `force=true`。
-**多 agent 并行的正确姿势是 headless**（每条调用独立进程，天然并行），不是抢 GUI 租约。
+- **GUI 回路**（人在 Blender 前）：rt_do / rt_see / rt_watch 走 addon，~50–100 ms/步。
+- **无头回路**（没有人看画面）：rt_worker start + preload，然后 rt_do(session="s1", see=true) / rt_see(session="s1")。每次 exec 后同步 see，图片直接回模型；场景与 K 跨调用保留。**这是同步交互，不是“提交作业—等回合”。**
+- **plan 无头**：blender_rt_plan(op="asm_scan", args={...}, session="auto")；首次冷启动约 2 s，之后复用 worker。
+- 人类看不看得到画面不重要；AI 必须能“改一步、立刻拿到图/数字”。不要让 headless 退化成长时间无反馈的批处理。
 
-> **独立验证子代理只读 `references/验收清单.md`**（约 4.2k 字符 ≈ 1.4–1.8k tokens，实测估算）：别让验证者加载本 SKILL.md 全文
-> （约 81k 字符 / 约 125 KB ≈ 27–34k tokens）。分派判据：**数值门归脚本跑**（`audit_*` 支持 `summary_only` / `top_k` 瘦身；
-> 实测 40 对象场景 9,176 → 1,148 字符且 `clean`/`totals` 判定不变），**只有主观项**（像不像 / 构图 / 文案）
-> 才需要陌生视角。反 Goodhart 的"换一条计算通路"写在清单里；单次验证固定开销 ≈27–34k → ≈8.6–9.0k。
+### 0.3 单位与尺度（先定，后建模）
+
+- 场景单位默认 1 BU = 1 m = 1000 mm（unit_settings.scale_length=1）；写代码前先读 scene.unit_settings。
+- 所有尺寸用毫米写进 spec，再统一换算；不要一会儿米一会儿毫米。
+- 装配 manifest / blockout / asm_scan 都用 mm 口径；导出前确认 units 字段。
+- 参考图没有标尺时只能给像素比例；px_per_mm 必须由已知边长、标尺两端点或 img_calib 标定得到。
+
+### 0.4 证据链与回执
+
+每次关键步骤至少留一种证据：
+- 画面：rt_see / rt_watch / blockout 3 视图 / refsheet 4 视图；
+- 数字：audit_mesh / asm_scan / gate_run / visualreport_report / eval_run；
+- 文件：manifest/md5/GLB/FBX/OBJ/MP4。
+
+回执里优先看：verdict、top_defects、failures、counts、gate、coverage、warnings、honest_limits。不要把 warnings 当通过。
 
 ## 0.5 多 Agent 并行建模的分工范式（★ 做大件必读）
 
-**派子代理前（必做）**：子代理看不到你读过的目录 —— 把 `blender_rt_plan(op="catalog", args={handoff:true})` 的输出
-**原样粘进它的提示词**（≈2.5 KB：15 个工具 + 12 类建模的第一步/禁止自造 + 四条硬规则）。
-不粘的实测后果：子代理直接写 Python 自造放样、自写判据，插件的 vehicle_*/shape_* 全白给。
+并行建模的收益来自“同时做几件独立的事”，不是“让几个模型自由发挥”。必须先把合同冻结，再分头写。
 
-> 单人单线捏一个物体，配方够用；**造一台机器**（几百个对象、多个 builder）时，决定成败的不是捏形状，而是**分工协议**。
-> M1A1 实测：500 对象 / 7 个 agent，**装配质量几乎全靠这一章**。
+### 0.5.1 第一步永远是冻结规格（spec.py）
 
-### 0.5.0 在冻结规格之前：先打草稿（S0 制作表格）
-
-**参考图还原 / 大件建模的第一步不是量尺寸，而是在脑子里打草稿**：只判
-「是什么 · 大概多大（**量级档 A–F**）· 拆成几块 · 谁是主体谁是配件 · 哪块硬表面哪块曲面 · 哪里镂空/凸起/凹陷」，
-产出一张**制作表格**（T1 识别与量级 / T2 制作单元 / T3 形态 / T4 空间特征）。
-
-- 插件侧：`blender_rt_plan(op="shape_draft", args={object_class:…})` 给字段契约与可填骨架 → 填 `record` →
-  `op="shape_draft_check", args={record:…}` 机械校验（合法过、写 mm 被拒）。
-- **S0 三条硬规则**：① **不量精确尺寸**（尺寸只能 A–F 档或 `0.3×` 这类相对比例，出现 mm/cm 即拒收）；
-  ② **不数 mesh**（禁调 `audit_scene` / `audit_mesh` / `print_report`）；③ **不定死**（每字段带 `confidence` + `source`，
-  判不出写 `unknown`，**每件必带 `to_confirm`** = 图来了要补什么）。
-- **表格不是规格**：`spec.py` 里只许写 S2 标定之后测出来的数字；S0 的档位只用于**选路**（截面通路 / 配方 / 分工）。
-- 拿到图后再按 S1（`img_scan`，**像素 ≠ 毫米**）→ S2（`img_rectify` 标定，**第一次有数字**）→ S3（`shape_sections`）逐行补。
-  完整口径见 `references/参考图通用还原SOP.md` §1.1 与 §5。
-
-> 反模式：一上来就跑 `img_rectify`/`shape_sections` 量 mm、`audit_scene` 数面数 —— 没图时那些数字是**编的**；
-> 一旦写进 spec 被全员当唯一真源，图来了必然全量返工。
-
-### 0.5.1 第一步永远是冻结规格（`lib/spec.py`）
-
-在任何人动手之前（**且 S0 草稿表已出**，见 §0.5.0），Lead 先写 `lib/spec.py` 并**冻结**（尺寸 + 接口表 + 命名 + 材质映射 = 唯一真源）：
-
-> ⚠ 规格里**只许写 S2 标定之后实测的数字**：S0 草稿的量级档（A–F）只用来选路，**不许直接搬进 spec**。
-
-```python
-# lib/spec.py —— 唯一真源。builder 只读，不许各自定义常量。
-TOTAL = {"length": 9.83, "width": 3.66, "height": 2.88}      # m（口径写清：含炮管 / 含裙板）
-WHEEL_R, WHEEL_W, WHEELBASE = 0.33, 0.20, 4.60
-DECK_Z, HULL_BOTTOM_Z = 1.62, 0.42
-PARTS = {                                                     # 命名 → 归属 → 写作用域
-    "GEO-hull":    {"owner": "hull-dev",    "file": "lib/hull.py"},
-    "GEO-turret":  {"owner": "turret-dev",  "file": "lib/turret.py"},
-    "GEO-rungear": {"owner": "rungear-dev", "file": "lib/rungear.py"},
-}
-INTERFACES = [                                                # 接口表：拼件之间的"合同"
-    {"a": "GEO-turret_ring", "b": "GEO-hull_deck_ring", "normal": (0, 0, 1),
-     "plane_z": DECK_Z, "overlap_mm": 12, "tol_mm": 2},
-]
-```
-
-**没有冻结规格就分件 = 装配必崩**：炮塔和车体各按各的理解建，接口对不上是必然，不是运气问题。
+所有人只读同一份 spec.py / manifest.json，不许各自定义常量。spec 至少冻结：
+- 对象清单、每个件的尺寸/位置/朝向/材质槽；
+- 接口表：谁和谁相接、接口平面、公称间隙、允许交叠；
+- 单位、坐标系、前向轴（默认 -Y）、上轴（+Z）；
+- 验收门：audit_mesh 阈值、asm_gate 要跑哪些门、允许的 hidden_ok 交叠量。
 
 ### 0.5.2 写作用域协议（谁写哪个文件）
 
-- 每个 builder **只写**自己那条线：`lib/<part>.py` + `work/<part>_test.py` + `qc/<part>_*`。
-- `lib/spec.py` **只读**：要改规格 → 找 Lead 改，改完**通知全员重新量**（旧数字全部作废）。
-- 装配层 `lib/assemble.py` 归属**单独一个人**（Lead 或专职 assembler）；builder 不许碰。
-- 共享文件系统**没有锁**：两个人同时写一个文件，后写的覆盖前面的。守界就是纪律。
+每个 builder 只写自己的 .py 和对象前缀；并行前用 blender_viewport lease 声明 collection/prefix 作用域；装配前用 K.route_collections 归位。不要让两个 agent 同时写同一个 .blend 或同一批对象。
 
-### 0.5.3 接口表怎么定（拼件的"合同"）
+### 0.5.3 并行期无法互测 = 固有代价
 
-每条接口写清五件事：**名义面**（plane + normal + **真实接口的局部坐标系**）、**本 spec 明文写出的隐藏交叠量 `overlap_mm` 及其依据**、**公差**、**朝向语义**（谁的局部轴朝哪）、**接口特征尺寸**（轴径 / 板厚 / 最小壁厚）。
-这一条把"贴合面只能靠猜"变成"按本 spec 明文的交叠量拼、装配后按 spec 复检"。**spec 没写就回去问规格**（坑二）：可视脚本不发明深度倍数或下限，也不给结构强度结论。
+并行期间各件只能做“单件自证”（audit_mesh + 尺寸/bbox + 单件渲染）；接口对不上是正常的，靠装配后复检消化：
+1) asm_manifest 校验清单（id/文件/md5/接口帧/allow 列表）；
+2) asm_scan 全对全分类（clash / hidden_ok / contact / gap / float / contained / unresolved）；
+3) asm_repair(policy="safe") 只做低风险平移/吸附；布尔/缩放等高风险动作交人工确认；
+4) asm_gate 用 manifest 连接图判浮空/接口偏差；export_allowed 只在 pass 时为 true；
+5) asm_export 导出 GLB/FBX/OBJ + manifest + merge_ledger。
 
-### 0.5.4 并行期无法互测 = 固有代价，用"隐藏交叠 + 装配后复检"消化
+### 0.5.4 并行反模式（实测踩过）
 
-并行时邻件还没建出来，你**物理上不可能**知道真实贴合面。正确做法：
+- 各 agent 自造常量、自写验收判据 → 合并时件对不上，且没人能复现；
+- 用“看起来接上了”代替数字 → 穿模/悬空被眼睛放过；
+- 在未判连接关系时直接 Boolean/Weld → destructive_guard 会拦；先注册连接/接口；
+- 把 hidden_ok（设计内隐藏交叠）当穿模修 → 先读 manifest 的 allow 列表。
 
-1. 按接口表的**名义面做隐藏交叠 `overlap_mm`**（**该接口自己的值，来自本 spec 的明文**；藏在较大件内部，**不改变可见轮廓、不捅穿薄壳**）；
-2. 交付时写清"我按名义面 X 做了 N mm 的隐藏交叠（spec 出处：…），**实际面未验证**"；
-3. 装配层跑 `audit_interference` / `audit_measure` 一次性收敛所有偏差。
+## 0.6 参考图驱动的形体还原（“像不像”的关键）
 
-**不要为了"看起来贴合"去猜邻件的实际形状** —— 那只会让偏差集中到装配时爆发。
+### 0.6.1 先量，再建：img_digest → img_probe/measure → img_calib
 
-### 0.5.5 单件自证 → 装配门（用数字代替肉眼）
+1) **img_digest**：给参考图路径，拿原生分辨率 bbox、轮廓、直线、圆孔、对称轴、角点、可读性、原生裁剪与标注图。无标定时 verdict=needs_scale，所有 mm 字段为 null，绝不猜。
+2) **img_probe**：要某高度宽度用 scan_y/scan_x；要圆孔用 circle；要局部放大用 crop。
+3) **img_measure**：已知边长/两点距离 → 求 px_per_mm；再量宽高/孔径/角度。
+4) **img_calib**：多视图标定，求每视 px_per_mm 与跨视图尺度；单应只校正取点那个平面，跨深度误差按 Δz/(D+Δz) 估算。
+5) 标定后把所有尺寸写进 spec；没有标定的图只能做比例参考，不能写“宽 2000 mm”。
 
-**门的清单只有一份：§6 的十道门表**（含命令与字段）；本节只管**多 agent 交接**特有的三件事：
-**单件自证与装配门别混**、**回执要贴原文**、**判据要"红过"才算数**。
+### 0.6.2 轮廓反推：shapesolve
 
-- 单件自证 ⇒ `audit_mesh`（门①–④）；装配口径 ⇒ `audit_gate`（门⑥）。
-- 命令原样：见 **§6.1**（三条必跑）；字段判据：见 **§6** 表。
-- 跨文件批处理：**只有** `audit_connectivity` / `audit_gate` / `audit_measure` / `audit_overlap` /
-  `audit_interference` 收 `args={"file": "D:/.../parts/hull.blend"}`（后两者用 `file_a` / `file_b`）。
-  ⚠ **`audit_mesh` 不吃 `file=`** —— 传了会当场被拒：
-  `参数不匹配: audit_mesh() got an unexpected keyword argument 'file'`（实测 2026-09-30，**4 个 agent 独立踩过**）。
-  要对**另一个 .blend** 里的件跑单件自证，只有这一条路：
-  ```python
-  bpy.ops.wm.open_mainfile(filepath=PATH)          # 先真的打开它
-  K.dsh_audit_api("mesh", {"objects": [...], "self_intersect": True})
-  ```
-  headless 里记得 `preload="audit"`（否则 `K.dsh_audit_api` 不存在，见 §6.5.6）。
+参数化形体（盒体/支架/车壳基础体）可按参考图轮廓反推尺寸：
+- 输入：setup 代码（定义 apply(p)）、参数区间、views（ref/from/look_at/ortho_scale）；
+- 原理：正交解析投影 + numpy 三角形光栅化，不渲染、不依赖 GUI/timers；
+- 输出：best/逐视 IoU/敏感性（strong/weak/unidentifiable）/可复现脚本；
+- 边界：只比轮廓并集；ortho_scale 是绝对对齐，写错会整体判错；参考图必须同相机参数生成。
+- 拟合结果必须用**另一条通路**复核（blockout 渲染 + visualreport 或直接量尺寸），不能拿训练目标当验收。
 
-**验收回执模板**（复制进交付清单；数字必须来自回执**原文**，不许转述、不许手写）：
+### 0.6.3 白模与参考包：blockout
 
-```text
-【交付回执】<件名 / agent>   <ISO 时间>
-audit_mesh   objects=[...]  state=pass  verdict=pass  clean=true
-  totals: boundary_edges=0  nonmanifold_edges=0  degenerate_faces=0
-          loose_verts=0  loose_edges=0  self_intersections=0  normals_inverted=0  normals_unknown=0
-  objects[i]: closed=true  normals_state=pass  normals_outward=true
-              normals_shells=[{shell:0, faces=…, state:pass, signed_volume:<值>, nested:false}]
-              # ★ 逐壳判：别拿"总 signed_volume>0"当充分条件（大正向壳 + 小反向壳会抵消成正数）
-audit_scene  state=pass  self_intersections_analyzed=true     # ★ 必须显式 args={"self_intersect": true}
-audit_gate   scope=COL_<agent>  state=pass  ship_ok=true
-  verdict_line="..."
-audit_interference  a=... b=...  verdict=refuted(无干涉)  volume_mm3=0   # 有干涉写 supported + volume_mm3
-audit_measure  items[].size_mm 对 spec 偏差 ≤ ±3mm
-               pairs[<a>|<b>].axis_overlap_mm.<接口法线轴> = <实测> ≥ <本 spec 明文写的 overlap_mm>
-               轴选择：接口法线与世界轴一致且轴对齐盒适用 ⇒ 可作粗筛；旋转接口须沿接口局部坐标量真实表面
-               依据：本 spec 的明文（示例数字只是写明它的那份示例 spec 的取值，不是通则）
-               同对件 audit_connectivity 未报浮空：<是>
-.blend md5=<md5>          # WSL: md5sum <file> ； Windows: Get-FileHash -Algorithm MD5 <file>
-fingerprint.digest=<12 位>
-```
+- blockout_base：声明式 parts（prim/size_mm/at_mm/rot）→ 低模 + 3 视图 + GLB；默认 Workbench、单白材质、mm/锚点。
+- blockout_batch：批量 N 件，适合给视频模型做基础白模。
+- blockout_refsheet：前/侧/顶正交 + iso 透视 4 视图 + 2x2 拼图 + refsheet.json（units/bbox/forward_axis/camera/fps）+ 可选内嵌转台；给 Seedance 这类视频模型做参考包。
+- blockout_turntable：绕 Z 轴 orbit，Blender 内置 FFMPEG 出 MP4/H264；MP4 无 alpha；没有 FFMPEG 构建时回退 PNG 序列并标 degraded。
+- 白模不是高模：细节仍走 shape/vehicle/human/sculpt 等现有通路；白模只负责形体比例与镜头参考。
 
-> ⚠ 交叠那一行**只写本 spec 的值，不写通则**：老模板写 `pairs[].axis_overlap_mm ∈ [5, 15]` 是错的；
-> v4/v5 换上的"`1–2×` 接口特征尺寸"**同样是规范性固定倍数，已被 v6 撤回**（见 §13）。
-> 数字（例：3mm 板搭接 1.5mm）只在**写明它的那份示例 spec 里**才算数，换项目换尺度要重新由设计定。
-> 现在必须写**"接口局部坐标下的量测轴 + 本 spec 的 `overlap_mm` + spec 出处"**，并附连通门未报浮空的确认（坑二 ③）。
+### 0.6.4 同机位验收：visualreport_report
 
-> ⚠ **三态别读成二态（v0.9.6）**：`audit_*` 顶层现在给 `state`（= `verdict`）三态 ——
-> `pass` / `fail`（确有缺陷）/ `degraded`（**没查完或判不出来**）。`clean` 收紧为"**查完了而且没缺陷**"：
-> 自交检查被跳过或抛异常、`normals_state=unknown`、（**显式设了上限时**）超面数上限的逐壳分析，都会给 `clean=false` + `state=degraded`；默认不设上限、全跑。
-> ⇒ **`clean=false` 有两种成因**（确有缺陷 / 没查完），必须看 `state` 与 `reason` 才下结论；
-> `degraded` 的处置是**补查**（见下），不是"勉强算过"。
+- 输入：ref + render（或 views）、可选 px_per_mm、targets、ref_box_px/render_box_px；
+- 输出：verdict（pass/fail/degraded）、IoU/Dice/missing/extra/boundary、top_defects（bbox/面积/位置 mm）、缺陷 crop、fix_hint；
+- 前提：同机位、同分辨率、同裁切；不同机位/引擎的分数不可直接比；
+- 照片参考需先抠背景（掩膜是前景启发式）；px_per_mm 缺失时 mm 字段为 null。
+- **IoU 只是单视轮廓的必要条件，不是“整体像不像”**；必须配合尺寸/接口/装配门。
 
-**三条硬纪律（都是实测踩出来的）**：
+### 0.6.5 读图纪律（决定 token 与效果）
 
-1. **单件自证用 `audit_mesh`，`audit_gate` 是装配口径**：一个完全干净的孤立立方体 `audit_mesh state=pass clean=true`，但跑 `audit_gate` 会 `state="fail"` —— 因为"整个模型就是唯一分量、谁也不接"（实测）。要跑 gate 就给它**≥2 件应当相接**的集合。
-2. **判据要"红过"才算数**：拿一个已知三缺陷件（开边 / 浮块 / 穿模各一）跑一遍，三门必须红。实测：开边立方体给 `boundary_edges=4, nonmanifold_edges=4, closed=false, clean=false, state=fail`；5cm 浮块被 `audit_connectivity` 记成 `floaters` 且 `audit_gate state="fail"`；重叠 0.5m 的两块给 `audit_interference verdict="supported", volume_mm3≈4.97e8`。
-3. **`ok=false` / `analyzed=false` / `state="degraded"` / `clean=false` 都不是通过**：0 个 mesh、文件打不开、全部隐藏 ⇒ `ok=false`（静默空产出必须失败）；`analyzed=false` 不能读成"已连通 / 无重叠"；`degraded` 与"`clean=false` 但 `state=pass`"这类组合不存在 —— 见到 `degraded` 就去补查（`audit_scene` 传 `self_intersect=true`；`audit_mesh` 看 `reason`/`normals_state`/`hint`），补完再下结论。
-
-**怎么验**：交付清单里能贴出上面那张回执的**原始字段值**；三缺陷件能复现"三门红 → 修好后全绿"。
-
-**装配层最后统一 recalc 法线**（`bpy.ops.mesh.normals_make_consistent(inside=False)` 或 bmesh 等价）——
-见坑五：法线是**所有**穿模 / 内含判据的前提，装配层必须兜底一次。
-
-### 0.5.6 分工反模式（实测踩过的）
-
-- ❌ 两个 builder 写同一个文件 → 静默覆盖。
-- ❌ 7 个 builder 共用 `blender_rt_worker` → 单例串行 + 场景互相污染。
-- ❌ 每个 builder 各自定义尺寸常量 → 装配对不上；常量必须在 `spec.py`。
-- ❌ 用"看起来对"验收 → 必须给数字（bbox / 间隙 / 面数 / 按 spec 的隐藏交叠量）。
-- ❌ builder 自己跑装配 / 导出 → 那是装配层的事。
-- ❌ 拿单张成品图当形体证据 → 必须固定机位对照图（§0.6）。
-
-### 0.5.7 可并行性判据与归属标签（P1-5）
-
-**先判"能不能并行"，再谈"怎么分"** —— 三个 builder 同时改同一个东西时，任何协议都救不回来。
-
-| 判据 | 能不能并行 | 依据 / 处置 |
-|---|---|---|
-| 两个 builder 写**同一个文件**（`.py` / `.blend`） | ❌ 不可并行 | 文件系统没有锁，后写的覆盖前面的（§0.5.2）→ 拆文件，或串行 |
-| 两个 builder 改**同一个对象**（哪怕改不同属性） | ❌ 不可并行 | bpy 是单场景单主线程；对象级回滚也按对象记账，两个 owner 会互相打回 |
-| 两个 builder 改**同一份材质 / 同一个 node group** | ❌ 不可并行 | 材质是共享 datablock，改一次全体变 → 一人一份材质副本，装配期再合并 |
-| 共享**只读**输入（`spec.py`、接口表、参考图） | ✅ 可并行 | 只读不产生写冲突 |
-| 各自的 `lib/<part>.py` + 各自的 `COL_<agent>` | ✅ 可并行 | 默认推荐形态 |
-| 各自的 headless 进程 / `rt_job` 作业 | ✅ 可并行 | 每次 spawn 独立进程（实测 512² 渲染 2 并发各只慢 ~10%） |
-
-**归属约定**（写进 `spec.py` 旁边的公共工具，别只写在脑子里）：每个 builder 一个 `COL_<agent>` 集合 + 每个对象一个自定义属性 `dsh.owner=<agent>`。
-
-```python
-# lib/own.py —— 所有 builder 共用；建对象时立即登记归属
-import bpy
-
-def own(obj, agent):
-    obj["dsh.owner"] = agent                      # 对象自定义属性：可被筛出来，装配期可追责
-    col = bpy.data.collections.get("COL_" + agent) or bpy.data.collections.new("COL_" + agent)
-    if col.name not in bpy.context.scene.collection.children:
-        bpy.context.scene.collection.children.link(col)
-    for c in list(obj.users_collection):          # 只留在自己的集合里（避免同一对象被两个集合"共有"）
-        c.objects.unlink(obj)
-    col.objects.link(obj)
-    return obj
-
-def owned(agent):                                 # audit_* 不收 owner 参数 —— 自己筛成名字列表再传
-    return [o.name for o in bpy.data.objects if o.get("dsh.owner") == agent]
-```
-
-装配前逐集合过门：`blender_rt_plan(op="audit_gate", args={"scope": "COL_hull-dev"})`；
-要按 owner 精确取件：`blender_rt_plan(op="audit_mesh", args={"objects": owned("hull-dev")})`。
-
-**只回滚一个 builder**（对象级 mark/revert；毫秒级，实测只动被标记的对象）：
-
-```text
-blender_rt_txn(op="mark",   label="hull-iter7", objects="GEO-hull,GEO-hull_plate_01")   # ← objects 是**逗号分隔字符串**
-... 改这一批对象 ...
-blender_rt_txn(op="revert", label="hull-iter7")     # 只把这批打回 mark 时刻
-```
-
-实测回执：`{"ok":true,"reverted":"hull-iter7","changed":["PROBE_t1"],"changed_count":1,"missing_objects":[],"blocked":[]}`
-—— **没被标记的对象一动不动**（另一个对象的位移保持改后的值）。
-边界（回执里 `boundary` 字段的原文口径）：只覆盖 **transform / 材质槽 / 可见性 / 修改器开关**，
-**不含拓扑、UV、顶点位置**；布尔 / 删面 / 合并这类改动先用 `blender_rt_txn(op="snapshot", label=...)` 留文件级回退点。
-
-**怎么验**：mark 两个对象 → 改三个对象 → revert ⇒ 回执 `changed_count=2` 且第三个对象的值**没变**；
-`blender_rt_txn(op="marks")` 仍能列到这条 mark（除非显式 `op="drop"`）。
-
-## 0.6 参考图驱动的形体还原（"像不像"的关键）
-
-> 实测：炮塔外形不是"捏"出来的，是**从参考图量出来的**。"裙板下沿 / 甲板高 = 48.2% vs 规格 48.4%"这种对拍才是形体验收。
-
-### 0.6.1 三视图标定（正视 / 侧视 / 顶视；先判"能不能按比例量"，再判"能不能联立"）
-
-单视图标定的死穴：**只要这张图带一点透视，"一个 px_per_mm"就是假的** —— 物体不同深度的比例不同，你量得越远越不准。
-
-> ★ **纠正一条常被写错的口径**：正交三视**并不**"必须共享同一个 `px_per_mm`"。
-> **正交只保证"每个视图内部"px 与 mm 呈线性**（视内残差≈0）；三张图完全可以各自有不同的
-> **出图比例 / 分辨率 / 裁剪**，却都是严格正交。
-> 实测（Blender 5.2.2，`world_to_camera_view` 直接量）：三个正交相机在 `ortho_scale` 4/8/2 m 下，
-> **视差探针全为 0 px**（确实是正交），而 `px_per_mm` = **0.48 / 0.24 / 0.96，互差 300%**。
-> ⇒ "三视共享同一比例"是一条**额外假设**（三视出自同一张工程图 / 同一次渲染），要**单独声明并验证**，
-> **不能从正交性推出来**。把 `px_per_mm` 不一致读成"透视"，会让你去改本来没问题的取点。
-
-**可运行脚本：`references/multiview-calibration.md`（`multiview_calib.py`，纯标准库，自带 `--selftest`）。**
-
-**① 找标尺、逐视独立最小二乘**：每视取 **≥3 个已知特征**（轴距 / 轮径 / 总长 / 炮管长），量出它在本视**图像横轴方向**的毫米长 `u_mm` 与像素长 `px`，各视**各自**解
-
-```text
-px = cx + s · u          # s = 「该视自己」的 px_per_mm；cx = u=0 落在哪一列
-主点偏移 = cx − 图宽/2    # 理想情况接近 0；偏得离谱说明取点或裁剪有问题
-```
-
-> ★ **两点解出来的直线必然过这两点（残差恒 0）** —— 想判"这张图正不正交"，**每视至少 3 点**。
-
-**② 跨视互检要换算成毫米再比**（不是比 `s`）：再给**至少一条共享尺寸**（在两个及以上视图里都能量到的真实尺寸，如全高 / 总长），
-把它的像素量测用**各视自己的 `s`** 换算成毫米，看两视给出的毫米值是否吻合。这一步与出图比例无关，所以它才是真正的互相印证。
-
-**③ 判据（三条各管一件事，别混）**：
-
-| 判据 | 阈值 | 它判的是什么 | 超限的处置 |
-|---|---|---|---|
-| 视内残差 | **> 2%** | 该视**内部**线不线性 ⇒ **真的有透视 / 非线性**，或特征点量错 | 该视不可按比例量 |
-| 共享尺寸互差（**换算成 mm 后**） | **> 3%** | 两视对**同一条真实尺寸**对不上 ⇒ 两视互不相容 | 不要联立；逐视换算并标 `unresolved` |
-| 三视 `px_per_mm` 互差 | **> 1%** | 三视**不共享同一出图尺度** | **≠ 透视** —— 逐视各自标定即可；只有另有"同尺度"依据时才合并 |
-
-**没有共享尺寸 ⇒ 三视之间无法互相证明**，结论只能是 `unresolved`（不要默认它们一致）。
-
-**④ 只有"同尺度"成立时才联立**：取按 `sxx` 反方差加权的**联合 `px_per_mm`**，把三视的像素量测统一换算成毫米写进 `spec.py`，**附来源**（图名 + 像素坐标 + 标尺）。
-自证口径：自己用正交相机渲的图有真值 —— `px_per_mm = 渲染宽度px / ortho_scale_mm`，拿它跟联合值对拍（目标误差 ≤1%）。
-⚠ 这条只在**同一个正交设置**下成立：换 `ortho_scale` 或换分辨率，`px_per_mm` 就跟着变（见上面的实测）。
-
-**⑤ 三视不同尺度 / 单视标定怎么量**（判了"不能联立"之后不许再假装三视是一家）：
-
-1. 每视只用**自己的标尺**定 `s`，只换算**与本视标尺同深度、同方向**的尺寸；
-2. **跨深度的尺寸：误差不是固定 ±5%** —— 透视下比例按 `1/z` 变化，误差上界是可算的：
-
-```text
-err ≈ Δz / (D + Δz)      # D = 相机到近处标尺的距离，Δz = 两点深度差
-```
-
-实测（D = 8 m，Blender 5.2.2 投影量测，与解析式逐行吻合）：Δz = 0.5 m → **−5.88%**；Δz = 1 m → **−11.1%**；Δz = 3 m → **−27.3%**。
-⇒ **只跨 0.5 m 就已经超出 ±5%**。先算这个上界；**估不出 `D` 或 `Δz` 就记 `unresolved`**，不要顺手写"±5% 应该够"。
-想要真按比例量 ⇒ 让被测特征与标尺**同深度**，或对参考图做**真正的相机标定**（内参 + 外参）。
-
-**⑥ 照片先校正，但单应只校正"一个平面"**：四点单应对**恰好落在取点那个物理平面**上的点严格成立，
-离开该平面的点误差随深度迅速放大。实测（在 z=0 平面拟合单应，1 m ≈ 190 px）：平面上误差 **0 px**；
-离平面 0.05 m → **52 mm**；0.2 m → **211 mm**；0.5 m → **543 mm**。
-⇒ **平面参考**（图纸翻拍 / 标定板 / 贴平的贴纸）完全正确；**立体物**（车 / 人 / 建筑）只有取点那个平面准，
-离它越远的特征（轮眉外扩 / 翼子板弧度 / A 柱前倾）误差越大 —— 四点必须是**同一平面上的真实矩形**，
-且只取靠近该平面的特征量测；要整个立体物都准就得走相机标定，不是单应。细节见 `references/multiview-calibration.md` §6。
-
-**怎么验**：`python3 multiview_calib.py --selftest` 四个合成用例必须分别给出
-"A 联立 / B 视内残差红 / C 分尺度逐视可用 / D 跨视互检红"（末行 `SELFTEST PASS`）；
-核心回归是 **C**：三视 `px_per_mm` 差 100% 而视内残差≈0 时，判据必须输出"不共享比例、**逐视标定可用**"，
-而**不是**误判透视。
-
-### 0.6.2 双证据验收（缺一不可）
-
-- **数值**：`audit_measure` 出 bbox / 逐轴间隙，与 `spec.py` 对拍。
-- **画面**：`qc_render_views` 用**与参考图相同的机位**出图，叠着看。
-
-单张"好看的成品图"**不能**验收形体 —— 前裙甲上翘就是这么漏掉的：只有固定机位对照图 + bbox 数字才抓得出来。
-
-#### IoU 是什么、不是什么（★ 别把它当"整体像不像"）
-
-`qc_render_views(ref_path=…)` / `img_diff` 给的 **IoU 是"该视图下轮廓（前景掩膜）的交并比"**，
-是一个 **2D、单视、只看轮廓** 的指标。它：
-
-**能**判：该视图下**外轮廓重合度**（包络对不对、长度高度对不对）。
-**不能**判（全都是它的盲区）：
-
-| 盲区 | 后果 |
-|---|---|
-| **深度/厚度** | 侧视 IoU 0.9 的车可能薄了一半 —— 轮廓一样，纵深全错 |
-| **内部特征**（板缝 / 格栅 / 灯 / 面罩 / 特征线位置） | 轮廓内一片平也照样 0.9+ |
-| **曲面张力 / 面感** | IoU 高但"看着不像"正是这一类（Recipe 18 硬规则⑤） |
-| **其他视图** | 侧视 0.9 对顶视一无所知 |
-| **体积/质量分布** | 轮廓相同、前后配重相反，IoU 不变 |
-
-⇒ **IoU 是"必要不充分"条件**。纪律：
-
-1. **每个视图分开算**，**逐视各自达标**（侧 / 前 / 顶都要，别用一个数代表整体）；
-2. **IoU 达标只能推翻"轮廓错"，不能证明"像"** —— 还要叠上：`clear_check` 的成对间隙、
-   `audit_measure` 的逐轴尺寸、以及**内部特征线**的对照（`parts_color` 图 + 剖面差）；
-3. **不要把 IoU 当优化目标去凑**：把轮廓填满就能刷高 IoU（比如把车窗全部堵上）。
-   一旦发现"IoU 涨了但图更难看了"，就是这个 Goodhart 陷阱 —— 回去看特征线；
-4. **IoU 低一点但该有的特征都在**，通常比"IoU 更高但特征被抹平"更接近参考图。先判"哪一层错"
-   （包络错 → 改包络；轮廓错 → 改站表；面感错 → 改特征线/圆角，见 `references/参考图通用还原SOP.md` §4）。
-
-### 0.6.3 读图纪律（决定你烧多少 token、以及会不会"看了等于没看"）
-
-**① 结论三分**：读图结论必须三分：【**实测看到的**】【**推断的**】【**我无法判断的**】。比例、遮挡关系、法线朝向这三类最容易"看着像就下结论"。
-
-**② 尺寸纪律（P0-5）**：两种场合，两个尺寸，不要混用。
-
-| 场合 | `max_size` | 理由（实测） |
-|---|---|---|
-| 迭代期"改一步看一眼" | **420** | 420px 单帧 **79,428 B**（PNG，附件约 17 KB）；560px 单帧 116,870 B —— 迭代要看几十次，这里省的是大头 |
-| 对照验收 / 出报告 | **900** + **固定机位** | 要和参考图叠着看、要能看出 1–2mm 板缝；一张就够，别连拍 |
-
-`blender_rt_see` 给 `from/look_at/lens` 就是自定义视角（不动物体、不动用户视口）；**验收机位写进 `spec.py`**，每次都照抄 —— 机位一变，"像不像"就没法对拍。
-用 `blender_rt_plan(op="qc_render_views")` 出对照图时同理：`views` 数组与 `res` 固定，回执/JSONL 逐张给 `hash`（= 该 PNG 的 md5）。
-
-**③ hash 纪律（最重要的一条）**：每张帧回执都带 `hash`（PNG 字节的 md5 前 8 位）。
-**hash 与上一次相同 = 画面逐字节没变** ⇒ **不要再看图、也不要再判读**，直接去看数值（bbox / 审计字段）。
-实测：同一个视口连发 5 次，回执 hash 全等（本机 420px 连测 5 次全是 `c2b9b1d1`）；这不是"图被缓存了"，是画面真的没变。
-
-> v0.9.4 起插件对"同一通道 + 同一 hash"的帧**默认不重复附图**，文本会写「**与上一张完全相同**（第 N 次）⇒ 未重复附图；要重发传 `force:true`」。
-> 若你的回执**仍然带了图**，说明当前进程跑的是旧版插件 —— 纪律不变：**自己按 hash 判断，同一个 hash 不重复判读**。
-
-**怎么验**：一次迭代里"取图次数 ≤ 实际改动次数"（每个新 hash 最多看一次）；验收期每张对照图的 `max_size=900` 且机位与 `spec.py` 里那组数逐字一致。
+- 先低分辨率看整体（420–560），有疑点再局部放大；不要每步都 1600 px。
+- 同一画面 hash 相同 = 没变，不要重复看。
+- 看图前先想“我要验证哪个数字/哪个缺陷”，否则看了等于没看。
+- 发现缺陷先定位（bbox/center/方向），再改；改完同机位复看 + 数字门复跑。
 
 ## 0.7 建模类型 → 工具指路（★ 动手前先查这张表）
 
-**先查类型，再查能力族**：`blender_rt_plan(op="catalog", args={classes:true})` 一次拿全部 12 类
-（第一步 / 算子链 / 禁止自造 / 验收门）；单类 `args={class:"recon"}`。本表是同一份数据的人读版。
-
-| 建模类型 | 第一步 | 算子链 | 禁止自造 | 验收门 |
-|---|---|---|---|---|
-| 参考图还原（有外轮廓的物体） | **`shape_draft` 出 S0 草稿表**（是什么/量级档/几块/主体配件/什么形/哪凸哪凹；**不出 mm、不数 mesh**）→ 拿到图再 `shape_plan(object_class=…)` | `shape_draft → shape_draft_check → img_rectify → shape_sections → shape_loft`（要改数字用 `shape_fit`）`→ crease_lines/inset_lines → shape_regions/shape_panels → qc_render_views(ref_path=)` | 草稿期别量 mm、别数 mesh、别定死（每件必带 `evidence` 与 `to_confirm`）；别自造放样、别手算站表（自造 = 一张连续光滑面，没棱没缝） | S0：`shape_draft_check` ok=true；之后：比例门 + 三视图 IoU + 板缝/特征线计数 > 0 |
-| 分面硬表面（装甲/军模/板件） | Recipe 2a | 基本体/板件 + 布尔 → `bevel`（2–3 段、保硬边）→ `audit_mesh` | 别用 SubSurf 抹平棱；别靠缩放假装板缝 | 锐边/法线 + 板缝可见 + 无浮块 |
-| 光滑硬表面（钣金/圆润道具） | Recipe 2b | 基本体 → Bevel(2) → SubSurf(2) 或 `crease_lines(radius_mm=…)` → `audit_mesh` | 别手推顶点做曲率；别用 shade smooth 假装圆角 | 无褶皱/自交 + 特征线 > 0 |
-| 有机 / 角色 / 道具 | `sculpt_scan` | `sculpt_setup(VOXEL) → sculpt_apply(brush…) → sculpt_filter/remesh → audit_connectivity` | 别用布尔拼体积；无头别试 `bpy.ops.sculpt.brush_stroke` | 连通 = 1 + 包络 + 法线朝外 |
-| 重复阵列（履带/链节/散热片） | `generator_save` 或 Recipe 6b | `generator_run(args=…)` 或 Array+Curve → `audit_interference` | 别复制粘贴硬编码件（改参要改码） | 件数/节距/间隙门 + 零互穿 |
-| 布尔开孔（轮眉/散热孔/减重孔） | `destructive_guard` | 布尔 → `fix_repair` → `audit_interference` | 别在未判别的连接上布尔 | 零互穿 + 零面积面 = 0 |
-| 人形素体 / 头型 | `human_*`（Recipe 15/16） | 素体/头型 → `sculpt_*` 细修 → `audit_mesh` | 别自造人体比例表 | 比例表 + 连通 = 1 |
-| 管路 / 线缆 / 轨道 / 护栏 | `sweep_analyze` | `sweep_build` → `audit_connectivity` | 别手接路径段 | 弯折半径 > 型材半宽 |
-| 旋转体（瓶/罐/轮毂/花瓶/喷口） | `shape_plan(object_class="rotational")` | `shape_revolve(parts=[…])` → `print_report` → `material_*` | 别放样 —— 轴对称走放样是错的路径 | 回转轴向偏差 + 壁厚 |
-| 板件/型材/翼型（有弯度或不对称） | `shape_plan(object_class="aircraft"/"hull")` | `shape_sections → section_outline`（或超椭圆 + 特征线）`→ shape_loft` | 别用左右镜像表达弯度（翼型必选 `section_outline`） | 剖面偏差 + IoU + 特征线 |
-| 装配 / 机构 / 铰接 | `gate_plan(preset="assembly")` | `mate_check/fit_help → motion_joints → motion_measure → motion_export_urdf`；总验收 `gate_run(spec_path=…)` | 别自写验收判据 | `gate_run` 的 verdict 三态（degraded ≠ 通过） |
-| 打印可行性 / 交付 | `print_report` | `uv_* → material_* → material_bake → deliver_export → deliver_verify` | 别手写导出、别只交 .blend | manifest md5 + `resolution_mm` 警告 + UV 零面积面 = 0 |
-
-**四条硬规则**（都是实测踩出来的，不是洁癖）：
-
-1. **参考图还原先出 S0 草稿表**（`shape_draft` → `shape_draft_check`；**不量 mm、不数 mesh、不把数字定死**），**拿到图之后**再用 `shape_plan` 拿 `section_path` —— 截面通路选错（该 `section_outline` 却用镜像对称）是**系统性失真**，不是细节问题；
-2. **车壳/外壳类禁止自造放样** —— 自造只能出一张连续光滑面；板缝与棱线必须靠 `vehicle_panels` + `crease_lines` / `inset_lines`（Recipe 22）；
-3. **验收一律用机械门**（§6 数值门 + `gate_run` 三态）—— "看起来像"不算通过，`degraded` 也不算通过。
-4. **要试几十~几千组参数才收敛的任务，不许手工拍参数** —— 目标能写成一个数（轮廓 IoU / 包围盒尺寸误差 / 剖面差）且**在 GUI 会话里**，就交给内环（Recipe 24）：搜索跑在 Blender 侧、不花模型回合；收敛后**必须换一条通路复核**（`qc_render_views` + `audit_measure` + `blender_rt_see`），别把 `op="board"` 的 best 当验收。
-
-### 0.71 调用约定 · 离线逃生口（S9 补）
-
-**API 两种调用形态（返回类型不同，别混）**：
-
-```python
-api = K.dsh_audit_api            # 或 K.dsh_kit.kapi("audit")（找不到会列出已加载模块）
-r1 = api("scene", {...})         # → **dict**（已解析；文档/skill 示例都是这种）
-r2 = api["dispatch"]("scene", json.dumps({...}))   # → **JSON 字符串**（引擎契约；要自己 json.loads）
-```
-
-- 你自己的 `lib/*.py` 里想用 `K`：K 只注入「被执行脚本的 globals」⇒ **import 进来的模块有自己的 globals**。两种官方写法：
-  `import sys; K = sys.modules["dsh_rt_kernel"]`（一行）或 `K.dsh_kit.install_kernel()`（把 K 与 kapi 装进调用方 globals）。
-- `preload` 用 **runtime/<name>.py 的文件名**（如 `preload="vehicle,audit"`）；写错会报错并列出可用模块名。
-
-**离线逃生口（后端挂了也能干活）**：
-
-```bash
-blender -b --factory-startup --python runtime/offline_bootstrap.py -- vehicle audit qc
-```
-
-或脚本里 `import offline_bootstrap as ob; ns = ob.boot(["vehicle","audit"]); ns["kapi"]("vehicle")("spec", {...})`。
-契约与在线路径**完全一致**（同一个 `K.dsh_<name>_api`）。
-
-**`audit_gate` / `audit_connectivity` 的口径（装配必读）**：默认判据是**「单体船」**（`micro_gap_mm` 默认 0.3 mm）——
-222 个独立零件的**正常**装配必然被报成"可见浮块"。多零件请二选一：① 调 `micro_gap_mm`（带设计间隙的装配 1–2 mm）；
-② 走 `gate_plan(preset="assembly")` → `gate_run`，别拿单体口径当装配门。
-
-## 1. 六步总纲
-
-```
-0 冻结规格   → spec.py（尺寸 + 接口表 + 命名）★ 多 agent 时这一步是硬前置（§0.5）
-1 场景准备   → 集合分层、比例参照、命名规范
-2 Blockout   → 基本体摆大形（可随时推翻）
-3 粗形精修   → 编辑模式 / 修改器，把比例做对
-4 修改器栈   → 非破坏性地加细节（倒角 / 细分 / 布尔…）
-5 清理       → 合并重复点、法线、流形、松散几何（数值门见 §6）
-6 交接       → 交给 UV / 材质 / 渲染，或导出（装配层统一 recalc + 审计）
-               ★ 交接前**必跑** §0.5.5 的验收门清单，并贴出验收回执（boundary/nonmanifold/loose/self-intersections/closed + .blend md5）
-```
-
-要点：
-- **比例在低模阶段解决**。加细分只让表面更光滑，**不会**改善造型是否像。
-- **非破坏优先**：布尔保持 live 到导出前；拓扑定型再 apply 镜像。
-- **Blockout 与成品分开**：轮廓没被认可前不要删 blockout。
-- 每一步都留下可对照的固定相机画面，别只存最后一张好看的图。
-
-集合结构建议（大场景时）：
-
-```
-COL_Project
-├── COL_Reference      # 比例参照、正交参考图
-├── COL_Blockout       # 临时大形
-├── COL_Geo            # 最终几何
-├── COL_Collision      # 代理网格
-└── COL_Instances      # 实例化用的空物体 / 集合
-```
-
-命名：立即给名字，**永远不要留 Cube.001**；本技能统一用 `GEO-` 前缀（如 GEO-blade、GEO-guard）。
-**多 agent 时命名就是接口**：名字一旦进 spec.py 就不能改（改名字 = 改所有人的引用）。
-
-## 2. 决策树：什么形状走什么路子
-
-```
-要做什么几何？
-├── 硬表面 · 分面装甲 / 军模 / 机械板件（有明确棱边、板缝）
-│   → 平面板 + 小倒角（Bevel 1–3mm, 1–2 段, ANGLE 30°）＋**平坦着色** → 配方 2a
-│   ✗ 不要上 SubSurf：它会把装甲棱边全部圆掉，一眼就从"军模"变"塑料玩具"
-├── 硬表面 · 光滑曲面（汽车钣金 / 消费电子 / 圆润道具）
-│   → Cube + Bevel + SubSurf 栈 → 配方 2b
-├── 有机（角色 / 生物 / 植物——只做粗形，或要真雕出形体）
-│   → Ico Sphere（统一三角面，适合雕刻与体素重构）
-│   → 要"雕出形体"：走**程序化雕刻**（体素定底模 → 位移笔刷 → 遮罩限定 → 滤镜平滑）→ 配方 11
-│   ✗ 手势笔触（bpy.ops.sculpt.brush_stroke）在 Blender 5.2 上 Python 构造不出 stroke 集合
-│     （RNA 拒绝 dict；元素无法实例化）—— 别去试，用配方 11 的位移笔刷
-├── 建筑 / 重复（栅栏、柱子、瓷砖）
-│   → Plane/Cube + Array（+ Curve 沿路径）→ 配方 6
-├── **等距重复 / 必须精确闭合**（履带、链节、拉链、齿圈）
-│   → **参数化路径求解**（用**销轴弦长**口径，不是等弧长）→ 配方 6b
-│     （本配方口径下的 Array 只能"按曲线装满"，给不了精确弦长节距 + 闭环；直线等距阵列仍可用 Array）
-├── 管状（管道、柱子、瓶子）
-│   → Cylinder，或 Curve + bevel_object
-├── 在已有几何上开孔 / 切
-│   → Boolean DIFFERENCE → 配方 4
-└── 只要快速布景（大形阶段）
-    → 多个基本体直接摆 → 配方 7
-```
-
-基本体怎么选：**Cube** 硬表面主力；**Ico Sphere** 有机／雕刻底模（三角面最均匀）；**UV Sphere** 要贴图的圆物（自带好 UV）；**Cylinder** 机械件；**Cone / Torus** 尖角与环。
-
-## 3. 配方（可直接跑）
-
-> 下面代码块是**在 Blender 里执行的 Python**。交互式用 `blender_rt_do(code=…)` 跑；批处理用 `blender_rt_headless(script=…)`（那时记得在开头 import bpy，且**变量不跨调用保留**）。
-> ⚠ **headless 下 bpy.ops 的 context 很脆**（详见坑四）：批处理脚本优先用 **bmesh / data API**，配方里同时给了两套写法。
-
-### 3.0 配方 = 参数块 + 生成脚本（P1-4，接插件已有的 `generator_*`）
-
-高频复用的 5 条配方（**2a 分型面 / 4 布尔 / 5 镜像 / 6b 节距阵列 / 9 装配门**）不要每次复制粘贴改数字：
-把数字拎成 **参数块**，把配方变成 **生成脚本**，用插件已有的生成器注册表管版本与复现。**不另造体系。**
-
-| 动作 | 真实调用（回执字段照抄） | 关键回执 |
+| 我要做什么 | 首选 | 备注 |
 |---|---|---|
-| 注册 | `blender_rt_plan(op="generator_save", args={"name": "rib_array", "code": CODE, "params": {...}, "note": "..."})` | `path` / `sidecar` / `hash`；写 `<root>/<name>.py`（`root` 默认 `~/dsh_generators`，`dir` 可覆盖） |
-| 复现（不改参） | `blender_rt_plan(op="generator_run", args={"name": "rib_array", "expect": {"min_objects": 5}})` | `verdict` 三态 + `receipt{PARAMS, objects, names, tris, bbox}` |
-| 复现（**改参**） | `blender_rt_plan(op="generator_run", args={"name": "rib_array", "args": {"n": 12, "pitch": 0.02}, "expect": {"min_objects": 12}})` | 同上；`args` 这一层**就是**生成器的 `PARAMS` |
-| 看版本 | `generator_list` / `generator_get` / `generator_diff` | `stale=true` = 源码在最后一次运行后被改过 ⇒ **那次回执不能再当证据** |
-
-**改参复现（首选工具直调）**：
-
-```python
-# ★ 直接调工具：args 键就是生成器 PARAMS（嵌套一层）
-blender_rt_plan(op="generator_run",
-                args={"name": "rib_array", "args": {"n": 12, "pitch": 0.02},
-                      "expect": {"min_objects": 12}})
-# 回执：verdict 三态 + receipt{PARAMS, objects, names, tris, bbox}；核对 receipt.PARAMS 与 args 一致
-```
-
-```python
-# 备选（仍在，适合"同一段 Python 里连跑多次 / 要读中间量"）：走内核
-import json
-r = K.dsh_generator_api["run"](name="rib_array", args={"n": 12, "pitch": 0.02},
-                               expect={"min_objects": 12})
-r = json.loads(r) if isinstance(r, str) else r
-print(r["verdict"], r["receipt"]["objects"], r["ms"])        # supported 12 808
-```
-
-> ⚠ **旧版迁移说明（v0.9.5 及更早）**：那时的 dispatcher 把 payload 里的 `args` 键**无条件摊平**成顶层 kwarg
-> （`{"name": ..., "args": {"n": 12}}` → `generator_run(name=..., n=12)`）⇒ 报
-> `generator_run() got an unexpected keyword argument 'n'`（实测原话），而且 PARAMS 会变成空 `{}`。
-> **v0.9.6 已修**：`op="run"` 时 `args` 是真参数、原样传下去（规则写在 `generator.py::generator_dispatch` 的 docstring 里）。
-> 在旧插件上就照上面那段**内核写法**，或升级插件 —— 旧写法在新插件上依然可用，不会失效。
-> `K.dsh_generator_api` 要先由一次 `blender_rt_plan(op="generator_*")` 调用装进内核；headless 里用 `preload="generator"`。
-
-**脚本契约**：生成脚本里读 **`PARAMS`**（dict）；建议最后 `print("DSH_RECEIPT " + json.dumps({...}))`（`json` 要自己在脚本里 `import`；实测可用）；不打印也行 —— 运行器会自己扫场景出回执。
-**生成脚本必须"从零建件"**（程序即形状）：`clean_scene` 默认开，脚本里**不能**用 `bpy.data.objects['GEO-x']` 去捞现成对象 ——
-它是**全新无头进程**，只有 `PARAMS` + bpy/bmesh/mathutils，**没有 `K`、也没有 `audit_*` 模块**（实测：脚本里引用 `K` 直接 `NameError: name 'K' is not defined`，verdict=`refuted`）。
-需要 audit 的配方（如 9）走 `blender_rt_headless(script_file=..., preload="audit")`，生成器只用来管版本与 diff。
-
-**三态 verdict**：`supported`=预期满足 / `refuted`=预期不满足（差异列在 `why` 里）/ `unresolved`=**没给 `expect`，只证明能跑通、没证明跑对**。
-（附带一条实测坑：Blender 的 `--python` 脚本抛异常时**退出码仍是 0**，判定必须看"回执 + stderr 异常标记"，只看 `exit` 会漏判。）
-
-**5 条配方的参数块**（照抄进脚本开头；各配方末尾给出对应写法）：
-
-| 配方 | 参数块 |
-|---|---|
-| 2a 分型面 | `{"bevel_width": 0.002, "bevel_segments": 1, "angle_deg": 30}` |
-| 4 布尔 | `{"cutter_radius": 0.3, "cutter_depth": 3.0, "solver": "EXACT", "apply": False}` |
-| 5 镜像 | `{"axis": "X", "use_clip": True, "merge_threshold": 0.001}` |
-| 6b 销轴弦长节距阵列 | `{"pitch": 0.176, "m": 6, "n_straight": 6}`（节数由 `2*(m+n_straight)` 导出） |
-| 9 装配门 | `{"scope": "COL_Geo", "envelope": [...], "pairs": [["GEO-rungear", "GEO-hull"]]}` |
-
-**怎么验**：同一生成器填 3 组参数 ⇒ 3 次 `generator_run` 全 `verdict=supported` 且 `receipt.objects` 与参数一致（实测 `n=5/8/12` ⇒ `objects=5/8/12`、`tris=60/96/144`）；**原样再跑一次** ⇒ `cached=true, ms=0`。
-
-### Recipe 1 — 加基本体并立即命名
-
-```python
-import bpy
-bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0, 0, 1))
-obj = bpy.context.active_object
-obj.name = 'GEO-base_box'
-print(f"created:{obj.name} verts:{len(obj.data.vertices)}")
-```
-
-把 primitive_cube_add 换成 _plane_ / _uv_sphere_ / _ico_sphere_ / _cylinder_ / _cone_ / _torus_ / _monkey_，参数各按形状给（radius、depth、vertices、segments、subdivisions）。
-（这几种 primitive_*_add 在 headless 下是**安全**的：它们不依赖编辑模式 context。脆的是 `mesh.*` / `object.mode_set` 那一类。）
-
-### Recipe 2a — 分面硬表面（装甲板 / 军模 / 机械板件）★ 先看这条
-
-```python
-import bpy
-obj = bpy.data.objects['GEO-armor_plate']
-
-bevel = obj.modifiers.new('Bevel', type='BEVEL')
-bevel.width = 0.002          # 2mm：只是把"刀口"磨掉，棱边仍然清晰
-bevel.segments = 1           # 分面板件通常 1 段就够（要更圆用 2）
-bevel.limit_method = 'ANGLE'
-bevel.angle_limit = 0.523599  # 30°：只倒比这更尖的边
-
-# ✗ 不要加 SubSurf —— 分面装甲板加细分会把棱边圆成"肥皂"
-for p in obj.data.polygons:
-    p.use_smooth = False      # 平坦着色：板面之间要能看出转折
-print(f"faceted:{obj.name} polys:{len(obj.data.polygons)}")
-```
-
-判据：**边缘高光是一条细线**（倒角）**而不是一道渐变**（细分）；相邻板面之间的转折在渲染里应当**看得见**。
-参考图里能数出板缝的模型，一律走这条。
-
-> **参数块 + 生成脚本（§3.0）**：把三个数字拎出来，前半段补一个"从零建 cube"，就是可直接注册的生成脚本。
-> ```python
-> PARAMS = {"bevel_width": 0.002, "bevel_segments": 1, "angle_deg": 30}
-> # 脚本开头从零建件（生成器是全新无头进程，不许 bpy.data.objects['x'] 捞现成对象）：
-> #   bpy.ops.mesh.primitive_cube_add(size=1.0); obj = bpy.context.object; obj.name = "GEO-armor_plate"
-> #   bevel.width = PARAMS["bevel_width"]; bevel.segments = PARAMS["bevel_segments"]
-> #   bevel.angle_limit = math.radians(PARAMS["angle_deg"])
-> #   blender_rt_plan(op="generator_save", args={"name": "faceted_plate", "code": CODE, "params": PARAMS})
-> #   blender_rt_plan(op="generator_run",  args={"name": "faceted_plate", "expect": {"min_objects": 1}})
-> ```
-> 判据：只改 `PARAMS` 不改代码 ⇒ `receipt.PARAMS` 与 `tris` 跟着变、`verdict=supported`。
-
-### Recipe 2b — 光滑硬表面（汽车钣金 / 圆润道具）
-
-```python
-import bpy
-obj = bpy.data.objects['GEO-base_box']
-
-# 1. Bevel：先把硬边倒圆
-bevel = obj.modifiers.new('Bevel', type='BEVEL')
-bevel.width = 0.02            # 2cm 圆角
-bevel.segments = 3
-bevel.limit_method = 'ANGLE'  # 只倒比阈值更尖的边
-bevel.angle_limit = 0.523599  # 30 度（弧度）
-
-# 2. Subdivision 必须在 Bevel 之后
-subsurf = obj.modifiers.new('SubSurf', type='SUBSURF')
-subsurf.levels = 2
-subsurf.render_levels = 3
-
-# 3. 平滑着色
-bpy.context.view_layer.objects.active = obj
-bpy.ops.object.shade_smooth()
-print(f"hardsurface:{obj.name} polys:{len(obj.data.polygons)}")
-```
-
-**顺序反了就会出收窄伪影**（最常见的业余错误）。
-**载体判据**：只有"表面本来就连续"的件才配这一栈；分面件（配方 2a）上 SubSurf = 毁形。
-
-### Recipe 3 — 编辑模式：挤出 / 内插 / 环切（GUI 可用；headless 见 3b）
-
-```python
-import bpy
-obj = bpy.data.objects['GEO-base_box']
-bpy.context.view_layer.objects.active = obj
-bpy.ops.object.mode_set(mode='EDIT')
-
-bpy.ops.mesh.select_all(action='SELECT')
-bpy.ops.mesh.extrude_region_move(TRANSFORM_OT_translate={'value': (0, 0, 1.0)})
-bpy.ops.mesh.inset(thickness=0.1, depth=0)
-bpy.ops.mesh.loopcut_slide(
-    MESH_OT_loopcut={'number_cuts': 1, 'edge_index': 0},
-    TRANSFORM_OT_edge_slide={'value': 0.0},
-)
-bpy.ops.object.mode_set(mode='OBJECT')
-print(f"edited:{obj.name} verts:{len(obj.data.vertices)}")
-```
-
-### Recipe 3b — 同一件事的 bmesh 写法（★ headless / 批处理用这条）
-
-```python
-import bmesh, bpy
-obj = bpy.data.objects['GEO-base_box']
-bm = bmesh.new()
-bm.from_mesh(obj.data)
-
-# 1) 找到朝上的那个面（比"选中顶面"更稳：不依赖选择状态与 context）
-up = [f for f in bm.faces if f.normal.z > 0.9]
-face = up[0]
-
-# 2) 挤出 + 平移（等价 extrude_region_move）
-res = bmesh.ops.extrude_face_region(bm, geom=[face])
-new_verts = [g for g in res['geom'] if isinstance(g, bmesh.types.BMVert)]
-bmesh.ops.translate(bm, verts=new_verts, vec=(0.0, 0.0, 1.0))
-
-# 3) 内插（等价 mesh.inset）
-top = [f for f in bm.faces if f.normal.z > 0.9 and f.calc_center_median().z > 1.0]
-bmesh.ops.inset_individual(bm, faces=top, thickness=0.1, depth=0.0)
-
-bm.to_mesh(obj.data)
-bm.free()
-obj.data.update()
-print(f"bmesh-edited:{obj.name} verts:{len(obj.data.vertices)}")
-```
-
-**为什么值得改写法**：`bpy.ops.mesh.*` 依赖"当前编辑模式 + 活动对象 + 选择集 + 区域 context"，
-在 `blender -b` 下这些经常是空的，报错信息还很难懂（"context is incorrect"）。
-bmesh 直接操作数据层，**没有 context 依赖**，批处理里稳得多。必须用 ops 时用 `temp_override` 补 context。
-
-### Recipe 4 — 布尔开孔
-
-```python
-import bpy
-target = bpy.data.objects['GEO-base_box']
-cutter = bpy.data.objects.get('GEO-cutter')
-if cutter is None:
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.3, depth=3.0, location=(0, 0, 1))
-    cutter = bpy.context.active_object
-    cutter.name = 'GEO-cutter'
-
-mod = target.modifiers.new('Boolean', type='BOOLEAN')
-mod.operation = 'DIFFERENCE'
-mod.object = cutter
-mod.solver = 'EXACT'
-
-bpy.context.view_layer.objects.active = target
-bpy.ops.object.modifier_apply(modifier=mod.name)   # 想保持非破坏就先别 apply
-cutter.hide_viewport = True
-cutter.hide_render = True
-print(f"booleaned:{target.name}")
-```
-
-> 实测：军模里布尔**用得不多但很关键**（炮塔前下方 undercut、炮口开孔）。用法是"**外科手术**"，
-> 不是主力建模手段 —— 大面积造型靠板件拼装（§0.5），布尔只负责那几个真开孔的地方。
->
-> **参数块 + 生成脚本（§3.0）**：`PARAMS = {"cutter_radius": 0.3, "cutter_depth": 3.0, "solver": "EXACT", "apply": False}`。
-> 生成脚本自带 target 与 cutter 的**两段建件**（`primitive_cube_add` + `primitive_cylinder_add`），
-> `mod.solver = PARAMS["solver"]`，`apply=False` 时保持非破坏（导出前再 apply）。
-> 判据：三组 `cutter_radius` ⇒ `receipt.tris` 单调变化且 `verdict=supported`；`solver` 换 `FAST` 时若孔壁出问题，`audit_mesh` 的 `nonmanifold_edges` 会红。
-
-### Recipe 5 — 镜像（只做一半）
-
-```python
-import bpy
-obj = bpy.data.objects['GEO-character_half']
-mod = obj.modifiers.new('Mirror', type='MIRROR')
-mod.use_axis[0] = True     # 沿 X 镜像
-mod.use_clip = True        # 轴上顶点吸附
-mod.use_mirror_merge = True
-mod.merge_threshold = 0.001
-print(f"mirrored:{obj.name}")
-```
-
-**Mirror 放在栈的最前面**（在 Bevel / SubSurf 之前）。
-
-> **参数块 + 生成脚本（§3.0）**：`PARAMS = {"axis": "X", "use_clip": True, "merge_threshold": 0.001}`。
-> `use_axis[0/1/2] = (PARAMS["axis"] == "X"/"Y"/"Z")`；生成脚本前半段从零建"半个件"（`primitive_cube_add` + 删掉一半）。
-> 判据：`merge_threshold` 调大 ⇒ 中缝的点被焊上 —— **但 `audit_mesh` 读的是未求值的 `ob.data`**（实测：带未 apply 的 Mirror 的半个件报 `verts=4 / boundary_edges=4`，就是基础网格），
-> 所以**先把 Mirror apply 掉**再查 `boundary_edges`：>0 → 0 就是"焊上了"的机器判据。
-> （反过来说：装配级的 `audit_connectivity` / `audit_gate` / `audit_measure` / `audit_interference` 走**求值网格**，Boolean 没 apply 也算数 —— 两套口径别混。）
-
-### Recipe 6 — Array 沿曲线（链子、栅栏、珠子）
-
-```python
-import bpy
-bpy.ops.mesh.primitive_cube_add(size=0.2, location=(0, 0, 0))
-unit = bpy.context.active_object
-unit.name = 'GEO-bead'
-
-path = bpy.data.objects.get('GEO-path')
-if path is None:
-    bpy.ops.curve.primitive_bezier_curve_add()
-    path = bpy.context.active_object
-    path.name = 'GEO-path'
-
-arr = unit.modifiers.new('Array', type='ARRAY')
-arr.fit_type = 'FIT_CURVE'
-arr.curve = path
-arr.relative_offset_displace = (1.0, 0, 0)
-
-crv = unit.modifiers.new('Curve', type='CURVE')
-crv.object = path
-crv.deform_axis = 'POS_X'
-print(f"arrayed:{unit.name}")
-```
-
-> ⚠ **载体判据**：Array 适合"装饰性重复"（珠子、栅栏、铆钉）。**本配方（`FIT_CURVE` + 曲线变形）**给不了
-> "精确弦长节距 + 闭环"—— `FIT_CURVE` 只保证"沿曲线装满"，首尾接缝与每节间距都不受你控制。
-> 直线等距阵列不是它的短板（`FIXED_COUNT` + 精确 offset 就能定节距）；**曲线上的精确闭环节距**才是，走 6b。
-
-### Recipe 6b — 参数化**闭合**路径阵列（★ 履带 / 链节 / 齿圈）
-
-> ★ **先分清两种"节距"** —— 这是这条配方唯一容易搞错的地方：
->
-> | 口径 | 定义 | 直段上 | 圆弧上 |
-> |---|---|---|---|
-> | **等弧长节距**（arc-length） | 把路径**弧长**均分 N 份 | 弦长 = 弧长 = 步长 | **弦长 < 步长**（弦永远比弧短） |
-> | **销轴弦长节距**（机械真值） | 相邻销轴中心的**直线距离**恒为 `p`（节是刚体，销距是规格） | = `p` | 需 `p = 2R·sin(θ/2)`，即弧长 `R·θ > p` |
->
-> **链条/履带必须用弦长口径**：节是刚体，销孔位置由"销距"定死，不是由弧长定。
-> 用等弧长均分，弧段上销距会**系统性偏短**，到直/弧交界处累积误差直接装不上。
-> 实测（`p=176mm`、每半圆 6 节、R 由弦长反解）：
->
-> | | 数值 |
-> |---|---|
-> | 等弧长口径的弧上弦长 | **175.021mm**（规格应为 176）→ 每节 **−0.979mm** |
-> | 一条半圆累积 | **−5.874mm**；两条弧共 **−11.748mm** |
-> | 半圆需要多少步 | **6.0343 步**（非整数！销会落在直/弧交界**内部**） |
-> | 弦长口径实测 `max|弦长−p|` | **3.3e-06 mm**（浮点噪声级）+ 闭合 |
-
-```python
-import bpy, bmesh, math
-from mathutils import Vector
-
-# ── 参数块（销轴弦长口径：给 pitch 和**整数**节数，半径/直段自己长出来）
-PITCH  = 0.176     # m，销轴弦长节距（规格值）
-M      = 6         # 每个半圆上的节数（整数！）
-N_STR  = 6         # 每条直段上的节数（整数！）
-#   ⇒ 节数 N = 2*(M + N_STR)（本形必然为偶数）；半径与直段由 pitch 反解：
-#      R = pitch / (2*sin(pi/(2M)))      A = N_STR * pitch
-TEMPLATE = "GEO-track_link"                 # 单节模板对象名
-BODY_W, THICK = 0.12, 0.02                  # 链板宽 / 厚（只为"看得见"，与节距无关）
-
-def build_link_template(name, pitch, body_w, thick):
-    """从零造**可视单节**（矩形链板），省掉"得先有个模板对象"的前置。
-    ★ **模板契约**（下面的循环就是按这五条摆件的，换几何也必须守）：
-      ① **原点 = 本节起点销轴中心**（不是链板中点）：循环里 `ob.location` 直接落在路径点上；
-      ② **局部 +X = 指向下一销**：循环用 `to_track_quat('X','Z')` 把 +X 转到下一销方向；
-      ③ **下一销轴在局部 (+pitch, 0, 0)**：两销轴距**必须正好 = PITCH** ⇒ 模板长度是"由节距导出"的参数；
-      ④ **销轴方向 = 局部 +Z**（`to_track_quat('X','Z')` 的 up 轴）；链板厚度沿 Z 居中；
-      ⑤ 模板的 **x/y 会被忽略、只有 z 被沿用**（循环里 `ob.location = (x, y, tpl.location.z)`）
-         ⇒ 模板放 z=0 就等于"路径平面 z=0"。
-    要更"像链节"就只换本函数内部几何（圆头 / 倒角 / 销孔 / 带凸台的销，见下面那条提示），
-    **契约①–⑤不变** ⇒ 循环与全部验收判据都不用改。"""
-    me = bpy.data.meshes.new(name)
-    bm = bmesh.new()
-    bmesh.ops.create_cube(bm, size=1.0)                    # 单位立方 → 重映射到局部契约
-    for v in bm.verts:
-        v.co.x = (v.co.x + 0.5) * float(pitch)              # x ∈ [0, pitch]：0 = 本节销轴
-        v.co.y *= float(body_w)                             # y ∈ [−body_w/2, +body_w/2]
-        v.co.z *= float(thick)                              # z ∈ [−thick/2, +thick/2]
-    bm.to_mesh(me); bm.free(); me.update()
-    ob = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(ob)
-    return ob
-
-def stadium_pins(p, m, n):
-    """赛道形闭合路径：上直段(+X) → 右半圆 → 下直段(-X) → 左半圆。
-    全程按**弦长**步进 ⇒ 相邻销心距离恒为 p，且首尾闭合。"""
-    R = p / (2.0 * math.sin(math.pi / (2.0 * m)))
-    A = n * p
-    hx, th = A / 2.0, math.pi / m
-    pts = []
-    for i in range(n):                                        # 上直段
-        pts.append((-hx + i * p, R))
-    for i in range(m):                                        # 右半圆 90° → -90°
-        a = math.pi / 2 - i * th
-        pts.append((hx + R * math.cos(a), R * math.sin(a)))
-    for i in range(n):                                        # 下直段
-        pts.append((hx - i * p, -R))
-    for i in range(m):                                        # 左半圆 -90° → -270°
-        a = -math.pi / 2 - i * th
-        pts.append((-hx + R * math.cos(a), R * math.sin(a)))
-    return pts
-
-pts = stadium_pins(PITCH, M, N_STR)
-N = len(pts)                                                  # = 2*(M+N_STR)
-
-tpl = build_link_template(TEMPLATE, PITCH, BODY_W, THICK)     # ★ 从零建单节（不再要求场景里先有模板）
-tpl.location = (0.0, 0.0, 0.0)                                # z = 路径平面
-for i, (x, y) in enumerate(pts):
-    ob = tpl.copy()                                           # 或 linked duplicate 省内存
-    bpy.context.collection.objects.link(ob)
-    ob.location = (x, y, tpl.location.z)
-    d = Vector((pts[(i + 1) % N][0] - x, pts[(i + 1) % N][1] - y, 0.0))
-    ob.rotation_euler = d.to_track_quat('X', 'Z').to_euler()   # 局部 +X 指向下一销
-    ob.name = "%s_%03d" % (TEMPLATE, i)
-bpy.data.objects.remove(tpl, do_unlink=True)                  # ★ 模板不算件，否则对象数 = N+1
-
-# ── 脚本判据（不许靠看）
-made = [bpy.data.objects["%s_%03d" % (TEMPLATE, i)] for i in range(N)]
-ch = [(made[i].location - made[(i + 1) % N].location).length for i in range(N)]
-xs  = [o.location.x for o in made]; ys = [o.location.y for o in made]
-R = PITCH / (2.0 * math.sin(math.pi / (2.0 * M))); A = N_STR * PITCH
-print("N=%d  max|chord-p|=%.6fmm  closure=%.6fmm" %
-      (N, max(abs(c - PITCH) for c in ch) * 1000, ch[-1] * 1000))
-print("bbox_x=%.6f (应 = A+2R = %.6f)  周长=2A+2*pi*R=%.6f  N*p=%.6f" %
-      (max(xs) - min(xs), A + 2 * R, 2 * A + 2 * math.pi * R, N * PITCH))
-```
-
-**验收（脚本量，不许靠看）**（本机实测值见括号）：
-本节第 1–3 条 + 第 5 条由**脚本**判；第 4 条是**装配门**，口径见下面的实测（★ 它**不是**"只有 1 条连通分量"）。
-
-1. `max|相邻销心弦长 − PITCH| ≤ 0.001mm`（实测 **3.3e-06mm**）；
-2. **闭合**：末节→首节的弦长也 = PITCH（实测 **175.999998mm**）；
-3. **对象数 = N**，模板必须删掉（实测 `N=24`，场景里恰好 **24** 个 `GEO-track_link_*`）；
-4. **不散架**用 `audit_connectivity` 的 `floaters` / `gate.state` 判（★ 实测口径见下）；
-5. **几何尺寸对的是这三条**（★ 别拿 bbox 当周长）：
-
-   | 量 | 正确关系 | 实测（PITCH=0.176, M=N_STR=6） |
-   |---|---|---|
-   | bbox **最长边** | **`A + 2R`**（赛道形：直段 + 一个直径） | **1.736012 m** |
-   | 路径**周长**（弧长） | `2A + 2πR` | **4.248320 m** |
-   | `N × PITCH` | **≠ 周长**（弦长总长 < 弧长总长） | 4.224000 m（差 **24.32mm**） |
-
-   ⚠ 老版本写的是"`receipt.bbox` 的长度轴 ≈ `n*pitch`" —— **错 680mm**（它给的 1.056m 只是单条直段长，
-   既漏了两个半圆，又把 bbox 当成了周长）。周长与 bbox 是**两个不同的量**，别互相替代。
-
-**★ 链节装配口径（v5 实测，别按直觉读）**：24 节各是**独立对象**、只端面贴合、不合并顶点，所以
-
-| 跑什么 | 实测 | 正确读法 |
+| 不知道该用什么 | blender_rt_plan(op="catalog") | 33 family / 217 op；单族 family=... |
+| 基本体/分面硬表面 | bmesh / geo primitives + bevel | 分面件不要 SubSurf |
+| 光滑硬表面 | Bevel + Subdivision + shade smooth | Bevel 必须在 SubSurf 前 |
+| 布尔开孔/切割 | geo.boolean / K.dsh_geo_api | 先判连接/闭合；保留 cutter 副本 |
+| 重复阵列 | Array / 参数化 generator_* | 节距/弦长写进 spec |
+| 曲线/管路/线缆 | sweep_build / shape_* | 先算弯折半径 |
+| 有机/雕刻 | sculpt_*（numpy 位移笔刷） | 不用 bpy.ops.sculpt.brush_stroke |
+| 人形/头型/车壳 | human_* / vehicle_* / shape_* | 有参考图先 shape_plan 拿截面 |
+| 参考图量比例 | img_digest → probe/measure → calib | 无标定不写 mm |
+| 轮廓反推尺寸 | shapesolve_solve | 拟合后换通路复核 |
+| 白模/视频参考包 | blockout_base/batch/refsheet/turntable | 4 视图 + MP4 |
+| 多件装配 | asm_manifest → scan → repair → gate → export | 先冻结 manifest |
+| 穿模/悬空 | asm_scan / asm_repair / asm_gate | hidden_ok 不是穿模 |
+| 同机位像不像 | visualreport_report / qc_render_views | 同机位才可比 |
+| 网格毛病 | audit_mesh → fix_repair → audit_mesh | 没修动会回 ok=false |
+| 打印检查 | print_report | 低于分辨率会警告 |
+| 交付 | asm_export / deliver_export + gate_deliver | 门不过不交付 |
+| 参数搜索 | blender_rt_loop（target=session 可无头） | 收敛后换通路复核 |
+| 判断动画动没动 | rt_watch(session=...) | 逐帧 hash + 图 |
+| 项目级验收 | gate_run / eval_run | verdict 三态 |
+
+## 0.8 交付与验收（先读这一节，再写最后一步）
+
+交付前按顺序：
+1) audit_mesh（单件网格）→ 2) asm_scan（多件穿模/悬空）→ 3) asm_gate / gate_run（项目门，三态）→ 4) visualreport（同机位像不像）→ 5) asm_export（GLB/FBX/OBJ + manifest + merge_ledger）→ 6) 需要视频参考包再加 blockout_refsheet/turntable。
+- 门不过（verdict≠pass）不交付；degraded 要补证据，不许当通过。
+- 交付物必须有 manifest（units/bbox/objects/md5）+ 回执 + 限制说明；没有 md5 的“交付”不可复现。
+- 非合并的 asm_export 若 gate 非 pass：文件会写出但 verdict=fail + warnings，不可直接当出厂件；合并导出门不过不写盘。
+- 拓扑改动前先 txn.snapshot / gate_checkpoint；对象级 mark/revert 不含拓扑。
+
+## 1. 架构优先：这个插件就是建模流程本身（强制）
+
+> 这一节不是建议，是**返工判据**。AI 建模必须跟着插件架构走：先查能力目录，再用 plan 通道的 op 做，每一步拿回执，最后用同一条链验收。不要绕开插件自写一套几何/验收。
+
+### 1.1 唯一正确的调用顺序
+
+任何建模任务，从第一分钟到交付，默认按这个顺序：
+
+1. **看现状**：blender_rt_cmd get_scene_info / blender_rt_plan(op="audit_scene")；确认单位、对象、已有资产。
+2. **查目录**：blender_rt_plan(op="catalog")；不确定就单族展开 args={family:"..."}；算子细节 <family>_help。
+3. **定流程**：按 §2 状态机选阶段；把阶段、输入、验收门写进任务卡。
+4. **选通道**：GUI 在就 rt_do/rt_see；GUI 不在就 rt_worker start + preload，然后 rt_do/rt_see(session=...)；plan op 传 session="auto"。
+5. **执行一个可验证的小步**：优先 plan op；没有对应 op 才写 bpy/bmesh；每步尽量带回图片或数字。
+6. **读回执**：先读 verdict，再读 top_defects / failures / warnings / next；不要只读 ok。
+7. **过门**：audit_mesh → asm_scan → asm_gate/gate_run → visualreport；不过门不进入下一步。
+8. **交付**：asm_export/deliver_export + manifest/md5 + gate_deliver；产物与回执一起留档。
+
+**允许的例外只有一种**：catalog 里确实没有对应能力，且你已经用 catalog/help 证明过。此时才写 bpy/bmesh，并且仍必须回到插件验收门（audit/asm/gate/visualreport）证明结果。
+
+### 1.2 三条铁律
+
+**铁律 A：op-first。**
+- 有 plan op 就不许手写等价几何/检查。比如装配干涉先 asm_scan，不要自己写 BVH 采样；参考图量尺寸先 img_digest/probe/measure，不要自己读像素猜。
+- 有 blockout/shape/vehicle/human/sculpt 等生成器就不许从零 bpy 拼形状；生成器负责基线，细节再补。
+- 写 op 前先查 <family>_help 的参数表；参数名写错会回“不认识的参数”，照提示改，不要猜第二遍。
+
+**铁律 B：evidence-first。**
+- 每一步至少一种证据：图（rt_see/rt_watch/blockout views/refsheet）、数字（audit/asm/gate/visualreport/eval）、文件（manifest/md5/GLB/FBX/OBJ/MP4）。
+- “看起来对”不是证据；没有数字的“完成了”一律视为未完成。
+- 数字必须带来源：px_per_mm 来自哪次标定、bbox 来自哪个 op、md5 来自哪个文件。
+
+**铁律 C：verdict-first。**
+- audit/gate/asm/visualreport/eval 都是 pass | fail | degraded 三态；degraded 是“没查完/证据不足”，不是通过。
+- 只看 ok 会误判：ok=true 只表示程序跑完；结论在 verdict/state 里。
+- gate 里 skipped 也会把顶层压成 degraded；跳过不是通过，必须补参数或显式记录为未检查。
+
+### 1.3 回执怎么读（弱模型最容易错的地方）
+
+优先级固定：
+1. **verdict / state**：pass/fail/degraded；
+2. **top_defects / offenders / failures**：最该改的 1–5 项；
+3. **next / hint / fix_hint**：下一步命令或修法；
+4. **counts / coverage / warnings**：查没查全、有没有降级；
+5. **detail / 全量 JSON**：需要复算时再下钻，不要一上来读几万字。
+
+plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/next/images/provenance）。大结果会被截断，完整结果用 out_json 落盘或看 results/；不要因为文本截断就认为 op 没结果。
+
+### 1.4 交互式无头是默认工作方式之一
+
+- **GUI 可选，不是前置条件**。没有人看画面时，用持久 worker 做“改一步、同步看一步”。
+- 固定 session：worker start 一次，后面所有 rt_do/rt_see/rt_watch 都带同一个 session；不要每步换名字导致反复冷启动。
+- preload 一次把要用的模块注入 K：imgtools/assembly/blockout/visualreport/shapesolve/gate/txn/deliver 等。preload 后可直接 K.dsh_*_api。
+- 每步 see 50–100 ms 是正常；几秒说明走错通道或冷启动。
+- 长活（>1 min/长渲染/批量）走 rt_job/rt_headless as_job；交互回路只做小步验证。
+
+### 1.5 spec / manifest 是架构的合同
+
+- 建模前先有 spec（尺寸、单位、接口、验收门）；并行前先冻结，所有人只读。
+- 多件装配必须有 manifest（id/文件/md5/接口帧/allow 列表）；asm_scan/asm_gate/asm_export 都以它为准。
+- 装配前不知道接口关系就写 manifest；不要用“看起来接上了”代替接口表。
+- manifest 里的 hidden_ok/allow 是设计内隐藏交叠；不是穿模的免罪符，扩大 allow 必须有理由。
+
+### 1.6 什么时候可以写 bpy/bmesh
+
+- catalog 无对应 op（先用 catalog + help 证明）；
+- 需要 op 没暴露的局部编辑（例如某个面的微调），且对象/选择状态明确；
+- 生成器/plan op 已经给出基线，只做局部精修。
+
+写 bpy 的约束：
+- headless 里优先 bpy.data/bmesh，慎用依赖 screen/context 的 bpy.ops；
+- 每段代码要可重跑、少依赖选择状态；对象按名字取，不要靠“当前选中”；
+- 写完立刻回 audit_mesh 或对应门，不许跳过；
+- 拓扑改动前 snapshot/checkpoint；不要在没有回退点的情况下 Boolean/合并。
+
+## 2. 标准建模状态机（每一步都有输入/输出/门）
+
+### 2.1 阶段总览
+
+| 阶段 | 目标 | 主要工具 | 出门条件 |
+|---|---|---|---|
+| S0 规格/草稿 | 定范围、单位、接口、验收门 | 任务卡 + spec.py / manifest.json | 字段完整、无 mm 级臆造 |
+| S1 参考量测 | 把图变成 px_per_mm + 尺寸 | img_digest → probe/measure/calib | 标定可复算；无标定只做比例 |
+| S2 白模/基线 | 快速出形体比例 | blockout_base/batch、shape_*、vehicle_*、human_* | 3 视图可看、bbox 合理 |
+| S3 形体精修 | 放样/截面/特征线/雕刻 | shape_loft/sections/crease、sculpt_* | 尺寸/比例达标；关键特征可指认 |
+| S4 硬表面细节 | 倒角/布尔/阵列/扫掠 | geo、fix、uv、sweep、material | 无退化面；法线正确；材质槽稳定 |
+| S5 单件体检 | 网格/法线/UV/打印 | audit_mesh、uv_stats、print_report | state=pass（degraded 要补查） |
+| S6 装配 | 清单/扫描/修复/门 | asm_manifest → asm_scan → asm_repair → asm_gate | gate verdict=pass；clash/contained/float 已解释 |
+| S7 视觉验收 | 同机位像不像 | visualreport_report / qc_render_views | verdict=pass 或明确 unresolved |
+| S8 交付 | 导出/参考包/账本 | asm_export / deliver_export / blockout_refsheet/turntable | manifest+md5+gate 回执齐全 |
+
+不要跳阶段。S2 没白模就做 S4 细节，返工率最高；S5 没体检就进 S6，装配门会把问题放大。
+
+### 2.2 任务卡（开工先填，不超过 10 行）
+
+    目标：一句话（做什么、给谁用）
+    单位/坐标：mm 或 m；前向轴 -Y；上轴 +Z
+    交付：GLB / FBX / OBJ / blend / MP4 / 图
+    参考：图路径 + 是否已标定 px_per_mm
+    主要件：对象/集合清单
+    接口：谁和谁相接、公称间隙、允许交叠
+    验收门：audit_mesh / asm_gate / gate_run / visualreport / eval
+    禁用：不要做的事（如不要布尔、不要改材质）
+    预算：时间/面数/分辨率
+
+没有任务卡就开始建模，等于没有合同；后面所有“像不像/合不合格”都无法判定。
+
+### 2.3 每阶段的证据产物
+
+- S1：img_digest 回执 + 标定表（px_per_mm、两点/已知边长、误差）；
+- S2：白模 3 视图 + bbox + GLB；
+- S3：截面/站表/特征线参数 + 尺寸表；
+- S4：修改器栈说明 + 布尔/阵列参数 + audit_mesh；
+- S5：audit_mesh 回执（state/各计数/法线逐壳）；
+- S6：manifest + asm_scan + asm_repair 计划 + asm_gate；
+- S7：visualreport_report 回执 + overlay/sheet；
+- S8：manifest.json + merge_ledger.jsonl + 逐文件 md5 + gate 回执。
+
+证据不齐的“完成”只是半成品；不要交给下游。
+
+## 3. 工具选择矩阵（先查这张表，再写代码）
+
+| 任务 | 第一选择（插件架构） | 第二选择（仅当无 op） | 验收 |
+|---|---|---|---|
+| 基本体/白模 | blockout_base/batch | bmesh.ops.create_* | bbox + 3 视图 + audit_mesh |
+| 参数化截面/放样 | shape_plan/shape_sections/shape_loft | bmesh 放样 | shape_fit IoU + 尺寸 |
+| 车辆外壳 | vehicle_package → vehicle_base → clear_check | shape_* | clear_check + visualreport |
+| 人形/头型 | human_* / face_* | sculpt + 参考图 | 比例/特征线/visualreport |
+| 有机/雕刻 | sculpt_scan/setup/apply | bmesh 位移 | audit_mesh + 图 |
+| 硬表面分面 | 基本体 + bevel/crease_lines | bmesh inset/extrude | 面感图 + audit_mesh |
+| 光滑硬表面 | Bevel + Subdivision（修改器） | bmesh 细分 | 面感图 + 法线 |
+| 布尔开孔/切割 | geo.boolean / K.dsh_geo_api | bpy.ops boolean | audit_mesh + 干涉 |
+| 阵列/重复件 | generator_* / Array | bmesh 复制 | 计数/节距/bbox |
+| 管路/线缆/轨道 | sweep_analyze → sweep_build | 曲线+bevel | 弯折半径 + audit_mesh |
+| 参考图量尺寸 | img_digest → probe/measure/calib | numpy 读像素 | 标定误差 + 复算 |
+| 轮廓反推 | shapesolve_solve | 手工量点 | 换通路复核 |
+| 网格修复 | audit_mesh → fix_repair | bmesh 清理 | 修复前后计数 |
+| UV/材质 | uv_* / material_* | bpy.ops uv | uv_stats + 材质检查 |
+| 装配 | asm_manifest → scan → repair → gate | 手工对齐 | asm_gate verdict |
+| 视觉 QC | visualreport_report / qc_compare | 人眼看图 | 同机位 IoU + 缺陷 |
+| 交付 | asm_export / deliver_export + gate_deliver | 手工导出 | manifest + md5 |
+| 参数搜索 | rt_loop（target=session 可无头） | 手写网格搜索 | 换通路复核 |
+| 动画/修改器验证 | rt_watch(session) | 逐帧 see | hash 变化 + 图 |
+| 缺陷评估 | eval_run | 自写用例 | capture_rate/baseline |
+
+**判据**：能用第一选择就不用第二选择；第二选择必须在回执里写明“为什么不用插件 op”。
+
+## 9. 当前 plan 通道速查（v2.6 · 33 family / 217 op）
+
+先 blender_rt_plan(op="catalog") 看“什么时候用 / 别用 / 最小骨架”，再单族展开。常用家族：
+
+| family | 用途 | 代表 op |
 |---|---|---|
-| `audit_mesh(objects=24 个节, self_intersect=true)` | `state=pass`、`clean=true`，每节 `closed=true`、`normals_state=pass` | 单件自证过（门①–④） |
-| `audit_connectivity` | `floaters=[]`、各分量 `attached=true` + `mesh_confirmed=true`、`gate.state=pass`；**分量数 = 14**（两条直段各 1 块 + 12 个弧上单节） | **"不散架"要看 `floaters`/`gate.state`，不要看"分量数=1"**（贴而未焊 ⇒ 天然是多分量）；⚠ 顶层**没有** `state`，门口径在 `gate.state` |
-| `audit_overlap(a=链节0, b=链节1)` | `pair_count = 1`（`真交线段` 120mm，即两节端面**共用的那条边**） | 贴合接触**会被记成 1 对** —— `pair_count=0` 不是"没贴合"、`pair_count=1` 也不是"穿模"；判贴合/穿透要用 `contact_probe` 与三角级体积 |
-| `audit_interference(a=链节0, b=链节1)` | `verdict="unresolved"`、`volume_mm3=0.0`（20 万采样点里 0 点落在双方内部；统计上界 6.33mm³ > 可执行下限 1.0mm³ ⇒ 判不了） | **不是 supported（没抓到互穿）、也不是 refuted（没证到无互穿）**；链节的"设计接触"要在门里**白名单化**（§坑二 ③），别拿它当缺陷 |
-
-> ★ **模板契约（照抄这五条才不会"跑不起来 / 装错方向"）**：明细写在 `build_link_template()` 的 docstring 里，
-> 最容易搞错的是 **①原点在起点销轴（不是链板中点）、③下一销轴在局部 `(+pitch, 0, 0)`** ——
-> 原点若放到链板中点，`ob.location` 就不再落在路径点上，`max|弦长−PITCH|` 立刻变红，闭合处还会错半个节距。
-> 想更像真链节：把 `build_link_template()` 内部换成"圆头链板 + 两个销孔 + 一端销凸台"即可，
-> **只要守住①–⑤**，循环与所有判据都不用动。
-
-
-> ⚠ **本配方只解"节距 + 闭合"**：同一模板复制 N 次，相邻节在接缝处是**端面贴合**（零体积接触）——
-> **实测**：`audit_interference` 给 `verdict="unresolved"`/`volume_mm3=0.0`（抓不到互穿、也证不到无互穿），
-> `audit_overlap` 会给 `pair_count=1`（两节端面**共用的那条边**，120mm 真交线段）。⇒ 这类"设计接触"
-> 要在门里**白名单化**（§坑二 ③），**不要**拿 `pair_count` 当"有没有穿模"的开关。
-> 真链节的"内/外板交替 + 销的归属 + 销孔让位"**不在本配方范围内**；要过干涉门就按坑二用**两套模板交替**
-> （内板/外板各一套，`pts` 隔点取用），或把销单列成件按接口表给 `overlap_mm`。
-
-> **参数块 + 生成脚本（§3.0，这条是样板）**：把 `PITCH / M / N_STR` 拎成 `PARAMS`，
-> 脚本前半段就是上面的 `build_link_template()`（从零建单节），后半段是循环：
-> ```python
-> # 注册：blender_rt_plan(op="generator_save", args={"name": "track_array", "code": CODE,
-> #         "params": {"pitch": 0.176, "m": 6, "n_straight": 6}})
-> # 改参复现（首选工具直调：args 这一层就是 PARAMS；旧插件回退内核写法，见 §3.0）：
-> blender_rt_plan(op="generator_run", args={"name": "track_array",
->     "args": {"pitch": 0.176, "m": 6, "n_straight": 6}, "expect": {"min_objects": 24}})
-> ```
-> 判据：`receipt.objects == 2*(PARAMS["m"] + PARAMS["n_straight"])`（模板不算件），
-> 且每组参数的 `max|弦长-pitch| ≤ 0.001mm`、`bbox 最长边 ≈ A + 2R`、`周长 ≈ 2A + 2πR`。
-> ⚠ 旧文本里的 `{"n": 83, "pitch": 0.176}` **不是这个闭合形能产生的组合**（本形节数必为偶数），
-> 那组数是从项目里抄来的占位；要 83 节就换非对称路径，或改 `M/N_STR` 并重新核对弦长与闭合。
-
-### Recipe 7 — Blockout 布景
-
-```python
-import bpy
-bpy.ops.mesh.primitive_plane_add(size=10)
-bpy.context.active_object.name = 'GEO-floor'
-bpy.ops.mesh.primitive_cube_add(size=1.5, location=(0, 0, 0.75))
-bpy.context.active_object.name = 'GEO-subject'
-bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=2, location=(2, 1.5, 1))
-bpy.context.active_object.name = 'GEO-prop_pillar'
-print('blockout:done')
-```
-
-### Recipe 8 — 曲线转网格 / 布尔之后的清理（装配层也跑这一条）
-
-```python
-import bpy
-obj = bpy.data.objects['GEO-target']
-bpy.context.view_layer.objects.active = obj
-bpy.ops.object.mode_set(mode='EDIT')
-bpy.ops.mesh.select_all(action='SELECT')
-bpy.ops.mesh.remove_doubles(threshold=0.0001)
-bpy.ops.mesh.normals_make_consistent(inside=False)   # ★ 法线一致化：穿模判据的前提（见坑五）
-bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.shade_smooth()
-print(f"cleanup:{obj.name} verts:{len(obj.data.vertices)}")
-```
-
-> headless 里 `mode_set` / `mesh.*` 可能因 context 失败 —— 等价 bmesh 写法：
-> `bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)` + `bmesh.ops.recalc_face_normals(bm, faces=bm.faces)`。
-
-### Recipe 9 — 装配审计门（把 §6 的数值门一把跑完）
-
-```python
-# 方式 A（推荐，模型侧）：工具层直接调，回执是结构化 JSON
-#   blender_rt_plan(op="audit_gate",      args={"scope": "COL_Geo"})          # 出厂门：连通 + 包络
-#   blender_rt_plan(op="audit_interference", args={"a": "GEO-rungear", "b": "GEO-hull"})
-#   blender_rt_plan(op="audit_measure",   args={"neighbors": True})           # bbox + 逐轴间隙/重叠
-
-# 方式 B（headless 批处理里）：preload="audit" 之后直接调 python API
-#   K.dsh_audit_api("mesh", {"objects": ["GEO-hull"]})
-#   K.dsh_audit_api("connectivity", {"scope": "COL_Geo"})
-#   K.dsh_audit_api("gate", {"scope": "COL_Geo", "envelope": ENVELOPE})
-```
-
-判据全在 §6。**装配完成后、导出之前，必跑一次**；每个 builder 交件前也要跑单件那几条。
-
-> **参数块 + 生成脚本（§3.0；9 的特殊之处：注册走生成器、执行走 headless）**：门清单与阈值就是参数块：
-> ```python
-> AUDIT = {"scope": "COL_Geo",
->          "envelope": [x0, y0, z0, x1, y1, z1],
->          "pairs": [["GEO-rungear", "GEO-hull"], ["GEO-turret_ring", "GEO-hull_deck_ring"]]}
-> # 注册 + 查改没改过（回执过期制）：
-> #   blender_rt_plan(op="generator_save", args={"name": "audit_gate_run", "code": CODE, "params": AUDIT})
-> #   blender_rt_plan(op="generator_diff", args={"name": "audit_gate_run"})     # changed=true ⇒ 上次回执作废
-> # 执行（★ 不走 generator_run）：脚本里要调 audit 模块，只有 headless 的 preload 通道给得到
-> #   blender_rt_headless(script_file="<generator_get 回执里的 path>", preload="audit", engine="none")
-> ```
-> ⚠ 原因（实测）：`generator_run` 的子进程里只有 `PARAMS` + bpy，**没有 `K`、也没有 `audit_*`** —— 脚本里引用 `K` 直接 `NameError`，verdict=`refuted`。
-> 所以这条配方是「生成器管版本与 diff，headless + `preload="audit"` 管执行」。
-> 判据：脚本改一行 ⇒ `generator_diff` 回 `changed=true`；拿三缺陷件按这份清单跑 ⇒ 三门红（§0.5.5）。
-
-### Recipe 10 — 形体验收：固定机位对照图 + 数值 bbox
-
-```python
-# ① 数值：与 spec.py 对拍（这是"像不像"的硬证据）
-#   blender_rt_plan(op="audit_measure", args={"objects": ["GEO-turret"], "neighbors": False})
-#   → 回 sizeof/bbox；逐个与 spec.py 的期望值比，偏差写进报告（军模级 ±3mm）
-
-# ② 画面：用**与参考图相同的机位**出图（多视角 harness 自带取景与三点光）
-#   blender_rt_plan(op="qc_render_views", args={
-#       "views": [{"name": "front", "from": [0, -12, 1.6], "look_at": [0, 0, 1.6], "lens": 50}],
-#       "res": [1280, 720], "samples": 64, "outdir": "D:/DSH/blender/out/qc"})
-#   → 逐张 md5 + coverage_estimate；主体占画面 <5% 会给 subject_too_small 警告
-```
-
-**只用其中一条都不够**：数值抓得出"前裙甲上翘 6°"，但看不出"焊缝难看"；画面看得出"像不像"，但看不出 3mm 的偏差。
-
-### Recipe 11 — 程序化雕刻（体素底模 → 位移笔刷 → 遮罩 → 滤镜）
-
-> **能雕什么**：`draw / inflate / pinch / flatten / smooth / crease` 六支位移笔刷（numpy 实现，**无头也能跑**），
-> 加拓扑准备（体素重构 / multires / subdiv / dyntopo）、遮罩（sphere/box 直接写 `.sculpt_mask`）、
-> GUI 滤镜（`sculpt.mesh_filter`）。**不能**注入手势笔触（见决策树里的 API 限制）。
-> 实测成本：体素重构 1986→12148 顶点 84ms；单笔 1986 顶点、257 顶点受影响 6ms。
-
-```python
-# ① 体检 + 定底模（体素尺寸给 "auto" 会按 40M cell 预算反解）
-#   blender_rt_plan(op="sculpt_scan",   args={"objects": ["GEO-head"]})
-#   blender_rt_plan(op="sculpt_setup",  args={"object": "GEO-head", "mode": "VOXEL",
-#                                             "voxel_size": "auto", "symmetry": ["x"]})
-#   → 回执 verts_before/verts_after；voxel_size 太小会直接报错并给可用值（不会卡死 Blender）
-#
-# ② 雕（每条笔触独立；symmetry 会各自镜像成独立笔触，不会串成一条假路径）
-#   blender_rt_plan(op="sculpt_apply", args={"object": "GEO-head", "strokes": [
-#       {"brush": "draw",   "points": [[0,0,1.0],[0.12,0,1.06]], "radius": 0.45, "strength": 0.7},
-#       {"brush": "crease", "points": [[0.7,0,0.7]], "radius": 0.15, "strength": 0.9, "symmetry": ["x"]},
-#       {"brush": "smooth", "points": [[0,0,1.1]], "radius": 0.30, "strength": 0.5}]})
-#   → 每条回 affected_verts / max_delta / ms；max_delta=0 说明笔刷没落到网格上（先检查 points 与 radius）
-#
-# ③ 限定作用域（先遮罩再雕 = 与 destructive_guard 同一套纪律）
-#   blender_rt_plan(op="sculpt_mask", args={"objects": ["GEO-head"], "mode": "sphere",
-#                                           "center": [0,0,1], "radius": 0.6})
-#   → 之后 sculpt_apply 默认 use_mask=true：被遮的地方不动
-#
-# ④ 整块平滑（GUI 滤镜；无头会明确报"没有 VIEW_3D"）
-#   blender_rt_plan(op="sculpt_filter", args={"objects": ["GEO-head"], "type": "SMOOTH",
-#                                             "strength": 0.35, "iterations": 2})
-```
-
-**验收**（照 §0.6.2 双证据）：`audit_mesh` 前后对比（顶点/nonmanifold/degenerate）+
-`qc_render_views` 出同机位图给眼睛看。**改前先 `blender_rt_txn(op="snapshot")`** ——
-对象级 mark/revert 不含拓扑改动，雕完就回不去了。
-
-### Recipe 12 — 网格修复 + UV（audit 只诊断，fix 负责治）
-
-```python
-# ① 先诊断（只读）→ 拿到 boundary/nonmanifold/degenerate/loose/self_intersections
-#   blender_rt_plan(op="audit_mesh", args={"objects": ["GEO-part"]})
-# ② 治：默认只做安全三件（合并重复点 / 消零面积面 / 删孤立点）+ 重算法线
-#   blender_rt_plan(op="fix_repair", args={"objects": ["GEO-part"],
-#       "actions": ["merge_doubles","dissolve_degenerate","delete_loose","recalc_normals"]})
-#   → 回执带 before/after 缺陷计数；**没修动就是 ok=false**（不许把"跑过"当"修好"）
-#   → 开放薄壳（设计上就该开口）会报 open_shell=true，但不算残留缺陷；fill_holes 会封死它，慎用
-#   ⚠ 这里的 delete_loose 只清**孤立的点/边**（它一个面都不删）——**内部面/埋面不归它管**，见 §5.1
-# ③ 复检 + 减面（可选）
-#   blender_rt_plan(op="fix_decimate", args={"objects": ["GEO-part"], "target_tris": 2000})
-# ④ UV（交付带贴图的 OBJ 必须有）
-#   blender_rt_plan(op="uv_smart_project", args={"objects": ["GEO-part"], "angle_limit": 66})
-#   blender_rt_plan(op="uv_unwrap",       args={"objects": ["GEO-part"], "method": "SLIM"})   # 有机件更省拉伸
-#   blender_rt_plan(op="uv_pack",         args={"objects": ["GEO-part"], "margin": 0.002})
-#   blender_rt_plan(op="uv_stats",        args={"objects": ["GEO-part"]})   # 判据：有 UV 层 且 零面积 UV 面 = 0
-```
-
-⚠ UV 算子会进 EDIT 模式并全选面（模块在 finally 里恢复原对象/模式/选择）；枚举值（unwrap method、
-pack shape_method）不在代码里写死，而是从算子 RNA 读，传错会回"允许列表"。
-
-### Recipe 13 — 制造检查：薄壁与悬垂（只读，交付门用）
-
-```python
-#   blender_rt_plan(op="print_report", args={"objects": ["GEO-part"], "min_mm": 1.2, "max_angle_deg": 45})
-#   → 壁厚：从每个采样面中心沿 -法线打射线，命中距离 = 局部厚度；回 min/p05/median/max
-#   → 悬垂：面法线与"正下方"夹角 ≤ max_angle_deg 的面积占比（45° ≈ FDM 常见上限）
-#   ⚠ 回执里的 resolution_mm 是本网格的测量分辨率（本地面尺寸）：min_mm 低于它时会明确警告
-#     "结论不可信" —— 体素重构出的 60mm 面测不了 5mm 壁厚，先细化或降 voxel_size
-#   正例（实测）：200×200×5mm 薄板（面 4mm）@min_mm=10 → min_mm=5、thin_samples=5000、无警告
-```
-
-### Recipe 14 — 沿路径扫掠：管路 / 线缆 / 轨道
-
-```python
-# ① 先算：路径弯折半径 vs 型材半宽（太紧扫出来必然自交）
-#   blender_rt_plan(op="sweep_analyze", args={"path": [[0,0,0],[0.6,0,0],[0.6,0,0.6]],
-#                                             "profile": {"type":"circle","radius":0.05}})
-#   → 回 min_radius / required_min_radius / min_radius_at（第几个点）
-# ② 再建：平行移动标架（rotation-minimizing frame），拐弯处不扭转
-#   blender_rt_plan(op="sweep_build", args={"name": "GEO-hose",
-#       "path": [[0,0,0],[0.6,0,0],[0.6,0,0.6],[1.2,0,0.6]],
-#       "profile": {"type":"circle","radius":0.05,"segments":12}, "cap": True})
-#   → 弯折过紧默认**拒绝**（先算后建，与 destructive_guard 同一套纪律）；force=true 才硬做
-#   profile 支持 circle / rect{width,height} / points[[u,v]…]（自定义型材）
-```
-
-### Recipe 15 — 人形素体（零素材）：比例由数字定，几何由 Skin+Subsurf 出
-
-```python
-# ① 有参考图就先量比例（像素比，零下载）
-#   blender_rt_plan(op="human_spec", args={"image": "D:/ref/front.png"})
-#   → bbox / height_px / head_w_px / shoulder_px + profile（每行前景宽度）
-# ② 建素体：只填数字（身高 mm / 头身比 / 肩宽 / 姿势）
-#   blender_rt_plan(op="human_base", args={"height_mm":1750,"heads":7.5,"pose":"A","name":"GEO-human"})
-#   → 回 heads_measured（几何量出来的）/ head_mm / shoulder_over_head / marker_count（19 个关节空物体）
-# ③ 验收：与 spec 比（这些字段门里能直接判）
-#   blender_rt_plan(op="human_measure", args={"name":"GEO-human"})   → heads / shoulder_over_head
-# ④ 挂载与摆姿：<name>_joints 集合里是 pelvis/chest/shoulder_l…foot_r
-#    → 供 motion_joints 与硬表面挂点；装甲件直接插到这些点上
-```
-
-**硬规则**：① 素体=假人级（比例对、形体简），别指望写实解剖；② 关节标记是**唯一**可靠的挂载基准，别靠肉眼对齐；
-③ 门里判比例用 `heads` / `shoulder_over_head`（实测 7.546 / 1.51 对 7.5 / 1.5）。
-
-### Recipe 16 — 人脸 / 头型（零素材）：参数化头 + 五官定位 + 「遮住」策略
-
-```python
-# ① 9 点 landmark（像素坐标，自己标或外部检测器给）→ 头型 + 五官定位标记
-#   blender_rt_plan(op="human_head", args={"head_mm":233, "name":"GEO-head",
-#       "landmarks":{"top":[0,0],"chin":[0,400],"face_l":[-150,200],"face_r":[150,200],
-#                    "eye_l":[-70,200],"eye_r":[70,200],"nose_base":[0,290]}})
-#   → landmark_fracs（眼线 0.50 / 鼻底 0.725 / 嘴线 0.825）+ 6 个标记 crown/chin/eye_l/eye_r/nose_base/mouth
-# ② 比例判定（与经典比例比）
-#   blender_rt_plan(op="face_ratios", args={"landmarks":{...}})   → failed / worst_rel_err
-# ③ 轮廓相似度（与参考图）
-#   blender_rt_plan(op="img_diff", args={"a":"D:/out/front.png","b":"D:/ref/front.png"}) → iou
-```
-
-**硬规则**：① **本技能这 23 条配方 + 零素材**（没有参考图 / 没有雕刻素材 / 不做相机标定）**做不出写实人脸** ——
-这条路线的边界在"比例 + 粗形"，毛孔 / 皱纹 / 眼睑这类细节没有证据来源，只能靠猜；所以高细节部位用
-**面罩 / 头盔 / 护目镜**遮住，把硬表面顶上去（MK1 那类装甲的正确解）。
-有参考照片时先按 Recipe 20 校正再量（但注意单应只校正取点那个平面），或换用外部素材/真正的雕刻素材库 —— 那是本技能之外的输入；
-② 眼睛鼻子嘴的零件挂到 `*_M_*` 标记上，别靠估位置；③ 比例容差按项目钉进 spec（风格化角色要重钉，经典比例只是参考）。
-
-### Recipe 17 — 车辆外壳：参考图 → 剖面数字 → 放样 → 正交视图 IoU 迭代
-
-```python
-# ① 比例先过门（不过就别建壳 —— 人眼对车比例极敏感）
-#   blender_rt_plan(op="vehicle_package", args={"spec":{"type":"sports","length_mm":4300,"width_mm":1850,
-#       "height_mm":1250,"wheelbase_mm":2600,"front_axle_from_front_mm":900,"wheel_r_mm":340,
-#       "wheel_w_mm":245,"track_mm":1580}})
-#   → rows[]：WBR / 轴距比 / 高长比 / 轮距比 / 前后悬 / 离地间隙，逐项 pass|fail
-# ② 建壳（参数同 cargen 的纵向剖面；轮眉布尔扣出 ⇒ 轮与壳零互穿是构造保证）
-#   blender_rt_plan(op="vehicle_base", args={"spec":{...上面那组...}, "name":"GEO-car"})
-#   → wheels[]（x/z/r）+ 标记 front_axle / rear_axle / nose / tail + stations（轮缘处已加密）
-# ③ 验收两条腿（都要跑）
-#   blender_rt_plan(op="clear_check", args={"pairs":[{"id":"wheel_fl","a":["GEO-car_wheel_fl"],
-#       "b":["GEO-car"],"min_mm":8}]})                    → gap_mm / interpenetrating
-#   blender_rt_plan(op="qc_render_views", args={..., "views":["right"], "ortho":true,
-#       "ref_path":"D:/ref/side.png"})                    → IoU（这就是「像不像」的数值）
-# ④ 不像就改剖面参数（hood_len / windshield_angle / roof_len / rear_window_angle…），改完回 ③
-```
-
-**硬规则**：① **先过比例门再建壳**；② 轮眉用**布尔扣**（解析轮眉在轮缘是断崖，粗站位下弦会切进轮子——实测 58 → 20 对面相交）；
-③ 站位必须在**轮缘加密**；④ 「像不像」的**数值只算一条腿**：侧视正交渲染 vs 参考图的 IoU 能判**外轮廓**，
-但**判不了深度/内部特征/面感**（见 §0.6.2 的 IoU 盲区表）—— 必须**多个视图各自算**，再叠 `clear_check` 间隙 +
-`audit_measure` 尺寸 + 特征线对照，别用单视 IoU 代表整体；⑤ 细节件（灯/格栅/后视镜/玻璃）用硬表面单独做再挂。
-
-### Recipe 18 — 跑车/复杂外壳：三视图 → 站表 → 参数化放样 → 缝 → IoU 迭代
-
-> 适用面很广：**凡是有明确外轮廓、能用正交视图描述的物体**都走这条（船体/飞机/头盔/鞋/家电/枪械/机器人外壳）。
-> 不适用的只有两类：没有明确外轮廓的（布料/毛发/流体）、靠内部结构定义的（多孔晶格/拓扑优化件）。
-
-```python
-# ① 包络：先过比例门（不过门别往下做）
-#   blender_rt_plan(op="vehicle_package", args={"spec":{"type":"sports","length_mm":4300,"height_mm":1250,
-#       "wheelbase_mm":2600,"wheel_r_mm":340,"track_mm":1580,"width_mm":1850}})
-# ② 站表：侧视图必需；俯视图给平面收放、前视图给截面性格（腰线/侧倾/下裙）
-#   blender_rt_plan(op="vehicle_sections", args={"side":"D:/ref/side.png","top":"D:/ref/top.png",
-#       "front":"D:/ref/front.png","mm_per_px":3.2,"stations":41,"wheel_r_px":106})
-#   → stations[{x_mm, z_top_mm, z_bottom_mm, half_w_mm}] + package + section_params + wheels
-#   （轮径无法从填充轮廓反推 ⇒ 给 wheel_r_px 或已知规格；轮轴 x 由轮廓底部低洼段自动定位）
-# ③ 放样：站表定轮廓，截面参数定性格
-#   blender_rt_plan(op="vehicle_loft", args={"stations": <上一步的 stations>, "name":"GEO-shell",
-#       "n_top":5, "n_bot":3, "tumblehome_mm":120, "beltline_frac":0.55,
-#       "shoulder_inset_mm":25, "sill_tuck_mm":60, "flare_mm":30, "subsurf":1, "crease_shoulder":0.7})
-#   → 回 size_mm / crease_edges / flare.at_x_mm（轮拱外扩落在底边被抬起的站位）
-# ④ 缝：按特征线切分件（缝是真几何，可用 clearance 逐对量）
-#   blender_rt_plan(op="vehicle_panels", args={"object_name":"GEO-shell","cuts_mm":[1500,3000],"gap_mm":4})
-#   blender_rt_plan(op="clear_check", args={"pairs":[{"id":"hood_door","a":["GEO-shell"],
-#       "b":["GEO-shell.001"],"min_mm":0}]})                       → gap_mm ≈ 4 / interpenetrating=false
-# ⑤ 验收：正交渲染 vs 原图算 IoU（**侧/前/顶各自分开算**，且 IoU 只判轮廓，不判整体像不像）
-#   blender_rt_plan(op="qc_render_views", args={..., "views":["right"], "ortho":true, "ref_path":"D:/ref/side.png"})
-#   blender_rt_plan(op="img_diff", args={"a":"render_side.png","b":"D:/ref/side.png"})   → iou
-#   ⚠ 单视 IoU 是必要不充分条件：深度、内部特征（板缝/格栅/灯）、曲面张力它全都看不见，
-#     且"把轮廓填满"就能刷高它。配套必须再加 clear_check 间隙 + audit_measure 尺寸 + 特征线对照（§0.6.2）
-```
-
-**硬规则**：① 照片参考**先校正**，但注意**单应只校正取点那个平面** —— 对立体物来说，离该平面越远的特征误差越大
-（实测：平面上 0 px，离平面 0.2 m → 211 mm，0.5 m → **543 mm**）；车轮/翼子板这类凸出件若不在取点平面上，
-它的量测值不可信，要单独处理或做真正的相机标定（§0.6.1 ⑥）；② 没有俯视图时 `half_w_mm` 缺失，
-车身会偏窄（实测 611mm vs 应 1850mm）——**平面收放必须来自俯视图**；③ 轮径不可从轮廓反推；
-④ 折痕用 Blender 4+ 的 `crease_edge` attribute（`e.crease_weight` 已不存在）；⑤ 最后 20% 面感靠折痕位置与曲面张力微调。
-
-### Recipe 19 — 外壳还原三件套：前视截面 / 多区域 / IoU 拟合闭环
-
-```python
-# ① 三视图一次量完（前视图现在会给**截面轮廓** section_shape，不只是三个数）
-#   blender_rt_plan(op="vehicle_sections", args={"side":"D:/ref/side.png","front":"D:/ref/front.png",
-#       "top":"D:/ref/top.png","mm_per_px":3.2,"wheel_r_px":106})
-#   → stations[] + section_shape[{z_frac,hw_frac}] + package + wheels + warnings
-#   ⚠ 没有俯视图时 half_w 走「前视最大宽 × 平面收放假设」（half_width_source 会写明）
-# ② 精确复刻：站表直放样（构造上等于轮廓）
-#   blender_rt_plan(op="vehicle_loft", args={"stations": <stations>, "section_shape": <section_shape>})
-# ③ 要「可改参数的 spec」：站表 → IoU 拟合闭环（纯 2D，不用渲染）
-#   blender_rt_plan(op="vehicle_fit", args={"stations": <stations>, "iterations": 240, "target_iou": 0.9})
-#   → iou_start / iou / deltas / spec（直接喂 vehicle_base / vehicle_loft）
-#   ⚠ 它拟合的是 15 参数形状族：轮廓不在族内时 IoU 会停在 ~0.67 —— 要精确就回 ②
-#   ⚠ IoU 在这里只是**拟合目标**（2D 轮廓），不是"像不像"的验收标准：把轮廓填满就能刷高它。
-#     拟合完必须回 ④ 的多视 + 特征线复核，别把 target_iou 达标当交付（§0.6.2 IoU 盲区）
-# ④ 多体量：按 x 区间切块，每块一个独立体量（卡车/装甲/科幻）
-#   blender_rt_plan(op="vehicle_regions", args={"stations": <stations>, "name":"GEO-truck",
-#       "regions":[{"name":"cab","x0_mm":0,"x1_mm":2200},{"name":"bed","x0_mm":2250,"x1_mm":6000}]})
-```
-
-**分工**：`vehicle_loft(stations)` = 贴参考图；`vehicle_fit` = 出可复用的参数 spec；`vehicle_regions` = 多体量装配。
-
-### Recipe 20 — 照片参考：先校正再量（`img_rectify`）
-
-```python
-# ① 斜视照片必须先校正：四角点按「左上→右上→右下→左下」给（对应一个**真实矩形**的四角）
-#   blender_rt_plan(op="img_rectify", args={"path":"D:/ref/car_photo.jpg",
-#       "quad":[[x1,y1],[x2,y2],[x3,y3],[x4,y4]], "out_w":1600, "out_h":600,
-#       "known_w_mm":4300, "out":"D:/out/car_side_rect.png"})
-#   → mm_per_px（给了 known_w_mm 就有）+ 单应矩阵；校正后的图再量才准
-# ② 之后一切照旧：量站表 → 放样 / 拟合
-#   blender_rt_plan(op="vehicle_sections", args={"side":"D:/out/car_side_rect.png","mm_per_px":<上一步>, ...})
-```
-
-**硬规则**：① 四点必须是**同一平面上的矩形**（车侧面的整体外框 / 地面标定框），不是随便四个点；
-② 斜视越强，取点误差被放得越大 —— 先用 `img_scan` 看清轮廓再取点；③ 校正只解决几何，不解决分辨率与光照；
-④ ★ **单应只校正"那四点所在的平面"**：平面上误差为 0，离开平面误差随深度放大
-（实测 1 m ≈ 190 px 的机位下：离平面 0.05 m → 52 mm，0.2 m → 211 mm，**0.5 m → 543 mm**）。
-所以：**平面参考**（图纸 / 标定板 / 贴平的贴纸）放心用；**立体物**（车/人/建筑）只有取点平面准 ——
-轮眉外扩、翼子板弧度、A 柱前倾这些离平面远的特征**量出来是错的**，要么只量靠近该平面的尺寸，
-要么改走真正的相机标定（内参 + 外参）。别把"整张照片都校正过了"当成"整个物体都准"。
-
-### Recipe 21 — 形状不在参数族里？换折线族（K 扫描挑控制点数）
-
-```python
-# 方箱 / 皮卡 / 装甲这类造型，cargen 的 15 参数族拟合会卡在 ~0.67
-#   blender_rt_plan(op="vehicle_fit", args={"stations": <站表>, "family":"polyline",
-#       "control_points":[6,10,16], "iterations":200})
-#   → curve[{control_points, iou_init, iou}]（挑 K）+ best.profile_pts（闭合剖面：上+下轮廓控制点）
-#   → 把 best.profile_pts 喂 vehicle_spec/vehicle_base 就能复现；K 越小 spec 越简单
-```
-
-**实测**：cargen 族 0.667 · 折线 K=6 **0.754** · K=10 **0.781** · K=16 **0.821**。
-
-### Recipe 22 — 特征线层：让「面感」也可参数化
-
-```python
-# 放样时一起给特征线（crease = 硬折线；inset = 折面/凹槽）
-#   blender_rt_plan(op="vehicle_loft", args={"stations": <站表>, "section_shape": <截面轮廓>,
-#       "crease_lines":[{"frac":0.55,"weight":0.8},                    # 腰线（按各环比例，推荐）
-#                       {"z_mm":560,"x_mm":[400,3900],"weight":0.85},  # 绝对高度纵向线
-#                       {"x_mm":1500,"weight":1.0}],                   # 横向分缝（自动插站）
-#       "inset_lines":[{"z_mm":470,"band_mm":60,"inset_mm":12,"x_mm":[500,3800]}]})
-#   → crease_lines[{spec, edges}] + inset_hits + stations_inserted
-```
-
-**⑤ 圆角特征线（真半径）**：条目加 `radius_mm` + `segments` ⇒ 走 Bevel 权重 + Bevel 修改器（正圆过渡），
-而不是用折痕权重近似半径。
-
-```python
-#   "crease_lines":[{"frac":0.55,"radius_mm":6.0,"segments":3},    # 腰线 R6 圆角（3 段圆弧）
-#                   {"x_mm":1500,"radius_mm":4.0,"segments":2}]    # 横向分缝 R4
-```
-
-`radius_mm` 缺省 = 硬折线（SubD 折痕）；`segments` 越大越圆（1–8）。实测硬折线 762 顶点 → R6 圆角 1244 顶点。
-
-**硬规则**：① **腰线用 `frac`**（按各环自身高度比例）—— 用 `z_mm` 只在几何确实有那个高度处中标，数量会偏少；
-② 横向特征线（`x_mm` 给数值）要求该位置有站位，`vehicle_loft` 会自动插一个；
-③ 折痕是 SubD 权重，**必须配 `subsurf>=1`** 才看得出效果；④ 凹陷 `inset_mm` 与 `band_mm` 决定折面强度与宽度。
-
-### Recipe 23 — 多步链一条命令跑完（pipe_run + @工件）
-
-```python
-# 以前：4 次工具调用，还要把上一步的 JSON 粘回下一步（vehicle_sections 的 stations 有 5,656 字符）
-# 现在：一次调用，产出用 @名字 传递
-#   blender_rt_plan(op="pipe_run", args={"steps":[
-#       {"api":"vehicle", "op":"sections", "args":{"side":"D:/out/car_side.png", "front":"D:/out/car_front.png", "mm_per_px":10.0}, "out":"@sec"},
-#       {"api":"vehicle", "op":"loft", "args":{"stations":"@sec.stations", "section_shape":"@sec.section_shape", "name":"GEO-shell"}, "out":"@shell"},
-#       {"api":"vehicle", "op":"panels", "args":{"object_name":"@shell.object", "cuts_mm":[1500,3000], "gap_mm":4}, "out":"@panels"},
-#       {"api":"clearance", "op":"check", "args":{"pairs":[{"id":"seam", "a":["@panels.parts.0"], "b":["@panels.parts.1"], "min_mm":0}]}}
-#   ]})
-#   → 逐步回执 ok/ms/keys/stored；失败默认即停
-# 工件也能手工存：pipe_put(name="my_nums", value={...}) → 后续步骤写 "@my_nums"
-# 查看/清理：pipe_list / pipe_get(name, path="a.b") / pipe_clear
-```
-
-**硬规则**：① `@引用` 只在 `pipe_run` 内解析（单发 op 不会自动解引用）；② 引用不存在会当场报错并列出现有工件名；
-③ 工件活在当前 Blender 会话；④ 长任务仍走 `rt_job`/headless，`pipe_run` 是同步串行。
-
-### Recipe 24 — 参数搜索：手工拍参数 → 内环（`blender_rt_loop`）
-
-**三条同时成立才用它**：① 目标能写成一个数（轮廓 IoU / 包围盒尺寸误差 / 剖面差）——越小越好或越大越好都行；
-② 要试的参数组合是几十~几千组（手工一轮轮改 = 几十个模型回合）；③ **在 GUI 会话里**（无头下 `bpy.app.timers` 不触发，内环一次都不会跑）。
-
-```python
-# ① 先量基线（内环只优化你写的 score：不量基线，收敛了也不知道好了多少）
-#   blender_rt_plan(op="qc_render_views", args={"views":["right"], "ortho":true, "ref_path":"D:/ref/side.png"})  → IoU
-
-# ② 内环：目标 + 区间交给机器搜（setup 只跑一次；step/measure 共享 ns）
-#   ★ setup 里定义 apply(p)：op="export" 导出的脚本靠它复现最优参数（约定：无 apply 就只能手动用 BEST["params"]）
-#   blender_rt_loop(op="start", spec={
-#     "setup":   "import bpy\nob = bpy.data.objects['GEO-hull']\n"
-#                "def apply(p):\n"
-#                "    ob.location.y = p['dy_mm'] / 1000.0\n"
-#                "    ob.location.z = p['dz_mm'] / 1000.0\n"
-#                "    bpy.context.view_layer.update()\n",          # ★ 不刷依赖图 = 量的还是上一轮的几何
-#     "step":    "ns['params'] = {'dy_mm': random.uniform(-30, 30), 'dz_mm': random.uniform(-20, 20)}",
-#     "measure": "apply(ns['params'])\n"
-#                "ns['score'] = K.dsh_measure['silhouette_iou']("
-#                "  {'from':[0,-6,1.0], 'look_at':[0,0,0.5], 'lens':50}, 'D:/ref/side.png', None)\n"
-#                "ns['metrics'] = {'score': ns['score']}",
-#     "iterations": 400, "budget_ms": 60000, "measure_every": 1,
-#     "top_k": 10, "patience": 60, "interval": 0.0})
-#   ⇒ iterations + budget_ms 是安全阀（双上限，至少给一个）；跑飞了 op="stop" 下一个 tick 退出
-#   blender_rt_loop(op="status", history=12)                     # tps / best / 尾迹
-#   blender_rt_loop(op="board", limit=10)                        # 候选表：哪些参数、各自 score（比"一个最优值"信息量大）
-#   blender_rt_loop(op="export", path="D:/out/best_fit.py")       # best → 可复现脚本（内嵌 setup + apply(BEST)）
-```
-
-**现成的目标函数**（`K.dsh_measure`，比自写稳；要用它得让 `view.py` / `qc.py` 在会话里）：
-
-| 目标 | 签名 | 说明 |
+| audit | 网格/场景体检 | audit_scene / audit_mesh / audit_interference / audit_connectivity / audit_gate |
+| asm | 装配清单/扫描/合并/修复/导出/门 | asm_manifest / asm_scan / asm_merge / asm_repair / asm_export / asm_gate |
+| blockout | 声明式白模/批量/参考包 | blockout_base / blockout_batch / blockout_export / blockout_refsheet / blockout_turntable |
+| img | 参考图量具 | img_digest / img_probe / img_measure / img_calib / img_rectify / img_crop / img_diff |
+| visualreport | 同机位 QC 报告 | visualreport_report |
+| shapesolve | 无头多视轮廓拟合 | shapesolve_solve |
+| eval | 缺陷注入/基线评估 | eval_run |
+| qc / qc_render | 渲染与图比较 | qc_render_views / qc_compare |
+| gate | 项目门/流程 | gate_plan / gate_run / gate_preflight / gate_checkpoint / gate_deliver |
+| deliver | 交付导出/核对 | deliver_export / deliver_verify |
+| shape | 截面/放样/折线族 | shape_plan / shape_draft / shape_loft / shape_sections |
+| vehicle / human / face | 车辆/人形/头型 | vehicle_package / vehicle_base / human_* / face_* |
+| sculpt / fix / uv / print / sweep | 雕刻/修复/UV/打印/扫掠 | *_apply / fix_repair / uv_smart_project / print_report / sweep_build |
+| material / motion / generator | 材质/机构/参数化 | material_build / motion_* / generator_save|run |
+| clear / calib | 间隙/门标定 | clear_check / calib_run |
+| pipe / plannner | 多步链/规划器 | pipe_run / planner_* |
+
+规则：
+- op 名拼错会回 did_you_mean；参数名写错会回“不认识的参数”，照提示改。
+- 只读 op 不走写租约；写 op 先 lease。
+- 大结果会落 results/ 目录；回执文本截断时用 out_json/结果文件。
+- plan 传 session="auto" 时按 family 自动起无头 worker；首次冷启动约 2 s，之后复用。
+
+## 10. P0–P2 新链路配方（可直接照抄）
+
+### Recipe 10.1 交互式无头建模（没有人看画面）
+
+    # 1) 起一个持久无头会话（preload 决定能直接调哪些 K API）
+    blender_rt_worker(op="start", name="s1",
+      preload="imgtools,assembly,blockout,visualreport,shapesolve,gate,txn,deliver",
+      engine="workbench", warmup=true)
+    # 2) 改一步，同步看一步（图片直接回模型；不是异步 job）
+    blender_rt_do(code="...bpy/bmesh 代码...", session="s1", see=true, max_size=560)
+    # 3) 换角度复核
+    blender_rt_see(session="s1", from="7,-7,5", look_at="0,0,1")
+    # 4) 动画/修改器有没有动
+    blender_rt_watch(session="s1", frames=[1,10,20], max_size=420)
+    # 5) 不想要 GUI 也能跑 plan op
+    blender_rt_plan(op="img_digest", args={path:"..."}, session="auto")
+
+判据：start 一次约 2–3 s；之后每步 exec 0–2 ms、see 50–100 ms（320–560 px）。如果 see 要几秒，说明走错通道/每步在冷启动。
+
+### Recipe 10.2 参考图 → 尺寸 → 白模 → 验收
+
+    # 1) 先量：无标定会给 needs_scale，不猜 mm
+    blender_rt_plan(op="img_digest", args={path:"ref.png"}, session="auto")
+    # 2) 已知边长/两点 → px_per_mm
+    blender_rt_plan(op="img_measure", args={path:"ref.png", known_len:{...}}, session="auto")
+    # 3) 白模（mm 口径；先冻结 spec）
+    blender_rt_plan(op="blockout_base", args={
+      name:"robot",
+      parts:[{id:"torso", prim:"box", size_mm:[300,180,420], at_mm:[0,0,900]}],
+      render:{views:"auto3", res:[512,512]},
+      export:{glb:"D:/out/robot.glb"}
+    }, session="auto")
+    # 4) 同机位像不像（同相机/同分辨率）
+    blender_rt_plan(op="visualreport_report", args={
+      ref:"ref.png", render:"render.png", px_per_mm:0.16
+    }, session="auto")
+
+注意：IoU 只是单视轮廓的必要条件；还要用尺寸/接口/装配门交叉验证。
+
+### Recipe 10.3 装配：清单 → 扫描 → 安全修复 → 门 → 导出
+
+    # 1) 清单（id/文件/md5/接口/allow）
+    blender_rt_plan(op="asm_manifest", args={action:"build", parts:[...]}, session="auto")
+    # 2) 全对全分类（clash/hidden_ok/contact/gap/float/contained/unresolved）
+    blender_rt_plan(op="asm_scan", args={manifest:"assembly.json"}, session="auto")
+    # 3) 低风险修复：safe 只做 translate/snap，硬禁布尔/缩放；先 dry_run
+    blender_rt_plan(op="asm_repair", args={manifest:"assembly.json", policy:"safe", dry_run:true}, session="auto")
+    # 4) 门（verdict 三态；export_allowed 只在 pass）
+    blender_rt_plan(op="asm_gate", args={manifest:"assembly.json"}, session="auto")
+    # 5) 交付导出（GLB/FBX/OBJ + manifest + merge_ledger）
+    blender_rt_plan(op="asm_export", args={
+      manifest:"assembly.json", merge:true, dry_run:false,
+      out_dir:"D:/out", name:"assembly",
+      formats:["glb","fbx","obj"], ledger:true
+    }, session="auto")
+
+边界：hidden_ok 是 manifest 里声明允许的隐藏交叠，不是穿模；不要为了让 clash=0 随意扩大 allow。非合并导出 gate 非 pass 时文件会写出但 verdict=fail + warnings，不可当出厂件。
+
+### Recipe 10.4 Seedance 参考包（4 视图 + 转台 MP4）
+
+    blender_rt_plan(op="blockout_refsheet", args={
+      objects:["robot_torso","robot_arm"],
+      out_dir:"D:/Blender/robot/ref",
+      name:"robot", views:["front","side","top","iso"], res:[768,768],
+      turntable:{frames:120, fps:24, elev_deg:15}
+    }, session="auto")
+    # 只要转台 MP4
+    blender_rt_plan(op="blockout_turntable", args={
+      objects:["robot_torso"], out_dir:"D:/Blender/robot/ref",
+      name:"robot", frames:120, fps:24, res:[512,512]
+    }, session="auto")
+
+产物：4 PNG + 2x2 拼图 + refsheet.json（units/bbox/forward_axis/fps）+ 可选 MP4。MP4 无 alpha；无 FFMPEG 构建回退 PNG 序列并标 degraded。白模是参考包，不是高模。
+
+### Recipe 10.5 轮廓反推（shapesolve）与复核
+
+    blender_rt_plan(op="shapesolve_solve", args={
+      setup:"def apply(p): ...",
+      params:[{name:"width",min:0.5,max:2.0,init:1.0}],
+      views:[{ref:"front.png", from:[0,-5,1], look_at:[0,0,1], ortho_scale:3.0}],
+      iterations:200, budget_ms:10000
+    }, session="auto")
+
+复核：best 参数写回几何 → blockout/渲染 → visualreport 或 img_measure 量尺寸；不要拿拟合目标函数当验收。
+
+### Recipe 10.6 强制门交付
+
+    # 先体检/留回退点
+    blender_rt_plan(op="gate_preflight", session="auto")
+    blender_rt_plan(op="gate_checkpoint", args={label:"before_delivery"}, session="auto")
+    # 先过门再导出（不过门 blocked，不写盘）
+    blender_rt_plan(op="gate_deliver", args={
+      dir:"D:/out", spec_path:"gate.json", name:"model", fmt:"obj", verify:true
+    }, session="auto")
+
+deliver_export 也支持 require_gate=true；gate_deliver 是弱模型/交付流程的一键强制路径。degraded 要显式 allow_degraded 并说明，不能静默变绿。
+
+### Recipe 10.7 缺陷注入评估（改门之后先跑它）
+
+    blender_rt_plan(op="eval_run", args={
+      suite:"assembly", out_json:"D:/out/eval.json"
+    }, session="auto")
+
+读数：capture_rate / missed / false_positive / baseline_pass；assembly/reference 绿、core 缺依赖时 degraded 是正常。capture_rate 只代表合成缺陷集，不等于真实项目通过率。
+
+### 10.8 多 Agent 并行：按插件架构分工
+
+多 Agent 不是“几个模型同时自由建模”，而是“共享同一份合同，各自只写自己的作用域”。默认分工：
+
+1. **Lead / 架构 owner**：冻结 spec.py / manifest.json；跑 catalog 选路线；分配写作用域；最后跑 asm_gate/gate_run。
+2. **Reference builder**：img_digest/probe/measure/calib → 尺寸表 → 更新 spec；不写几何。
+3. **Blockout builder**：blockout_base/batch → 白模 + 3 视图；只写自己前缀的对象。
+4. **Shape/vehicle/human builder**：按 spec 生成主形体；输出 bbox/截面对照。
+5. **Detail builder**：硬表面细节/布尔/阵列/扫掠；拓扑改动前 checkpoint。
+6. **Assembly owner**：asm_manifest → asm_scan → asm_repair(policy=safe) → asm_gate；只做装配层。
+7. **Verifier**：独立跑 audit/asm/visualreport/eval，不采信 builder 的结论。
+
+写作用域：
+- 每个 builder 只写自己的对象前缀与文件；用 blender_viewport lease 声明 collection/prefix；
+- 装配前用 K.route_collections 按前缀归位（COL_Lights/COL_Camera/COL_VFX/COL_Geo 等）；
+- 任何人不得改别人的对象；接口改动必须回 spec/manifest，不允许“口头约定”。
+
+装配协议：
+- 接口表先写：a/b、interface、nominal_mm、tol_mm、allow_overlap_mm；
+- hidden_ok/allow 必须有理由（设计内隐藏交叠），不是为了让 scan 变绿；
+- 冲突处理顺序：asm_repair(policy=safe) 平移/吸附 → 人工确认布尔/缩放 → 重跑 scan/gate；
+- 门不过不合并、不导出；合并导出必须 gate=pass。
+
+并行期验收：
+- 单件：audit_mesh + bbox/尺寸 + 单件渲染；
+- 装配：asm_scan + asm_gate；
+- 视觉：visualreport（同机位）；
+- 交付：asm_export + manifest/ledger。
+
+### 10.9 反模式清单（出现就返工）
+
+| 反模式 | 为什么错 | 正确做法 |
 |---|---|---|
-| 轮廓相似 | `silhouette_iou(view_spec, ref_path, ref_box)` → `1-IoU` | 会渲染一张图再比对；**固定对齐**（防"缩放迁就轮廓"刷分）；`ref_box=None` = 自动取 |
-| 尺寸误差 | `aabb_err(obj_name, target_size)` → 三轴绝对误差和 | **不出图，最便宜**；适合反推长宽高 |
-| 剖面差 | `profile_err(view_spec, ref_path, ref_box, bins=24)` → 平均剖面差 px | 比 IoU 更严：逐层宽度都要贴 |
+| 不查 catalog 就写 bpy | 重复实现插件已有能力，参数/验收口径全错 | 先 catalog；有 op 用 op |
+| 自写“像不像”判据 | 和插件 IoU/门口径不一致，无法复现 | visualreport/qc_compare + 尺寸门 |
+| 只看 ok 不看 verdict | ok 只表示跑完；degraded 被当通过 | 先读 verdict/state |
+| 把 skipped 当通过 | 门没跑过，等于没检查 | 补 args/overrides 或记未检查 |
+| 为让 scan=0 乱扩 allow | 真穿模被隐藏，交付后炸 | allow 必须有设计理由 |
+| GUI 不在就停工 | headless 本来就能交互 | worker session + see |
+| 每步换 session / 每步冷启动 | 慢且状态丢 | 固定 session + preload |
+| 长活同步硬等 | 客户端超时误判失败 | as_job/rt_job |
+| 改拓扑前不 snapshot | 无法回滚 | txn.snapshot / gate_checkpoint |
+| 用“看起来接上了”代替 manifest | 装配无法复检 | asm_manifest + 接口表 |
+| 交付不带 manifest/md5 | 不可复现 | asm_export/deliver_export |
+| 把白模当高模交付 | 参考包不是成品 | blockout 只做基线/参考 |
+| 照片参考直接算 IoU | 背景掩膜不可信 | 先抠背景/给裁切框 |
+| 无标定写 mm | 数字是编的 | img_measure/img_calib 或标 needs_scale |
+| 让 VLM 看全图代替数字门 | 看不到 mm 级缺陷 | 数字门 + 局部 crop |
 
-**纪律（缺一条就会得到"看起来对"的错结论）**：
+### 10.10 新会话开场模板（直接复制）
 
-1. **换通路复核**：内环只优化你写的 score。收敛后用**另一条通路**复算 —— `qc_render_views` 出同机位图 + `audit_measure` 量尺寸 + `blender_rt_see` 看一眼；别把 `op="board"` 的 best 当验收；
-2. **目标函数要防刷分**：单视轮廓 IoU 是必要不充分（轮廓填满就能刷高）→ 必须再配间隙 / 尺寸 / 特征线证据（§0.6.2）；
-3. **收敛后场景停在"最后一次迭代"的参数上，不是 best** —— 要用 best 就 `op="export"` 拿 `apply(BEST)`，或按 `board` 里 `best.params` 自己贴回去；
-4. **参数区分连续量与枚举量**：段数 / 布尔这类整数开关走 `random.choice([...])`，别和连续量塞进同一条 `uniform`；
-5. **改完 transform 必须 `bpy.context.view_layer.update()`**（§6.5.1 事故 2：不刷依赖图，量到的还是上一轮）。
+    你在 DSH × Blender 插件环境里建模。必须按插件架构走：
+    1) 先 blender_rt_plan(op="catalog") 查能力，不要自造几何/验收；
+    2) 有 plan op 就用 op（传 session="auto" 可无头）；没有才写 bpy/bmesh，并说明理由；
+    3) 每步给我图或数字证据；回执先读 verdict，degraded ≠ 通过；
+    4) 参考图先 img_digest/probe/measure/calib；无标定不许写 mm；
+    5) 多件先 asm_manifest，再 asm_scan/asm_repair/asm_gate；门不过不交付；
+    6) 交付用 asm_export/deliver_export，带 manifest/md5/ledger；
+    7) 长活走 rt_job/headless as_job；交互小步用 rt_worker + rt_do/rt_see(session)。
+    任务：<目标/单位/交付/参考图/预算/禁用项>
 
-**更省事的路：声明式 `shape_search`（不想手写 setup/step/measure 时）**
+### 10.11 从零到交付的四条最短路径
 
-```python
-#   blender_rt_plan(op="shape_search", args={
-#     "objective": "silhouette_iou",          # silhouette_iou | profile_err | aabb_err
-#     "ref": "D:/ref/side.png",
-#     "view": {"from":[0,-6,1.0], "look_at":[0,0,0.5], "lens":50},
-#     "apply": "ob.location.y = p['dy_mm']/1000.0\n    bpy.context.view_layer.update()",
-#     "params": {"dy_mm": {"min": -30, "max": 30, "step": 5}, "dz_mm": {"min": -20, "max": 20, "step": 5}},
-#     "iterations": 300, "budget_ms": 60000, "top_k": 10, "export": "D:/out/best_fit.py"})
-#   → 自动选策略（组合少 → 穷举 grid；组合多 → 随机搜索），托管 start → 轮询 → board → export，
-#     跑完把场景落到 best（内环自己会停在"最后一次迭代"）；回执给 spec_echo / best / board / next_steps
-#   → 先 dry_run=true：只校验并回 spec（不启动内环、不需要 Blender 连着）
-```
+**A. 单个硬表面道具**
+catalog → blockout_base 或基本体 + Bevel/crease_lines → audit_mesh → 材质/UV（按需）→ qc_render_views → asm_export（单件也可，manifest 仍建议）。
 
-**与手写的分工**：`shape_search` 是同一条 runner 的声明式封装 —— **也只在 GUI 会话有效**、也要过写租约；
-要自定义 ns（`penalize` / `anneal` / `record`、多目标）或要 `group_key` 分批，就回到上面的手写 spec。
+**B. 参考图还原**
+img_digest → img_measure/calib → spec 尺寸表 → blockout_base/shape_loft/vehicle_base → visualreport（同机位）→ audit_mesh → asm_export。
+如果参数化特征强：shapesolve_solve 反推参数 → 写回几何 → 换通路复核。
 
-**不该用它的时候**：只试 ≤5 组（`blender_rt_do` 自己循环更省事）；目标写不成一个数（审美判断归人 / 模型）；
-**无头批处理**（`blender -b` 下 timers 不触发 —— 直接在脚本里写有界 for 循环；纯 2D 轮廓拟合走 `shape_fit` / `vehicle_fit`，它们不渲染、快一个量级）。
+**C. 多件装配**
+冻结 manifest → 各件 builder → 单件 audit_mesh → asm_scan → asm_repair(policy=safe, dry_run 先看) → asm_gate → asm_export(merge=true) → visualreport/refsheet。
 
-## 4. 六条必踩的坑
+**D. Seedance 基础白模包**
+blockout_batch 出 N 件 → blockout_refsheet（4 视图 + 拼图 + refsheet.json）→ blockout_turntable（MP4）→ 检查 units/bbox/forward_axis → 交付到 D:/Blender/<项目>/。
+
+### 10.12 门/评估的当前口径（别记旧版）
+
+- gate_run / asm_gate / visualreport / eval 都是三态：pass / fail / degraded；ok 只在 pass 时为 true。
+- gate 里 skipped 会把顶层压成 degraded；degraded 要补证据，不能静默变绿。
+- eval_run 的 capture_rate 只代表合成缺陷集；改门后跑一次，记录 baseline/missed。
+- 同机位 visualreport 的 IoU 是轮廓必要条件，不是整体像不像；跨机位/引擎分数不可比。
+- asm_export 非合并导出 gate 非 pass 时文件会写出但 verdict=fail + warnings，不可当出厂件。
+
+## 11. 常见故障与边界（当前版本）
+
+| 症状 | 原因 | 处理 |
+|---|---|---|
+| GUI 不在，rt_see/rt_do 报连接失败 | 没走无头降级 | 传 session="s1" 或 auto；先 worker start |
+| worker see 很慢/每次都冷启动 | 每步换了 session 名，或 worker 被 TTL 回收 | 固定 session；preload 一次；status 看 idleMs |
+| plan op 执行失败提示无头映射 | 该 family 未接无头路由/模块未 preload | 用 blender_rt_headless(preload=...) 直接调 K API，或走 GUI 通道 |
+| 无标定却想要 mm | img_digest verdict=needs_scale | 给 known_len/标尺/两点，或 img_calib；不猜 |
+| asm_scan 把设计内交叠报 clash | manifest 没声明 allow/hidden_ok | 先 asm_manifest 声明；不要直接改几何 |
+| asm_repair 不动/blocked | 有父级/动画/超 max_move，或 policy=safe | 清父级/关键帧、调 max_move；布尔交人工/aggressive |
+| asm_gate degraded | 有 skipped/未检查门 | 补 manifest/参数，不要把 degraded 当 pass |
+| visualreport 分数异常低 | 机位/分辨率/裁切不同，或照片背景没抠 | 同机位重渲；给 ref_box/render_box；先抠背景 |
+| refsheet MP4 失败 | Blender 构建无 FFMPEG | 看 warnings/degraded，用 PNG 序列或换构建 |
+| 交付后无法复现 | 没 manifest/md5 | 用 asm_export/deliver_export 的 manifest + ledger |
+| 渲染卡住/超时 | 主线程被渲染占住 | render_state → render_wait；长活走 job |
+
+明确不覆盖/未装依赖：landmark/人脸（无 cv2/MediaPipe）、OCR、DXF、Open3D/manifold3d/glTF-Validator 未安装；不要写成已支持。生物/有机高模、电影级布光/合成、角色绑定动画也不在本 skill 的覆盖范围。
+
+## 12. 交付前最终清单（逐条打勾）
+
+1. 单位/前向轴/上轴已确认；所有尺寸来自标定或 spec，不来自猜。
+2. 单件 audit_mesh 通过；拓扑改动前有 txn.snapshot 或 gate_checkpoint。
+3. 多件 asm_manifest 校验通过；asm_scan 分类已看（clash/contained/float/unresolved 为 0 或已解释）。
+4. asm_gate/gate_run verdict=pass；degraded/failed/skipped 已补证据，不是当通过。
+5. 同机位 visualreport/QC 已看；IoU 与尺寸/接口/装配门交叉一致。
+6. 交付文件有 manifest（units/bbox/objects/md5）+ ledger；回执可复算。
+7. 限制/风险已写进回执：无标定、无外部依赖、MP4 无 alpha、非合并 gate 非 pass 等。
+8. 变更过的门/工具，已跑 eval_run 或对应 selftest，并记录 capture_rate/基线。
+
+> 记住：**画面是证据，数字是判据，verdict 是结论**。不要用“看起来对”代替任何一条。
+
+
+## 附录 A. 通用 Blender 深水参考（不是首选路径）
+
+> 以下内容保留通用建模知识/数值门/渲染经验，供“catalog 里确实没有对应 op”时参考。
+> **默认路径始终是 §1–§3 的架构规则 + §9–§10 的插件配方**；任何参考做法做完仍必须回到插件门（audit/asm/gate/visualreport）验收，不许自写判据。
+
+### A.4. 六条必踩的坑
 
 ### 4.0 六条坑怎么分流（P2-3：能机械判定的交给门，不能的写进 checklist）
 
@@ -1511,11 +736,11 @@ def normal_health(obj, probe_point=None):
    （闭合网格的有符号体积 < 0 ⇒ 整体朝内 ⇒ 先 recalc 再判。）
    ⚠ **这只是"单体单壳"的快检**：一个对象里可以有多块互不相连的壳，`bm.calc_volume(signed=True)` 把它们**相加**——
    大正向壳（+8）+ 分离的小反向壳（−1）总和仍是 +7 > 0 ⇒ 反向的那块被吞掉。多壳件交给 `audit_mesh`
-   （v0.9.6 起**逐连通壳**判：`normals_state` ∈ `pass`/`fail`/`unknown`/`n/a`，明细在 `normals_shells[]`，含逐壳 `state`/`signed_volume`/`nested`）。
+   （当前版本 起**逐连通壳**判：`normals_state` ∈ `pass`/`fail`/`unknown`/`n/a`，明细在 `normals_shells[]`，含逐壳 `state`/`signed_volume`/`nested`）。
 2. 装配层**统一兜底**一次 recalc（Recipe 8 的那一行），别指望每个 builder 都记得。
 3. 判据写在报告里时要带**法线前提**："在法线朝外的前提下，X 深入 Y 12mm"。
 4. 双向确认：同一对件用 `audit_interference` 与 `audit_measure` 各跑一遍，结论相反就先查法线。
-5. **`unknown` 不许当 pass**（v0.9.6 的逐壳判据）：
+5. **`unknown` 不许当 pass**（当前版本 的逐壳判据）：
 
    | `normals_state` | 含义 | 处置 |
    |---|---|---|
@@ -1539,7 +764,7 @@ panel 级根本没法 QC —— 最后是组员自己改成"**灰材质 + 单侧
 
 判据：**如果一张图看不出板缝在哪，这张图就不能作为 QC 证据**。
 
-## 5. 修改器栈序与症状表
+### A.5. 修改器栈序与症状表
 
 > ★ **纠正一条被写死的"固定链"**：老版本让人"背下来"这一串 ——
 > `Mirror → Array → Solidify → Bevel → Subdivision Surface →（需要时 Boolean）`。
@@ -1632,12 +857,12 @@ def buried_faces(obj, eps=1e-5):
 **判据**：删内部面之后 `audit_mesh` 必须仍是 `clean=true`（`boundary_edges=0` / `nonmanifold_edges=0`）。
 只盯着"面数变少了"而不管开边，等于把穿模换成了破面。
 
-## 6. 数值门清单（交付 / 交接前逐条过）★**本节是唯一的权威门表**，其余章节一律引用它
+### A.6. 数值门清单（交付 / 交接前逐条过）★**本节是唯一的权威门表**，其余章节一律引用它
 
 > v1 这一节只有"清理清单"，实测证明**肉眼验收不可靠** —— 这里给每条判据配上可命令与字段。
 > 单件交付跑 ①–④，装配完成后跑 ①–⑧。**缺字段 = 没跑**。
 >
-> ★ **三态口径（v0.9.6，比"红/绿"多一态）**：`audit_mesh` / `audit_scene` 顶层给 `state`（等价字段 `verdict`）= `pass` / `fail` / `degraded`。
+> ★ **三态口径（当前版本，比"红/绿"多一态）**：`audit_mesh` / `audit_scene` 顶层给 `state`（等价字段 `verdict`）= `pass` / `fail` / `degraded`。
 > `clean` 收紧为"**查完了而且没缺陷**"⇒ `degraded` 时 `clean=false`。**`clean=false` 有两种成因**（确有缺陷 / 没查完），
 > 必须看 `state` + `reason`；`degraded` 的处置是**补查**（不是放过，也不是当失败）。
 
@@ -1675,7 +900,7 @@ blender_rt_plan(op="audit_interference", args={"a": "GEO-rungear", "b": "GEO-hul
 blender_rt_plan(op="audit_scene", args={"summary_only": True, "top_k": 10, "self_intersect": True})
 ```
 
-> ★ **`audit_scene` 的自交开关（v0.9.6 实测）**：它按性能契约**默认 `self_intersect=false`**（便宜初筛），
+> ★ **`audit_scene` 的自交开关（当前版本 实测）**：它按性能契约**默认 `self_intersect=false`**（便宜初筛），
 > 这时无论场景多干净，回执都是 `state=degraded` + `clean=false` + `warn: "DEGRADED ≠ 通过"` +
 > `hint: "要完整结论请用 self_intersect=true 重跑"` —— **"跳过检查"不许读成"没问题"**。
 > ⇒ **交付/验收口径一律传 `self_intersect=true`**（代价按面数走）；只看"哪几个最脏"的日常初筛可以不开，
@@ -1689,7 +914,7 @@ blender_rt_plan(op="audit_scene", args={"summary_only": True, "top_k": 10, "self
 2. `ok=false` / `analyzed=false` / `state="degraded"` **都不是通过** —— 那是"没跑"或"没分析完"，不能读成"没问题"。
 3. **`clean=false` 有两种成因**：`state=fail`（确有缺陷，看 `totals` 里非 0 的计数字段）或 `state=degraded`（没查完/判不出来：自交被跳过或抛异常、`normals_state=unknown`、逐壳分析超面数上限）。拿到 `clean=false` **先读 `state`**，再决定"改几何"还是"补查"。
 
-## 6.5 渲染 / 动画 / 长活（★ v7 新增，按《QBZ-191 全程分解视频》实测补）
+### A.6.5 渲染 / 动画 / 长活（★ v7 新增，按《QBZ-191 全程分解视频》实测补）
 
 > §0–§6 管的是**形状对不对**；这一节管**画面对不对、活跑不跑得完**。
 > 两者的失败模式完全不同，而且渲染阶段的坑**更隐蔽**：
@@ -1864,7 +1089,34 @@ ffmpeg -start_number 1 -framerate 10 -i seq_%04d.png \
 | `Scene.frame_set()` expected int, not float | 帧号必须整数 | `int(1 + round(t * fps))` |
 | GUI 里 `open_mainfile` 后见空网格 | 用的是"用户当前视口" | 传 `from=` / `look_at=` 走自定义视角 |
 | `module 'dsh_rt_kernel' has no attribute 'dsh_audit_api'` | 该模块**没被 preload 进内核** | `blender_rt_headless(..., preload="audit")`；或查已加载：`K.dsh_kit.kapi("audit")`（找不到会列出可用模块名） |
+| `'Scene' object has no attribute 'node_tree'` | **5.0 起合成器改成节点组**（`scene.node_tree` 被移除） | `ng = bpy.data.node_groups.new("Comp","CompositorNodeTree"); scene.compositing_node_group = ng`；先 `ng.interface.new_socket(name="Image", in_out='OUTPUT', socket_type='NodeSocketColor')`，输出用 **`NodeGroupOutput`**（`CompositorNodeComposite` 已不存在） |
+| `AttributeError: type ... is read-only` / `glare_type` 无效 | 5.x 把 Glare 的 **Type/Quality 变成 MENU 输入插座**，参数也进了 inputs | `gl.inputs['Type'].default_value = 'Fog Glow'`、`gl.inputs['Quality'].default_value = 'High'`、`gl.inputs['Threshold'] / ['Size'] / ['Strength']`；不要写 `gl.glare_type` / `gl.threshold` |
+| `Error: Node type CompositorNodeMixRGB undefined`（同理 `CompositorNodeMath` / `CompositorNodeComposite`） | 5.x 合成器删掉了旧 Mix/Math/Composite | 合成器树里**改用着色器节点**：`ShaderNodeMix` / `ShaderNodeMath` / `ShaderNodeValToRGB` 仍可 `nodes.new`；叠加用 `CompositorNodeAlphaOver`，调色用 `CompositorNodeColorBalance` / `CompositorNodeCurveRGB` |
+| `'CyclesMaterialSettings' object has no attribute 'displacement_method'` | 5.2 把它挪到 Material 本体 | `mat.displacement_method = 'BUMP'`（**不是** `mat.cycles.displacement_method`）；透明混合用 `mat.surface_render_method = 'BLENDED'`（枚举只有 `DITHERED`/`BLENDED`） |
+| 控制台每帧刷 `Shadow buffer full (3040 / 2048)`，且 `scene.eevee.shadow_pool_size='4096'` **静默无效** | 阴影池是**枚举**且上限就是 `'2048'`（2 GB） | ① `scene.eevee.shadow_pool_size='2048'`；② 主力是**减投影灯**：`light.use_shadow=False`（点光/面光都算），只留 2–4 盏；③ 大场景再降 `scene.eevee.shadow_resolution_scale`；④ 一行跑完用 `K.light_hygiene(apply=True)`（v2.6 起常驻） |
 
+
+**5.2 合成器最小可跑片段（Fog Glow 泛光；照抄即可）**：
+
+```python
+import bpy
+sc = bpy.context.scene
+ng = bpy.data.node_groups.get("Comp") or bpy.data.node_groups.new("Comp", "CompositorNodeTree")
+sc.compositing_node_group = ng          # 5.0+：不是 sc.node_tree
+ng.nodes.clear()
+ng.interface.new_socket(name="Image", in_out='OUTPUT', socket_type='NodeSocketColor')
+rl = ng.nodes.new('CompositorNodeRLayers')
+gl = ng.nodes.new('CompositorNodeGlare')
+gl.inputs['Type'].default_value = 'Fog Glow'      # MENU 插座，不是 gl.glare_type
+gl.inputs['Quality'].default_value = 'High'
+gl.inputs['Threshold'].default_value = 1.0
+gl.inputs['Size'].default_value = 8.0
+gl.inputs['Strength'].default_value = 0.45
+out = ng.nodes.new('NodeGroupOutput')             # 不是 CompositorNodeComposite
+ng.links.new(rl.outputs['Image'], gl.inputs['Image'])
+ng.links.new(gl.outputs['Image'], out.inputs['Image'])
+sc.render.use_compositing = True
+```
 ### 6.5.7 渲染 / 动画的验收回执
 
 ```text
@@ -1876,7 +1128,7 @@ ffmpeg -start_number 1 -framerate 10 -i seq_%04d.png \
   ⚠ 不确定项：<如实列>
 ```
 
-## 7. 深水参考
+### A.7. 深水参考
 
 需要超出配方的精度时读 `references/modeling-overview.md`（英文原文，含：bpy.ops.mesh 与 bmesh 两套 API 的选择规则、8 种基本体的专业选择、编辑模式工具箱逐条说明、bmesh 精度 API、硬表面 bevel-weight 打法、布尔工具箱、关键修改器、完整 bpy.ops.mesh 速查，以及作者自己标注的未完成项）。
 
@@ -1884,7 +1136,7 @@ ffmpeg -start_number 1 -framerate 10 -i seq_%04d.png \
 
 **`references/multiview-calibration.md`**（本技能自带）：三视图联立标定的可运行脚本（纯标准库，`--selftest` 自检）+ 判据表 + 取点规则 + "怎么知道标定是对的"的自证口径 —— 走 §0.6.1 时读它。
 
-## 8. 来源与许可
+### A.8. 来源与许可
 
 本技能由以下两个 MIT 许可项目的**建模流程部分**融合改写而成，工具调用一律换成本机 `blender_rt_*` 直连链：
 
@@ -1892,169 +1144,3 @@ ffmpeg -start_number 1 -framerate 10 -i seq_%04d.png \
 - **arjun988/blender-skills**（`blender-modeler`）——六步总纲、集合结构、修改器规则、清理清单、MUST / MUST NOT
 
 完整归属与许可见同目录 `NOTICE.md`。上游原版面向 MCP（mcp__blender__*），本版已改写为本机直连工具链。
-
-## 9. 本次更新对照（v2 · 2026-09-25）
-
-来源：一次 500 对象 / 7 agent 的军模项目复盘（skill 命中率约 1/3，失效的全是"载体不匹配"）。
-
-| 反馈 | 落在哪 |
-|---|---|
-| 真正救场的只有"拼件互相插入 5–15mm" | 坑二升级为"全场最高价值"，并写进 §0.5.3 接口表（**v4 已修**成"深度不是常数"，**v6 再修**：连"`1–2×` 特征尺寸"这类固定倍数也撤回 —— 见 §13） |
-| skill 缺"多 Agent 并行建模的分工范式" | **新增 §0.5**（冻结规格 / 写作用域 / 接口表 / 深嵌+复检 / 数值门 / 反模式；**v6 起**"深嵌"改称"隐藏交叠 + 按 spec 复核"） |
-| skill 缺"参考图驱动的形体还原" | **新增 §0.6**（三步标定 / 双证据验收 / 读图三分法） |
-| skill 缺"headless 下慎用 bpy.ops" | **新增坑四** + 配方 3b（bmesh 等价写法）+ 配方 2a/8 的替代写法 |
-| 形体不能靠单张成品图验收 | **新增配方 10** + §6 门⑨ |
-| 配方 2（Bevel+SubSurf）完全没用（分面装甲被圆掉） | **拆成 2a 分面 / 2b 光滑**，决策树同步修正 |
-| 配方 3（编辑模式 ops）没用（headless context 脆） | 配方 3 保留给 GUI，**新增 3b bmesh 版** |
-| 配方 6（Array 沿曲线）没用（**该项目的载体**要精确闭环节距，`FIT_CURVE` 给不了） | 保留装饰性用途，**新增 6b 参数化路径**（当时给的 83 节 / 0.176 节距；**v4 已修**：原实现是恒原点占位、跑不出形状，且误用等弧长口径 —— 见 §11） |
-| 第 6 节清理清单被扩展成自动门 | 升级为 **§6 数值门清单**（10 条判据 + 工具） |
-| 预览图"白对白"、panel 级没法 QC（组员自己改灰材质+单侧强太阳） | **新增坑六**（预览装置的默认光照 / 材质 / 机位纪律） |
-| 法线朝内导致穿模判据整体反号（误报深入 150mm） | **新增坑五**（判据前先验法线 + 装配层统一 recalc） |
-| 插件侧：headless/job 回执"收不回来"、agent 点不亮 GUI | 插件 v0.9.4 修返回通道 + 加 `blender_viewport(op="launch")`（见插件 `CHANGELOG.md`） |
-
-## 10. 本次更新对照（v3 · 2026-09-26 · 实测驱动）
-
-来源：《实测驱动的通道 + Skill 优化方案-2026-09-26》的 **§4 Skill 侧**（P0-4 / P0-5 / P1-3 / P1-5 / P1-4 / P2-3）。
-**只增补方法论层，流程骨架（六步总纲 / 决策树 / 配方编号 / 修改器栈 / 症状表）保持 v2 原样。**
-
-| 条目 | 改了什么 | 落在哪 |
-|---|---|---|
-| P0-4 验收门必跑清单 | "交接前必跑"写成清单 + **可复制的验收回执模板**（含 `.blend` md5）+ 三条硬纪律（单件用 `audit_mesh`、装配才用 `audit_gate`；判据要"红过"才算数；`ok=false` ≠ 通过） | §0.5.5「交接前必跑」、§1 交接步、**§6.1** |
-| P0-5 读图纪律 | 迭代 **420px** / 验收 **900px + 固定机位**；**只在新 hash 时看图**（回执带 hash，相同 hash = 画面没变） | §0.6.3 |
-| P1-3 多视角联合标定 | §0.6.1 扩成**三视联立标定**（逐视最小二乘 + 主点偏移 + 三视互检）；判据 **残差 >2% 或两两比例互差 >3% ⇒ 判"非正交/透视"，退回单视**；配可运行脚本（**v4 已修**：比例互差**不能**判透视，见 §11 #2；脚本判据与 selftest 已重写） | §0.6.1 + **`references/multiview-calibration.md`**（新建） |
-| P1-5 归属 + 可并行性 | **可并行性判据表**（共享对象 / 共享文件 / 共享材质 ⇒ 不可并行）+ `COL_<agent>` 集合与 `dsh.owner` 属性 + `rt_txn mark(objects=...)/revert` **只回滚一个 builder** | §0.5.7 |
-| P1-4 参数化配方 | 5 条高频配方（2a / 4 / 5 / 6b / 9）升级为「**参数块 + 生成脚本**」，接插件**已有**的 `generator_save/run/list/get/diff`；写明"`generator_run` 子进程没有 `K`/`audit_*`"这条实测坑（**v5 已修**：改参不再"必须走内核"，直接调工具即可 —— 见 §12 #1） | §3.0 + 五条配方末尾 |
-| P2-3 六条坑分流 | 法线 / 浮块 / 穿模 接**验收门**；长轴语义 / 收尖压中线 / headless 慎用 ops 写进「**写代码前 checklist**」 | §4.0 |
-
-判据来源（方案 §0 实测）：同一画面连发 5 次 **hash 相同**；560px 单帧 **116,870 B**；本机 420px 单帧 **79,428 B**。
-
-**怎么验**：`git diff --stat` 只应看到 `SKILL.md` / `README.md` 与新增的 `references/multiview-calibration.md`；
-§3 的配方编号 1–10（含 2a/2b/3b/6b）一个没变；把新参考文档里的脚本存成 `multiview_calib.py` 跑 `--selftest` ⇒ `PASS`。
-
-## 11. 本次更新对照（v4 · 2026-09-26 · 纠正被写死的错口径）
-
-来源：实测反馈 —— v3 里几条被当成"通则"的写法**本身是错的**。每条都先用本机 Blender 5.2.2
-headless / 独立进程量过再改（GUI 场景与插件均未改动）。
-
-| # | 原来写的（错） | 改成 | 落在哪 | 实测证据 |
-|---|---|---|---|---|
-| 1 | 拼件**必须**互相插入 **5–15mm** | 嵌入深度按**接口类型与尺度**定（`1–2×` 接口特征尺寸）；5–15mm 只是"特征尺寸 5–30mm"那一档；给接口类型表 + 四条不等式 + `audit_measure` 读法 —— ⚠ **本行已被 v6 取代**：固定倍数 / 下限与 5–30mm 推导全部撤回，见 §13 | 坑二 · §0.5.3 · §0.5.4 · §0.5.5 · §6 门⑧ · §6.1 | 3mm 薄板搭接 **1.5mm 合格**；Ø6 轴 **6mm**；10mm **浮块** `overlap_bbox=true` 但那是缺陷（`audit_measure` 回执，`note: "bbox 级（不是三角级）"`） |
-| 2 | 三视**必须共享同一个 px_per_mm**；"两两比例互差 >3% ⇒ 非正交/透视" | 正交**不推出**共享比例；**跨视互检换算成毫米再比**；`s` 互差只决定"能不能合并成一个联合比例" | §0.6.1 · `references/multiview-calibration.md`（脚本判据重写 + selftest 四例） | 三个正交相机 `ortho_scale` 4/8/2 m：视差探针全 **0.000px**，`px_per_mm` = 0.48/0.24/0.96 → 互差 **300%** |
-| 3 | 跨深度尺寸**公差放宽到 ±5%** | 误差上界 **`err ≈ Δz/(D+Δz)`**；估不出 `D`/`Δz` 记 `unresolved` | §0.6.1 ⑤ · multiview-calibration §5 · SOP §3.2 | D=8m：Δz=0.5m → **−5.88%**；1m → **−11.11%**；3m → **−27.27%**（解析式与实测逐行吻合） |
-| 4 | 照片"必须先做透视校正（求单应），否则尺寸全错" | 单应**只校正取点那个平面**；平面参考放心用，立体物只有该平面准 | §0.6.1 ⑥ · Recipe 18 硬规则① · Recipe 20 硬规则④ · SOP §3.1 | 平面内 **0.000px**；离平面 0.05m → **52mm**；0.2m → **211mm**；0.5m → **543mm** |
-| 5 | 用 IoU 判「像不像」（`target_iou` 当验收） | IoU 是**单视轮廓**的**必要不充分**条件；给盲区表 + 4 条纪律 | §0.6.2 新增小节 · Recipe 17④ · Recipe 18⑤ · Recipe 19③ · SOP §4 · `验收清单.md` 主观门 | 盲区为分析性结论（深度/内部特征/面感不在轮廓里）；刷高方式=填满轮廓 |
-| 6 | 修改器顺序**背下来** `Mirror→Array→Solidify→Bevel→SubSurf→(Boolean)` | **不存在固定链**；按**目标**排（给"目标 → 顺序"表）+ 用求值回执核对 | §5 · `references/modeling-overview.md` | 同一立方体：Bevel→SubSurf **866v/864f, bbox 0.9904** vs SubSurf→Bevel **98v/96f, bbox 0.8395**；平面 Solidify→Bevel **54f** vs Bevel→Solidify **6f** |
-| 7 | 内部面 → Clean Up → **Delete Loose** | `Delete Loose` **一个面都不删**；`select_interior_faces` 对 join 重叠壳也选 0 → Boolean UNION 或射线法找埋面 | **§5.1 新增** · §5 症状表 · `modeling-overview.md` | 场景一 `Removed: 482 vertices, 992 edges, **0 faces**`（内嵌平面仍在）；场景二 `Removed: …, **0 faces**`（面数仍 12）；`select_interior_faces` 选中 **0** |
-| 8 | Recipe 6b：`path(t)` **恒原点**占位、节距用**等弧长**、`bbox 长度轴 ≈ n*pitch`、`expect objects == n` | 改成**真正可运行**的闭合赛道形；区分**等弧长**与**销轴弦长**节距；修正 bbox（`A+2R`）与对象数（`2*(m+n_straight)`，模板须删） | Recipe 6b · §3.0 参数表 · 决策树 · §9 相关行 | 弦长口径 `max|弦长−p|` = **3.3e-06mm**、闭合弦长 **175.999998mm**、对象 **24**；等弧长：弧上弦长 **175.021mm**（每节 −0.979mm，两弧累积 **−11.748mm**，每半圆需 6.0343 步=非整数）；`bbox 最长边 = A+2R = 1.736012m`（旧写法 1.056m，**错 680mm**；`N*p = 4.2240m` ≠ 周长 `4.2483m`） |
-| 9 | 配方数写"10 个" | 实际 **22 个编号**（含 2a/2b/3b/6b 变体），frontmatter `description` 同步 | frontmatter · README | 逐条数 Recipe 1…22 |
-
-**同步范围**：§0.5.3 / §0.5.4 / §0.5.5 / §0.6.1 / §0.6.2 / §5 / §5.1 / §6 / §6.1 与
-`README.md`、`references/{multiview-calibration,参考图通用还原SOP,验收清单,modeling-overview}.md` 全部对齐到新口径；
-重复的表述做了合并（验收门只留一张权威表 + 引用），**流程骨架不动**（六步总纲 / 决策树 / 配方编号 / 症状表结构）。
-
-**怎么验（v4）**：
-1. `python3 multiview_calib.py --selftest` ⇒ 末行 `SELFTEST PASS`（A 联立 / B 视内残差红 / C 分尺度逐视可用 / D 跨视互检红）；
-2. Recipe 6b 脚本按原样在 headless 里跑 ⇒ `N=24`、`max|chord-p| = 3.3e-06mm`、`closure = 176.000mm`、对象数 24、`bbox_x = A+2R`；
-3. `grep -n "5–15mm" SKILL.md` 只剩**纠正性**表述（"不是固定 5–15mm"），没有把 5–15mm 当通则的句子（**v6 复验口径见 §13**）；
-4. `grep -n "Mirror → Array → Solidify" SKILL.md` 只应命中 §5 的**纠正引用**，不应有"背下来"的用法。
-
-## 12. 本次更新对照（v5 · 2026-09-26 · 对齐插件 v0.9.6 与当前配方边界）
-
-来源：并行修复完成后的**技能集成**（只改技能：`SKILL.md` / `README.md` / `references/验收清单.md`；**插件一行未动**）。
-每条都对着**插件 v0.9.6 的真源码/真回执**写，改完在本机 headless 复跑（见"怎么验"）。
-
-| # | 原来写的 | 改成 | 落在哪 | 依据 |
-|---|---|---|---|---|
-| 1 | §3.0「改参复现**只能走 Python 内核**」+ 警告"不要写成 `op="generator_run"` + 嵌套 `args`" | **首选工具直调**：`args` 这一层就是生成器 `PARAMS`；内核写法降为**备选**；**保留旧版迁移说明**（v0.9.5 及更早把 `args` 无条件摊平 ⇒ `generator_run() got an unexpected keyword argument 'n'`、`PARAMS` 变空 `{}` ⇒ 在旧插件上照内核写法或升级） | §3.0（表格 + 两段代码 + 迁移说明）· §10 P1-4 行 · Recipe 6b 末尾 | `generator.py::generator_dispatch`（v0.9.6：`op=="run"` 时 `args` 原样传、绝不摊平）；本会话**直调实测** `verdict=supported` 且 `receipt.PARAMS == args` |
-| 2 | `clean` 只有真/假两种读法 | `audit_mesh` / `audit_scene` 顶层 **`state`（= `verdict`）三态** `pass` / `fail` / `degraded`；`clean` 收紧为"**查完了而且没缺陷**" ⇒ **`clean=false` 有两种成因**（确有缺陷 / 没查完），先读 `state`+`reason`；`degraded` 的处置是**补查** | §0.5.5 回执模板 + 硬纪律 3 · §4.0 坑五行 · §6 表头三态口径 + 门②④ · §6.1 口径 3 · `验收清单.md` | `audit.py`：跳过/抛异常的自交检查、`normals_state=unknown`、超面数上限 ⇒ 逐对象 `state=degraded`；`clean = not bad and state == "pass"` |
-| 3 | `audit_scene` 可以"`clean=true` 即通过" | **默认 `self_intersect=false`**（性能契约）⇒ 无论多干净都 `state=degraded` + `warn`/`hint`；**交付/验收一律传 `self_intersect=true`**；只看"哪几个最脏"的初筛才不开 | §0.5.5 回执模板 · §6.1 新增 ④ 命令 + 开关说明 · §6 门② · `验收清单.md` | `audit_scene` 源码：`elif (not self_intersect) … state = "degraded"` + `hint: "要完整结论请用 self_intersect=true 重跑"` |
-| 4 | 门④"一致朝外（闭合件有符号体积 > 0）" | **逐连通壳**判：`normals_state` ∈ `pass`/`fail`/`unknown`/`n/a` + `normals_shells[]`（逐壳 `state`/`signed_volume`/`nested`）；**合法嵌套空腔**（负体积）标 `nested` 豁免；**聚合 `signed_volume > 0` 不是充分条件**（大正向壳 + 分离的小反向壳会被抵消成正数）；`unknown` **一律不给 pass**（无其它缺陷时 `state=degraded`，有缺陷时 `fail`） | §4.0 坑五行 · 坑五 body（新增五条纪律 + `unknown` 处置表）· §6 门④ · §0.5.5 回执模板 | `audit.py::_shell_normals()`（逐壳体积/闭合/绕向 + AABB 关系 + 射线奇偶确认嵌套）；`SHELL_MAX_FACES=300000` 超限 ⇒ `unknown`；实测：大正向壳(8.0) + 分离小反向壳(−0.125) 聚合 `signed_volume=7.875 > 0` 但 `normals_state=fail`、逐壳 pass/fail 两态 |
-| 5 | Recipe 6b 直接 `bpy.data.objects[TEMPLATE]` —— **空场景必 `KeyError`**，且没人说模板的原点/销轴在哪 | 补 **①–⑤ 模板契约**（原点 = 起点销轴 / 局部 +X = 下一销 / 下一销在 `(+pitch,0,0)` / 销轴 = 局部 +Z / 只有 z 被沿用）+ **从零建可视单节** `build_link_template()`（纯 bmesh，无前置）+ 明确**本配方只解"节距 + 闭合"**（相邻节共面贴合；内/外板交替与销归属不在范围内） | Recipe 6b | headless 原样复跑：空场景可直接执行，`N=24`、`max\|弦长−p\| = 3.3e-06mm`、`closure = 176.000mm`、`bbox_x = A+2R`（与 v4 数字一致） |
-| 6 | "Array **做不到**精确节距闭合"、"写实人脸在零素材下**做不到**"（绝对表述） | 收窄为**当前配方边界**：Array 的短板是 `FIT_CURVE` **沿曲线**的精确弦长节距 + 闭环（**直线等距阵列不受影响**）；写实人脸是"本技能 23 条配方 + 零素材"这条路的边界（有参考照片走 Recipe 20 校正；外部素材/雕刻素材属本技能之外的输入） | 决策树 · Recipe 6 载体判据 · §5 症状表 · Recipe 16 硬规则① · §9 相关行 | 无依据的绝对表述一律降到"本配方口径"；**未新增任何固定数字** |
-| 7 | 自述体量 `68,823 字符 ≈ 23–29k` / 清单 `3,117 字符` | 更新为**编辑后实测的近似值**：SKILL.md **约 81k 字符 / 约 125 KB ≈ 27–34k**、`验收清单.md` **约 4.2k 字符 ≈ 1.4–1.8k** | §0 独立验证段 · `验收清单.md` 头部 | `len()` / `wc -c` 实测 |
-| 8 | Recipe 6b 验收第 4 条"`audit_connectivity` 里履带是**一条连通分量**"；以及"相邻节共面贴合 ⇒ `audit_overlap` 不报" | 按实测改成**链节装配口径表**："不散架"看 `floaters=[]` + **`gate.state`**（顶层没有 `state`）；**分量数是 14 不是 1**（贴而未焊天然多分量）；相邻节 `audit_overlap` **`pair_count=1`**（端面共用的那条边，120mm 真交线段）、`audit_interference` 给 **`unresolved`**（`volume_mm3=0.0`，统计上界 6.33mm³ > 可执行下限 1.0mm³）⇒ 设计接触要白名单化，别拿 `pair_count` 当穿模开关 | Recipe 6b 验收 + "链节装配口径表" · §6 门⑥⑦ · §4.0 浮块/穿模行 · `验收清单.md` 连通与干涉两行 | headless 实测（`audit_connectivity` 14 分量 / `floaters=[]` / `gate.state=pass`；`audit_overlap pair_count=1`、`point_kind="平面求交 + 三角形裁剪（真交线段）"`；`audit_interference verdict="unresolved"`）；源码口径见 `audit.py::audit_connectivity` 的顶层键（无 `state`，有 `gate`） |
-
-> ⚠ **本次刻意不做的事**：① 不改插件（任何 `runtime/*.py`、`src/*`）；② 不新增**无实测依据**的数字 ——
-> 正交/透视公式范围（`Δz/(D+Δz)`、单应跨平面误差）**逐字保留 v4 原值**；
-> **嵌入深度那段（`1–2×` 特征尺寸 / 接口类型表 / 四条不等式）已由 v6 取代并删除**（见 §13），此处不再是现行口径；
-> ③ 不动流程骨架（六步总纲 / 决策树 / 配方编号 1–22 / 症状表结构）。
-
-**怎么验（v5）**：
-1. Recipe 6b 脚本（含新的 `build_link_template()`）在**空场景** headless 里跑 ⇒ 不报 `KeyError`，且
-   `N=24`、`max|chord-p| ≤ 0.001mm`、`closure = 176.000mm`、场景对象数 24（模板已删）、`bbox_x = A+2R`；
-2. `blender_rt_plan(op="audit_mesh", args={objects:[…]})` ⇒ 回执同时有 `state` 与 `verdict`（同值），
-   `clean=true` 只在 `state="pass"` 时出现；`audit_scene` 不传 `self_intersect` ⇒ `state=degraded`，传 `true` ⇒ 可 `pass`；
-   `normals_state=unknown` ⇒ 不给 pass（无其它缺陷 `degraded`、有缺陷 `fail`）；
-3. `blender_rt_plan(op="generator_run", args={"name": …, "args": {…}})` ⇒ `verdict` 三态且 `receipt.PARAMS` 与 `args` 一致（直调，不经内核）；
-4. Recipe 6b 的 24 节跑装配门 ⇒ `audit_mesh` 全 `pass/clean=true`；`audit_connectivity` `floaters=[]` + `gate.state=pass`（**分量数 14**，不是 1）；
-   相邻节 `audit_overlap pair_count=1`（`真交线段`）、`audit_interference verdict="unresolved"`、`volume_mm3=0.0`；
-5. `grep -n "只能走 Python 内核\|干净件有符号体积 > 0\|Array 做不到\|写实人脸在零素材下\|68,823\|3,117"` ⇒ **只应命中 §9–§12 的纠正引用**（规范正文里必须为零）；配方编号 1–22 与 2a/2b/3b/6b 一个不变。
-
-## 13. 本次更新对照（v6 · 2026-09-26 · 撤回"固定倍数 / 下限"通则）
-
-来源：Lead 复查 —— v4/v5 虽然撤掉了 `5–15mm`，却换上"`1–2×` 接口特征尺寸"这条**同样是规范性的固定倍数**，
-而且与示例数字（3mm 板搭接 1.5mm 合格 vs "3mm 板最少 3mm"）自相矛盾。
-本次**只做定点文本修订**（`SKILL.md` / `README.md`）：不重跑几何、不动插件、不动 `references/验收清单.md`、不新增章节骨架。
-
-| # | 原来写的 | 改成 | 落在哪 |
-|---|---|---|---|
-| 1 | 存在"正确的嵌入判据"：`1–2×` / `0.5×板厚` / `≥1.0×轴径` / 四条不等式 / 接口类型建议表 / "5–15mm 只是特征尺寸 5–30mm 那一档" | **删除全部规范性的固定倍数、百分比与下限，以及 5–30mm 的推导解释**；改为：展示拼接可在**不改变可见轮廓、不捅穿薄壳**下选择**隐藏交叠**，交叠量由**本项目 spec 明文**规定、装配后按 spec 复核 | 坑二 ① · §0.5.3 · §0.5.4 · §0.5.5 回执行 · §6 门⑧ |
-| 2 | 数字（Ø6→6mm、3mm 板→1.5mm、"1.5mm 合格"）读起来像通用判据 | 明确标注：**示例数字只是写明它的那份示例 spec 的取值，不是通则**；换尺度 / 材料 / 连接形式就重新由设计定 | 坑二 ③ · §0.5.5 回执行 · §11 #1 行 |
-| 3 | 没写清可视脚本的能力边界 | 写明：**真实连接由设计配合、标准、承载工况、制造工艺与运动间隙规定**；几何脚本只答"叠没叠 / 浮没浮 / 穿没穿"，**不给结构强度结论** | 坑二 ② · §0.5.3 |
-| 4 | `axis_overlap_mm` 只说"取接口法线那根轴" | 补前提：**只有接口法线与世界轴一致、且轴对齐盒对该几何适用时才作粗筛**；**旋转 / 斜置接口必须沿真实接口的局部坐标量测真实表面**，不能挑一根世界轴当深度 | 坑二 ③ · §4.0 分流表 · §6 门⑧ · §0.5.5 回执行 |
-
-**历史口径**：§9 相关行、§11 #1（v4）、§12 尾注（v5）都已就地标注**被 §13 取代**，不留自相矛盾。
-
-**怎么验（v6 · 纯文本一致性检查）**：
-1. `grep -n "1–2×\|5–30mm\|0.5×板厚\|1\.0×轴径\|四条不等式\|接口类型表" SKILL.md README.md`
-   ⇒ **只命中 §11 / §13 的纠正引用与"已取代"标注**；规范正文（坑二 / §0.5.3–0.5.5 / §6）为零；
-2. 坑二的 `axis_overlap_mm` 段必须同时带"**仅当接口法线与世界轴一致且轴对齐盒适用**"这一前提与"**旋转接口沿接口局部坐标量真实表面**"；
-3. `grep -n "embed_mm" SKILL.md README.md` ⇒ **只余本行自身**（§13 的历史引用）；规范正文与 `README.md` 为 0（字段名统一为 `overlap_mm`）；
-4. `grep -n "隐藏交叠" SKILL.md README.md` ⇒ 坑二 / §0.5.3–0.5.5 / §6 门⑧ 齐备；未重跑几何、未动 `references/验收清单.md`、未动插件。
-
-## 14. 本次更新对照（v8 · 2026-10-05 · 内环入口补齐：让 `blender_rt_loop` 从"存在"变成"会被选中"）
-
-来源：复查"为什么建模 AI 从不调用 `blender_rt_loop`"。结论：工具可用（注册 / 路由 / 自测齐备，`stats.loops=0` 只是没人调），
-但**它从未进入模型的选择面** —— ① §0 路由表没有 rt_loop 行（改前全文 `rt_loop` / `内环` 命中数都是 **0**）；
-② 技能把 headless 标成"第一路径"，而无头下 `bpy.app.timers` **不触发**（cookbook §8 实测 0 次）⇒ 内环在推荐路径上物理不可用；
-③ 它自己的工具描述把门槛写成"≥20 次迭代才用"（自我否决）；④ 招牌用途（2D 轮廓拟合）已被 `shape_fit` / `vehicle_fit` 顶掉。
-本次只补**选择面**与**首次调用成本**：不动内环实现、不动插件、不重跑几何。
-
-| # | 原来 | 改成 | 落在哪 |
-|---|---|---|---|
-| 1 | §0「要做的事 → 用哪个工具」表 14 行里没有"参数搜索" | 新增一行：**参数搜索 / 拟合 / 反推尺寸 → `blender_rt_loop`**（含 `K.dsh_measure` 三目标、GUI-only 前提、board→export→换通路复核） | §0 表（`blender_rt_do` 行之后） |
-| 2 | 规范里没有"什么时候该交内环"的判据 | 新增**第四条硬规则**：目标可标量化 + 要试几十~几千组 ⇒ 不许手工拍参数 | §0.7 |
-| 3 | 内环用法只写在插件 README / cookbook 里（模型不读那些） | 新增 **Recipe 24**：可复制 spec（含 setup 里的 `apply(p)` 约定）+ 现成目标函数表 + 5 条纪律 + 不该用它的 3 种场景 | §3 配方（Recipe 23 之后） |
-| 4 | front-matter `description` 不提搜索 | 描述补"参数搜索内环"，配方计数 23 → 24 | front-matter |
-
-**怎么验（v8 · 纯文本检查）**：
-1. `grep -c "rt_loop" SKILL.md` ⇒ ≥ 4（§0 表 / §0.7 硬规则 / Recipe 24 / 本节）；`grep -c "Recipe 24" SKILL.md` ⇒ ≥ 2（§0 表引用 + 配方标题）；
-2. `grep -n "K.dsh_measure" SKILL.md` ⇒ Recipe 24 的目标函数表必须给全 `silhouette_iou` / `aabb_err` / `profile_err` 三条签名；
-3. Recipe 24 必须同时写明：**GUI-only（无头 timers 不触发）**、**board/export**、**收敛后换通路复核**、**场景停在最后一次迭代而非 best**；
-4. 配方编号 1–23 与 2a/2b/3b/6b 变体一个不变（本次只**追加** Recipe 24）；未改插件、未动 `references/验收清单.md`、未重跑几何。
-
----
-
-**补记（同日 · 插件 v1.0.3）**：插件侧新增声明式入口 `blender_rt_plan(op="shape_search", args={objective, params, apply, …})` ——
-把 Recipe 24 的三段手写代码换成「目标 + 区间」，内部跑同一条内环（同样只在 GUI 会话有效、同样过写租约）。
-本节路由行与 Recipe 24 已给出两种写法的分工；`dry_run=true` 只校验并回 spec（不需要 Blender 连着）。
-
-## 15. 本次更新对照（v9 · 2026-10-09 · S0 草稿评估：评估阶段不再量精确尺寸、不再数 mesh）
-
-来源：用户口径 —— **评估阶段一上来就量精确尺寸、统计 mesh 数量**，等于在还没有参考图的时候把编出来的数字当成规格；
-这一步本该只是"**在脑子里打草稿**"：认清是什么 / 大概多大 / 拆成几块 / 谁是主体谁是配件 / 哪块硬表面哪块曲面 /
-哪里镂空·凸起·凹陷，**后续返回图片时再慢慢完善**。
-
-| # | 原来 | 改成 | 落在哪 |
-|---|---|---|---|
-| 1 | 第一步直接是 `shape_plan(object_class=…)`，接着 `img_rectify` / `shape_sections` 量包络、过比例门 | **第一步先 S0 草稿**：`shape_draft` 出制作表格（是什么 / 量级档 A–F / 几块 / 主体配件 / 什么形 / 哪凸哪凹），填好 `shape_draft_check` 机械校验；**拿到图之后**再 `shape_plan` 拿 `section_path` | §0.5.0（新增）· §0.7 决策树 recon 行 · SOP ⓪ 步 |
-| 2 | 没有"草稿期禁止项" | 三条硬规则：**R1 不量精确尺寸**（尺寸只能是 A–F 档或 `0.3×` 这类相对比例；出现 mm/cm 即拒收）· **R2 不数 mesh**（禁调 `audit_scene` / `audit_mesh` / `print_report`）· **R3 不定死**（每字段 `confidence` + `source`，判不出写 `unknown`，每件必带 `to_confirm`） | §0.5.0 · SOP §1.1 |
-| 3 | 草稿与规格不分层 | 明确：**草稿不是规格** —— `spec.py` 只许写 S2 标定之后的实测数字；S0 档位只用于**选路**（截面通路 / 配方 / 分工） | §0.5.1 提示行 · SOP §5 |
-| 4 | 四张表没有落地字段 | T1 识别与量级 / T2 制作单元 / T3 形态 / T4 空间特征 的字段、枚举与 `to_confirm` 由插件 `shape_draft` 直接给；`shape_draft_check` 机械校验（含"偷偷写 mm"检测） | 插件 `shape_draft` / `shape_draft_check`（`SHAPE_VERSION` 1 → 2） |
-| 5 | SOP 是"八步" | 改为**九步**（新增 ⓪ 草稿评估），并补 §1.1 四张表与 §5「草稿 → 数字」的迭代纪律 | `references/参考图通用还原SOP.md` |
-
-**怎么验（v9）**：
-1. `blender_rt_plan(op="shape_selftest")` ⇒ `evidence.draft` = `{tables: T1–T4 四张, check_good: true, check_mm_rejected: true}`；
-2. `blender_rt_plan(op="shape_draft_check", args={record:…})` 对带 `"450mm"` 的表必须回 `ok=false` + R1 违规；
-3. `grep -c "shape_draft"` 在 `SKILL.md` 与 `references/参考图通用还原SOP.md` 都 ≥ 3（§/⓪ 步 / 决策树 / 硬规则 / 对照节）；
-4. 插件侧 `npm test` 全绿；本次**未重跑几何、未动 `references/验收清单.md`**（它管的是交接前的数值门，S0 门是表自校验）。

@@ -27,6 +27,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CFG, PATHS, winToWsl, wslToWin, describeConfig, IS_WIN, IS_MAC, IS_WSL, PKG_ROOT, wslPathShared } from './config.mjs';
 // 协议：v2.3 起只支持本仓 addon 的扁平协议（旧 MCP for Blender / category-action 支持已删除）。
 import { resolveProtocol, detectProtocol, resetProtocolCache } from './addon-protocol.mjs';
+// v2.6（本轮反馈 #1）：pid 没了 ≠ 任务失败 —— 先用磁盘证据对账再判 stale
+import { reconcileLedger as reconcileLedgerFromDisk } from './recover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -108,6 +110,58 @@ export const KERNEL_BOOTSTRAP = [
   '        raise AttributeError(_name)',
   '    K.__getattr__ = _dsh_kernel_getattr',
   'import bpy, math, mathutils',
+  // ---- v2.6（本轮反馈 #3/#7）：多灯卫生 + 对象归属路由（任何通道都在）----
+  'def _dsh_light_hygiene(apply=False, max_shadow=4):',
+  '    import json as _j, bpy as _b',
+  '    lights = [o for o in _b.data.objects if o.type == "LIGHT"]',
+  '    rows = [{"name": o.name, "type": o.data.type, "energy": round(float(o.data.energy), 3), "shadow": bool(o.data.use_shadow)} for o in lights]',
+  '    res = {"lights": len(rows), "shadow_casters_before": sum(1 for r in rows if r["shadow"]), "by_type": {}, "max_shadow": int(max_shadow)}',
+  '    for r in rows:',
+  '        res["by_type"][r["type"]] = res["by_type"].get(r["type"], 0) + 1',
+  '    pool = None',
+  '    try:',
+  '        pool = str(_b.context.scene.eevee.shadow_pool_size)',
+  '    except Exception:',
+  '        pass',
+  '    res["shadow_pool_size"] = pool',
+  '    if apply:',
+  '        keep = 0',
+  '        for o in sorted(lights, key=lambda x: -float(x.data.energy)):',
+  '            if o.data.type in {"POINT", "SPOT"}:',
+  '                if keep < int(max_shadow):',
+  '                    keep += 1',
+  '                else:',
+  '                    o.data.use_shadow = False',
+  '        try:',
+  '            _b.context.scene.eevee.shadow_pool_size = "2048"',
+  '        except Exception:',
+  '            pass',
+  '        res["shadow_casters_after"] = sum(1 for o in lights if o.data.use_shadow)',
+  '        res["shadow_pool_size"] = getattr(_b.context.scene.eevee, "shadow_pool_size", pool)',
+  '    res["hint"] = "EEVEE 阴影池上限 2048 MB（枚举，写 4096 无效）。亮灯多的场景请 apply=True：只保留能量最高的 max_shadow 盏点/聚光灯投影，其余 use_shadow=False。"',
+  '    print("LIGHT_HYGIENE " + _j.dumps(res, ensure_ascii=False))',
+  '    return res',
+  'K.light_hygiene = _dsh_light_hygiene',
+  'def _dsh_route_collections(rules=None, apply=True):',
+  '    import json as _j, bpy as _b',
+  '    DEFAULT = [("LGT-", "COL_Lights"), ("LIGHT-", "COL_Lights"), ("CAM-", "COL_Camera"),',
+  '               ("GEO-VFX-", "COL_VFX"), ("GEO-CITY-", "COL_City"), ("GEO-GZ-", "COL_Godzilla")]',
+  '    rules = rules or DEFAULT',
+  '    moved = []',
+  '    for ob in list(_b.data.objects):',
+  '        for pref, cname in rules:',
+  '            if ob.name.startswith(pref):',
+  '                coll = _b.data.collections.get(cname) or _b.data.collections.new(cname)',
+  '                if coll.name not in [c.name for c in ob.users_collection]:',
+  '                    for c in list(ob.users_collection):',
+  '                        c.objects.unlink(ob)',
+  '                    coll.objects.link(ob)',
+  '                    moved.append({"object": ob.name, "collection": coll.name})',
+  '                break',
+  '    res = {"moved": moved, "count": len(moved), "rules": [list(r) for r in rules]}',
+  '    print("ROUTE_COLLECTIONS " + _j.dumps(res, ensure_ascii=False))',
+  '    return res',
+  'K.route_collections = _dsh_route_collections',
   'Vector = mathutils.Vector',
   '# ---- 路径辅助（v0.7.0）：GUI 与无头两侧都能用，省掉手拼 UNC 与 chr(92)\n' + PATH_HELPERS,
   '# ---- 共享内核 kit（唯一实现）：**按需执行** ----',
@@ -139,7 +193,7 @@ export const KERNEL_BOOTSTRAP = [
  */
 // S3：目录（数据 + 目录逻辑）外移到 catalog.mjs；此处导入并**重导出公开面**，对外面逐字节不变
 // S3-b：路径与常量外移到 paths.mjs；具名导入 + 重导出，对外面不变
-import { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER, KIT_SRC, KIT_HASH, GEO_SRC, blenderJoin, PIPELINE_PATH } from './paths.mjs';
+import { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER, KIT_SRC, KIT_HASH, GEO_SRC, blenderJoin, PIPELINE_PATH, ASSEMBLY_PATH, BLOCKOUT_PATH, VISUALREPORT_PATH, SHAPESOLVE_PATH, EVALHARNESS_PATH } from './paths.mjs';
 // S8：无头脚本暂存移到 staging.mjs；具名导入 + 重导出，导出面不变
 import { writeHeadlessScript } from './staging.mjs';
 // workdirStagingWarning 也在这个模块里（搬移时一并带过去了）；readJsonSafe 仍是 engine 本地（不进导出面）
@@ -148,7 +202,7 @@ import { baseChildEnv, withWslEnv, workdirStagingWarning } from './proc_env.mjs'
 // 在 addon 通道的 send 包装里记「在飞命令」与「场景变更」，并把捕获结果交给 store。
 // 目录面（15 工具 / 186 op）**不动** —— 宿主集成是用户侧能力，不进 op 目录。
 export { writeHeadlessScript };
-export { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER };
+export { ADDRESS, WIN_TMP, WSL_TMP, LIVE_PNG_WIN, LIVE_PNG_WSL, KIT_PATH, RUNNER_PATH, PERF_PATH, VIEW_PATH, CONTRACT_PATH, PLANNER_PATH, WORKER_PATH, TXN_PATH, QC_PATH, QC_RENDER_PATH, PRESET_PATH, AUDIT_PATH, MONTAGE_PATH, MOTION_PATH, DELIVER_PATH, GENERATOR_PATH, SCULPT_PATH, FIX_PATH, UV_PATH, PRINT_PATH, SWEEP_PATH, MATERIAL_PATH, RENDER_GUARD_PATH, GATE_PATH, IMG_PATH, CALIB_PATH, FACE_PATH, HUMAN_PATH, CLEARANCE_PATH, VEHICLE_PATH, SHAPE_PATH, USER_CONFIG_WIN, USER_SCRIPTS_WIN, GPU_PRELUDE, VIEW_PNG_WIN, VIEW_PNG_WSL, BLENDER_EXE, PATH_HELPERS, ACT_WRAPPER, ASSEMBLY_PATH, BLOCKOUT_PATH, VISUALREPORT_PATH, SHAPESOLVE_PATH, EVALHARNESS_PATH };
 
 import { PLAN_CATALOG, TOOL_DETAIL, PLAN_TOOL_MAP, planOpNames, planOpSuggestion, planOpCrossChannelHint, catalogFingerprint, PLAN_READ_ONLY_OPS, PLAN_READ_ONLY, renderFamilyText, planEditDistance, name0StartsWith, probeDiskCatalog, COMMAND_CATALOG } from './catalog.mjs';
 export { PLAN_CATALOG, TOOL_DETAIL, PLAN_TOOL_MAP, planOpNames, planOpSuggestion, planOpCrossChannelHint, catalogFingerprint, PLAN_READ_ONLY_OPS, PLAN_READ_ONLY };
@@ -190,13 +244,15 @@ export function catalogPayload(opts) {
   const L = [];
   L.push('plan 通道目录：' + PLAN_CATALOG.length + ' 个 family / ' + planOpNames().length + ' 个 op。'
     + '先按"我要干什么"选 family，再照"骨架"填 args；参数名写错会报"不认识的参数"。');
-  L.push('按建模类型查：args={classes:true}（' + MODELING_CLASS_GUIDE.length + ' 类）· args={class:"x"} 单类 · 派子代理 args={handoff:true}。');
+  L.push('按建模类型查：args={classes:true}（' + MODELING_CLASS_GUIDE.length + ' 类）· args={class:"x"} 单类 · 派子代理 args={handoff:true}。'
+    + '不覆盖（别在这找工具）：生物/有机造型、电影级布光/体积/合成、角色动画绑定。');
   L.push('');
   for (const e of PLAN_CATALOG) {
     L.push('· ' + e.f + (e.prefix ? '（' + e.prefix + '*）' : '') + '：' + e.when);
     L.push('    ops: ' + e.ops.join(' '));
-    // 默认页是「一页索引」：骨架封顶 160 字符；完整骨架在 args={family:…} 与 handoff 块里
-    if (e.sk) L.push('    骨架: ' + (e.sk.length > 160 ? e.sk.slice(0, 160) + '…（完整见 args={family:…}）' : e.sk));
+    // 默认页是「一页索引」：骨架封顶 90 字符（v2.6 P0：family 从 28→30，保持默认目录 ≤9600 字符）；
+    // 完整骨架在 args={family:…} 与 handoff 块里。
+    if (e.sk) L.push('    骨架: ' + (e.sk.length > 90 ? e.sk.slice(0, 90) + '…（完整见 args={family:…}）' : e.sk));
     // S6 起 not 里带了『；**别…**』硬警告（可操作那句）—— 默认页只显示它，
     // 完整 not 在 args={family:…} 与 handoff 块里；这样一页索引仍能保持短。
     const _not = String(e.not || '');
@@ -367,7 +423,17 @@ function envPrelude(envPairs) {
     'except Exception:',
     '    def _dsh_stage_emit(name, **extra):',
     '        pass',
-    'dsh_stage = _dsh_stage_emit',
+        'try:',
+    '    def _dsh_progress_emit(**fields):',
+    '        _dp = {"t": round(_time_pre.time(), 3), "run": _os_pre.environ.get("DSH_RUN_ID")}',
+    '        _dp.update({str(k): v for k, v in fields.items()})',
+    '        print("DSH_PROGRESS " + _json_pre.dumps(_dp, ensure_ascii=False), flush=True)',
+    '        return _dp',
+    'except Exception:',
+    '    def _dsh_progress_emit(**fields):',
+    '        pass',
+    'dsh_progress = _dsh_progress_emit',
+'dsh_stage = _dsh_stage_emit',
     '_dsh_stage_emit("boot")'].join('\n');
 }
 
@@ -454,6 +520,23 @@ function md5File(p, limit) {
  * 引擎侧在 stdout 流里抓最后一条写进 runRec.stage / job.stage，op=status 直接可读。
  */
 const STAGE_TAG = 'DSH_STAGE ';
+/** v2.6（本轮反馈 #4）：进度通道 —— 脚本侧 dsh_progress(...) / K.progress(...) 打 DSH_PROGRESS {json}，
+ *  op=status/collect 直接能读到最后一条（渲染逐帧 / 批处理逐件 / 下载百分比）。
+ *  和 stage 的区别：stage 是"阶段跃迁"（少量），progress 是"阶段内进度"（高频、可覆盖、留最近 20 条）。 */
+const PROGRESS_TAG = 'DSH_PROGRESS ';
+function scanProgressLine(line, rec, now) {
+  if (line.indexOf(PROGRESS_TAG) !== 0) return false;
+  try {
+    const o = JSON.parse(line.slice(PROGRESS_TAG.length).trim());
+    rec.progress = o; rec.progressAt = now;
+    rec.progressHistory = (rec.progressHistory || []).concat([{ at: now, p: o }]).slice(-20);
+    if (o && o.name) { rec.stageName = String(o.name); rec.stageAt = now; }
+  } catch (e) {
+    rec.progress = { raw: line.slice(0, 200), parse_error: String((e && e.message) || e) };
+    rec.progressAt = now;
+  }
+  return true;
+}
 function scanStageLine(line, rec, now) {
   if (line.indexOf(STAGE_TAG) !== 0) return false;
   try {
@@ -477,8 +560,35 @@ function makeStageScanner(rec) {
     tail = lines.pop() || '';
     if (tail.length > 8192) tail = tail.slice(-2048);
     rec.lines = (rec.lines || 0) + lines.length;
-    for (const l of lines) { const s = l.replace(/\r$/, ''); if (s.indexOf(STAGE_TAG) === 0) scanStageLine(s, rec, now); }
+    for (const l of lines) {
+      const s = l.replace(/\r$/, '');
+      if (s.indexOf(STAGE_TAG) === 0) scanStageLine(s, rec, now);
+      else if (s.indexOf(PROGRESS_TAG) === 0) scanProgressLine(s, rec, now);
+    }
   };
+}
+/**
+ * v2.6（本轮反馈 #4）：运行心跳 —— 每 5s 更新 rec.heartbeat（并可选 append 到 <dir>/heartbeat.jsonl）。
+ * 现场问题：一帧 EEVEE 渲染 2–3 分钟，op=status 只有 stage/idleMs 两个数字，看不出"到第几帧 / 写到多少字节"。
+ * heartbeat 给：elapsedMs / logBytes / lines / stage / lastProgressAt —— 够判断"它在动还是在卡"。
+ */
+function startHeartbeat(rec, dirWsl) {
+  const tick = () => {
+    try {
+      let bytes = 0;
+      if (rec.logs && rec.logs.stdoutWsl) { try { bytes = fs.statSync(rec.logs.stdoutWsl).size } catch (e) {} }
+      if (!bytes && rec.dir) { try { bytes = fs.statSync(path.join(rec.dir, 'stdout.log')).size } catch (e) {} }
+      const hb = { at: Date.now(), elapsedMs: Date.now() - rec.startedAt, logBytes: bytes,
+                   lines: rec.lines || 0, stage: rec.stageName || null,
+                   progressAt: rec.progressAt || null,
+                   progressAgeMs: rec.progressAt ? (Date.now() - rec.progressAt) : null };
+      rec.heartbeat = hb;
+      if (dirWsl) { try { fs.appendFileSync(path.join(dirWsl, 'heartbeat.jsonl'), JSON.stringify(hb) + String.fromCharCode(10), 'utf8') } catch (e) {} }
+    } catch (e) { /* 心跳绝不能把任务搞挂 */ }
+  };
+  const t = setInterval(tick, 5000);
+  if (t.unref) t.unref();
+  return () => { try { clearInterval(t) } catch (e) {} };
 }
 /** pid 是否还活着（D6.3：状态与实际进程对账）—— 无权限也算活着（EPERM） */
 function pidAlive(pid) {
@@ -751,7 +861,10 @@ export function createEngine(opts = {}) {
                         UV_READY: 'dsh_uv_api', PRINT_READY: 'dsh_print_api',
                         SWEEP_READY: 'dsh_sweep_api',
                         MATERIAL_READY: 'dsh_material_api', RENDER_GUARD_READY: 'dsh_render_guard',
-                        GATE_READY: 'dsh_gate_api', IMG_READY: 'dsh_img_api', CALIB_READY: 'dsh_calib_api', FACE_READY: 'dsh_face_api', HUMAN_READY: 'dsh_human_api', CLEARANCE_READY: 'dsh_clearance_api', VEHICLE_READY: 'dsh_vehicle_api', SHAPE_READY: 'dsh_shape_api', PIPELINE_READY: 'dsh_pipe_api' };
+                        GATE_READY: 'dsh_gate_api', IMG_READY: 'dsh_img_api', CALIB_READY: 'dsh_calib_api', FACE_READY: 'dsh_face_api', HUMAN_READY: 'dsh_human_api', CLEARANCE_READY: 'dsh_clearance_api', VEHICLE_READY: 'dsh_vehicle_api', SHAPE_READY: 'dsh_shape_api', PIPELINE_READY: 'dsh_pipe_api',
+                        ASSEMBLY_READY: 'dsh_assembly_api', BLOCKOUT_READY: 'dsh_blockout_api',
+                        VISUALREPORT_READY: 'dsh_visualreport_api', SHAPESOLVE_READY: 'dsh_shapesolve_api',
+                        EVALHARNESS_READY: 'dsh_evalharness_api' };
   /** 读 runtime 下的 python 模块源码（preload / 作业脚本拼接用） */
   const readModuleSource = (name) => fs.readFileSync(path.join(HERE, String(name).replace(/\.py$/, '') + '.py'), 'utf8');
   /**
@@ -851,6 +964,11 @@ export function createEngine(opts = {}) {
   const ensureImg = () => injectModule(needFile(IMG_PATH, 'imgtools'), 'IMG_READY', 'IMG_VERSION');
   // human_spec 要用 imgtools 量参考图 ⇒ 链路里带上
   const ensurePipeline = () => injectModule(needFile(PIPELINE_PATH, 'pipeline'), 'PIPELINE_READY', 'PIPE_VERSION');
+  const ensureAssembly = () => injectModule(needFile(ASSEMBLY_PATH, 'assembly'), 'ASSEMBLY_READY', 'ASSEMBLY_VERSION');
+  const ensureBlockout = () => injectModule(needFile(BLOCKOUT_PATH, 'blockout'), 'BLOCKOUT_READY', 'BLOCKOUT_VERSION');
+  const ensureVisualReport = () => injectModule(needFile(VISUALREPORT_PATH, 'visualreport'), 'VISUALREPORT_READY', 'VISUALREPORT_VERSION');
+  const ensureShapesolve = () => injectModule(needFile(SHAPESOLVE_PATH, 'shapesolve'), 'SHAPESOLVE_READY', 'SHAPESOLVE_VERSION');
+  const ensureEvalharness = () => injectModule(needFile(EVALHARNESS_PATH, 'evalharness'), 'EVALHARNESS_READY', 'EVALHARNESS_VERSION');
   const ensureShape = async () => { await ensureVehicle();
     return injectModule(needFile(SHAPE_PATH, 'shapegen'), 'SHAPE_READY', 'SHAPE_VERSION'); };
   const ensureClearance = () => injectModule(needFile(CLEARANCE_PATH, 'clearance'), 'CLEARANCE_READY', 'CLEAR_VERSION');
@@ -861,7 +979,7 @@ export function createEngine(opts = {}) {
   const ensureFace = () => injectModule(needFile(FACE_PATH, 'faceeval'), 'FACE_READY', 'FACE_VERSION');
   const ensureCalib = async () => { await ensureGate(); return injectModule(needFile(CALIB_PATH, 'calib'), 'CALIB_READY', 'CALIB_VERSION'); };
   const ensureGate = async () => {
-    for (const f of [ensureAudit, ensurePrint, ensureUv, ensureMaterial, ensureFix, ensureHuman]) {
+    for (const f of [ensureAudit, ensurePrint, ensureUv, ensureMaterial, ensureFix, ensureHuman, ensureAssembly]) {
       try { await f(); } catch (e) { /* 某个模块注入失败不该拦下整包：gate 会按门报"该门需要模块 X" */ }
     }
     return injectModule(needFile(GATE_PATH, 'gate'), 'GATE_READY', 'GATE_VERSION');
@@ -1357,6 +1475,13 @@ export function createEngine(opts = {}) {
         + JSON.stringify(JSON.stringify(payload || {})) + '))))';
       return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 300000));
     }
+    if (o === 'audit_clash_all' || o.indexOf('audit_clash_all_') === 0) {
+      // P0：全对全分类扫描 —— 旧名 audit_clash_all 作为 asm_scan 的别名（不改变 audit_* 语义）
+      await ensureAssembly();
+      const body = 'print("LOOP " + K.dsh_assembly_api["dispatch"]("scan", _json.dumps(_json.loads('
+        + JSON.stringify(JSON.stringify(payload || {})) + '))))';
+      return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 900000));
+    }
     if (o.indexOf('audit_') === 0) {
       // v0.9.0：网格体检接通。此前 audit.py 只在 preload 通道可达，docs 里文档化的
       // blender_rt_plan(op="audit_mesh") 会掉进契约层报 unknown contract op。
@@ -1416,6 +1541,11 @@ export function createEngine(opts = {}) {
       { p: 'vehicle_', n: 8, ensure: ensureVehicle, api: 'dsh_vehicle_api', ms: 900000 },
       { p: 'shape_', n: 6, ensure: ensureShape, api: 'dsh_shape_api', ms: 900000 },
       { p: 'pipe_', n: 5, ensure: ensurePipeline, api: 'dsh_pipe_api', ms: 600000 },
+      { p: 'asm_', n: 4, ensure: ensureAssembly, api: 'dsh_assembly_api', ms: 900000 },
+      { p: 'blockout_', n: 9, ensure: ensureBlockout, api: 'dsh_blockout_api', ms: 900000 },
+      { p: 'visualreport_', n: 13, ensure: ensureVisualReport, api: 'dsh_visualreport_api', ms: 600000 },
+      { p: 'shapesolve_', n: 11, ensure: ensureShapesolve, api: 'dsh_shapesolve_api', ms: 900000 },
+      { p: 'eval_', n: 5, ensure: ensureEvalharness, api: 'dsh_evalharness_api', ms: 900000 },
       { p: 'calib_', n: 6, ensure: ensureCalib, api: 'dsh_calib_api', ms: 1800000 },
       { p: 'material_', n: 9, ensure: ensureMaterial, api: 'dsh_material_api', ms: 900000 },
       { p: 'sculpt_', n: 7, ensure: ensureSculpt, api: 'dsh_sculpt_api', ms: 900000 },
@@ -1424,6 +1554,36 @@ export function createEngine(opts = {}) {
       { p: 'print_', n: 6, ensure: ensurePrint, api: 'dsh_print_api', ms: 900000 },
       { p: 'sweep_', n: 6, ensure: ensureSweep, api: 'dsh_sweep_api', ms: 300000 },
     ];
+    // P0/P1 别名：用户方案里的名字 → 模块正式 op（不新增 family；必须在 fix_/shape_ 前缀路由之前）
+    if (o === 'fix_clash' || o === 'fix_interference') {
+      await ensureAssembly();
+      const sub = (o === 'fix_clash') ? 'repair' : 'fix_interference';
+      const body = 'print("LOOP " + K.dsh_assembly_api["dispatch"](' + JSON.stringify(sub) + ', _json.dumps(_json.loads('
+        + JSON.stringify(JSON.stringify(payload || {})) + '))))';
+      return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 900000));
+    }
+    // P1 别名：用户方案里的名字 → 模块正式 op（不新增 family）
+    if (o === 'qc_visual_report') {
+      await ensureVisualReport();
+      const body = 'print("LOOP " + K.dsh_visualreport_api["dispatch"]("report", _json.dumps(_json.loads('
+        + JSON.stringify(JSON.stringify(payload || {})) + '))))';
+      return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 600000));
+    }
+    if (o === 'shape_solve') {
+      await ensureShapesolve();
+      const body = 'print("LOOP " + K.dsh_shapesolve_api["dispatch"]("solve", _json.dumps(_json.loads('
+        + JSON.stringify(JSON.stringify(payload || {})) + '))))';
+      return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 900000));
+    }
+    // P0：弱模型 flow op 别名 —— model_* 直接映射到 gate 的 preflight/checkpoint/deliver
+    // （不新增 family；catalog 里以 gate_* 为正式名，别名只做通道兼容）
+    if (o === 'model_preflight' || o === 'model_checkpoint' || o === 'model_deliver') {
+      await ensureGate();
+      const sub = o.slice('model_'.length);
+      const body = 'print("LOOP " + K.dsh_gate_api["dispatch"](' + JSON.stringify(sub) + ', _json.dumps(_json.loads('
+        + JSON.stringify(JSON.stringify(payload || {})) + '))))';
+      return extractLoop(await addon.send('execute_code', { code: KERNEL_BOOTSTRAP + '\nimport json as _json\n' + body }, 1800000));
+    }
     for (const ext of EXT_ROUTES) {
       if (o.indexOf(ext.p) === 0) {
         await ext.ensure();
@@ -1532,7 +1692,10 @@ export function createEngine(opts = {}) {
              resultPath: j.resultPath || null, resultPathWsl: j.resultPathWsl || null,
              resultBytes: j.resultBytes || 0, resultTruncated: !!j.resultTruncated,
              stdoutTail: j.stdoutTail || null, stderrTail: j.stderrTail || null,
-             pathWarnings: j.pathWarnings || [], shots: j.shots || null,
+             pathWarnings: j.pathWarnings || [], warnings: j.warnings || j.pathWarnings || [], shots: j.shots || null,
+             progress: j.progress || null, progressAt: j.progressAt || null,
+             progressAgeMs: j.progressAt ? (now - j.progressAt) : null,
+             heartbeat: j.heartbeat || null, progressHistory: j.progressHistory || [],
              scriptStaging: j.scriptStaging || null,
              inputFile: j.inputFile || null, scriptFile: j.scriptFile || null,
              lastException: j.lastException || null,
@@ -1638,10 +1801,12 @@ export function createEngine(opts = {}) {
     child.stdout.pipe(so); child.stderr.pipe(se);
     jobs.set(id, j); if (jobs.size > 20) { const k = jobs.keys().next().value; if (k !== id) jobs.delete(k); }
     ledgerAppend({ id: id, kind: 'job', status: 'running', startedAt: j.startedAt, pid: j.pid, script: sp.win,
-                   runId: runId, outdir: outdirWin, engine: engineMode, timeoutMs: timeoutMs, stage: null });
+                   runId: runId, outdir: outdirWin, engine: engineMode, timeoutMs: timeoutMs, stage: null,
+                   dir: wslToWin(dir), stdoutLog: wslToWin(outPath), stderrLog: wslToWin(errPath) });
     j.timer = setTimeout(() => { j.status = 'killed'; try { child.kill('SIGKILL'); } catch (e) {} }, timeoutMs);
+    const stopHb = startHeartbeat(j, dir);
     child.on('close', (code, sig) => {
-      clearTimeout(j.timer); j.exitCode = code; j.signal = sig; j.finishedAt = Date.now();
+      clearTimeout(j.timer); stopHb(); j.exitCode = code; j.signal = sig; j.finishedAt = Date.now();
       if (j.status !== 'killed') j.status = (code === 0) ? 'done' : 'failed';
       try {
         const txt = fs.readFileSync(outPath, 'utf8');
@@ -1656,6 +1821,7 @@ export function createEngine(opts = {}) {
         if (sl.length) { try { j.shots = JSON.parse(sl[sl.length - 1].slice('DSH_SHOTS '.length).trim()); } catch (e) { /* ignore */ } }
         j.stdoutTail = txt.length > 4000 ? txt.slice(-4000) : txt;
         j.pathWarnings = pathAudit(txt, '');
+        j.warnings = (j.pathWarnings || []).concat(sceneHygieneAudit(txt, ''));
       } catch (e) { /* ignore */ }
       try {
         const er = fs.readFileSync(errPath, 'utf8');
@@ -1774,7 +1940,10 @@ export function createEngine(opts = {}) {
              resultPath: r.resultPath || null, resultPathWsl: r.resultPathWsl || null,
              resultBytes: r.resultBytes || 0, resultTruncated: !!r.resultTruncated,
              stdoutTail: r.stdoutTail || null, stderrTail: r.stderrTail || null,
-             pathWarnings: r.pathWarnings || [], shots: r.shots || null,
+             pathWarnings: r.pathWarnings || [], warnings: r.warnings || r.pathWarnings || [], shots: r.shots || null,
+             progress: r.progress || null, progressAt: r.progressAt || null,
+             progressAgeMs: r.progressAt ? (now - r.progressAt) : null,
+             heartbeat: r.heartbeat || null, progressHistory: r.progressHistory || [],
              inputFile: r.inputFile || null,
              artifacts: (r.artifacts || []).map((n) => (typeof n === 'string' ? { name: n } : n)),
              artifactCount: (r.artifacts || []).length,
@@ -1782,15 +1951,19 @@ export function createEngine(opts = {}) {
              hint: '这是 blender_rt_headless 的运行台账（run 与 job 同一 id 空间）：产物在 outdir，日志见 logs；'
                  + '结果在 resultJson / resultPath（运行中则用 stage / idleMs 看进展）' };
   }
-  /** 磁盘台账记录（后端重启后的历史）：running 但 pid 已不存在 → 收敛成 stale，不再谎报 running（D6.3） */
+  /**
+   * 磁盘台账记录（后端重启后的历史）：running 但 pid 已不存在时的收敛。
+   *
+   * v2.6（本轮反馈 #1）：旧版一律判 stale —— 但实测两次「子进程其实已经跑完、产物/日志都在」，
+   * 调用方要自己 Get-Process + ls 破案，每次至少赔一轮往返。现在先做磁盘对账：
+   *   summary.json / resultPath / stdout 终态（DSH_STAGE done、HEADLESS、Traceback）
+   * 对得上 ⇒ status=done|failed + recovered=true（证据在 recoveredFrom/recoveredEvidence）；
+   * 对不上才判 stale，并把 evidence（日志大小/lastStage）附回去。
+   * 纯逻辑在 runtime/recover.mjs，可脱离 Blender 单测（tests/ledger_recover_selftest.mjs）。
+   */
   function reconcileLedger(rec) {
     if (!rec || rec.status !== 'running') return rec;
-    if (rec.pid && pidAlive(rec.pid)) return rec;
-    return Object.assign({}, rec, { status: 'stale', wasStatus: 'running', pidAlive: false,
-      staleReason: rec.pid ? ('pid ' + rec.pid + ' 已不存在（进程被外部杀掉，或后端重启后丢了句柄）')
-                           : '台账里没有 pid（后端重启前只记了 running）',
-      hint: '这条只是**磁盘台账**里的历史记录（内存句柄已丢）。要确认进程是否还在：PowerShell Get-Process blender；'
-          + '要清孤儿进程：Stop-Process。新作业用 op=kill 收。' });
+    return reconcileLedgerFromDisk(rec, { winToWsl: winToWsl, wslToWin: wslToWin }, pidAlive);
   }
   function jobStatus(id) {
     const key = String(id);
@@ -1932,7 +2105,9 @@ export function createEngine(opts = {}) {
   function workerAlive(w) { return !!(w && w.child && w.child.exitCode === null && !w.child.signalCode); }
   function workerSnapshot(w) {
     return { name: w.name, alive: workerAlive(w), ready: w.ready, pid: w.pid, port: w.port,
-             uptimeMs: w.startedAt ? Date.now() - w.startedAt : null, gpu: w.gpu,
+             uptimeMs: w.startedAt ? Date.now() - w.startedAt : null,
+             idleMs: w.lastUsed ? Date.now() - w.lastUsed : null,
+             gpu: w.gpu, boot: w.boot || null,
              lastError: w.lastError, stdoutTail: w.stdoutTail ? w.stdoutTail.slice(-1200) : null };
   }
   function workerList() { return Array.from(WORKERS.values()).map(workerSnapshot); }
@@ -1943,9 +2118,30 @@ export function createEngine(opts = {}) {
     const port = Number(opts.port) || w.port;
     const gpuMode = String(opts.gpu === undefined || opts.gpu === null ? 'auto' : opts.gpu);
     const engineMode = String(opts.engine === undefined || opts.engine === null ? 'eevee' : opts.engine);
+    // P0：preload —— 把 KERNEL_BOOTSTRAP + 模块源码写成 boot 文件，worker 在 ready 前 exec。
+    // 旧 worker 只注入 K/bpy，热会话里 K.dsh_audit_api 等一律不存在（这是 C 组调研的最主要缺口）。
+    const preloadRaw = opts.preload === undefined || opts.preload === null ? [] : opts.preload;
+    const preloadList = (Array.isArray(preloadRaw) ? preloadRaw : String(preloadRaw).split(','))
+      .map((x) => String(x).trim().replace(/\.py$/, '')).filter(Boolean);
+    let bootWin = null;
+    if (preloadList.length) {
+      try {
+        const bootWsl = path.join(winToWsl(WIN_TMP), 'worker_boot_' + w.name + '.py');
+        fs.mkdirSync(path.dirname(bootWsl), { recursive: true });
+        const bootSrc = [KERNEL_BOOTSTRAP].concat(preloadList.map((m) => preloadChunk(m))).join(String.fromCharCode(10));
+        fs.writeFileSync(bootWsl, bootSrc, 'utf8');
+        bootWin = wslToWin(bootWsl);
+      } catch (e) {
+        const err = new Error('worker preload 前导写盘失败：' + String((e && e.message) || e));
+        err.hint = '检查 workDir 是否可写（DSH_BLENDER_WORKDIR）';
+        throw err;
+      }
+    }
     const args = ['-b', '--factory-startup', '--python', wslToWin(WORKER_PATH), '--',
-                  '--port', String(port), '--gpu', gpuMode, '--engine', engineMode];
-    const childEnv = Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' });
+                  '--port', String(port), '--gpu', gpuMode, '--engine', engineMode,
+                  '--frame-dir', String(WIN_TMP)];
+    if (bootWin) args.push('--boot', bootWin);
+    const childEnv = Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', DSH_WORKER_FRAME_DIR: String(WIN_TMP) });
     if (opts.useUserConfig) {
       if (USER_CONFIG_WIN) childEnv.BLENDER_USER_CONFIG = USER_CONFIG_WIN;
       if (USER_SCRIPTS_WIN) childEnv.BLENDER_USER_SCRIPTS = USER_SCRIPTS_WIN;
@@ -1976,9 +2172,28 @@ export function createEngine(opts = {}) {
       try { child.kill('SIGKILL'); } catch (x) {}
       throw e;
     }
-    w.ready = true; w.gpu = info.ok.gpu || null; w.pid = info.ok.pid || child.pid;
+    const boot = info.ok.boot || null;
+    if (boot && boot.ok === false) {
+      const e = new Error('worker boot/preload 失败：' + String(boot.error || 'unknown'));
+      e.hint = 'boot stderr 尾部：' + String(boot.stderr || '').slice(-500) + '；检查 preload 模块名（runtime/<name>.py）';
+      try { child.kill('SIGKILL'); } catch (x) {}
+      throw e;
+    }
+    w.ready = true; w.gpu = info.ok.gpu || null; w.pid = info.ok.pid || child.pid; w.boot = boot;
+    w.lastUsed = Date.now();
     metrics.workerStarts++;
-    return Object.assign(workerSnapshot(w), { hello: info.ok });
+    // P0 交互式 headless：首帧 Workbench 渲染有 ~1 s 的渲染器初始化（本机实测 first 1003ms / second 13ms）。
+    // 在 start 时做一次极小 warmup（64×36），把这一秒付掉；之后每次 see 才是 10–40ms。
+    let warm = null;
+    if (opts.warmup !== false) {
+      try {
+        const wr = await workerCall(w, { op: 'see', spec: { width: 64, height: 36, aa: '2' } }, 60000);
+        warm = { ok: !!(wr && wr.ok !== false), ms: (wr && wr.ms) || null };
+      } catch (err) {
+        warm = { ok: false, error: String((err && err.message) || err).slice(0, 200) };
+      }
+    }
+    return Object.assign(workerSnapshot(w), { hello: info.ok, warmup: warm });
   }
   /** 与 worker 的单次请求-应答（每次新建短连接，避免残留状态） */
   function workerCall(w, req, timeoutMs = 120000) {
@@ -2006,13 +2221,37 @@ export function createEngine(opts = {}) {
   async function workerExec(code, timeoutMs = 120000, purgePrefixes = null, nameArg) {
     const w = workerState(nameArg);
     if (!workerAlive(w) || !w.ready) await workerStart({}, w.name);
+    w.lastUsed = Date.now();
     metrics.workerExecs++;
     try { return await workerCall(w, { op: 'exec', code: String(code || ''), purgePrefixes: purgePrefixes || undefined }, timeoutMs); }
+    catch (e) { w.lastError = String((e && e.message) || e); throw e; }
+  }
+  async function workerSee(spec, nameArg) {
+    const w = workerState(nameArg);
+    if (!workerAlive(w) || !w.ready) await workerStart({}, w.name);
+    w.lastUsed = Date.now();
+    metrics.workerExecs = (metrics.workerExecs || 0) + 1;
+    try { return await workerCall(w, { op: 'see', spec: spec || {} }, 60000); }
+    catch (e) { w.lastError = String((e && e.message) || e); throw e; }
+  }
+  async function workerWatch(spec, nameArg) {
+    const w = workerState(nameArg);
+    if (!workerAlive(w) || !w.ready) await workerStart({ engine: 'workbench', warmup: true }, w.name);
+    w.lastUsed = Date.now();
+    metrics.workerExecs = (metrics.workerExecs || 0) + 1;
+    try { return await workerCall(w, { op: 'watch', spec: spec || {} }, 180000); }
+    catch (e) { w.lastError = String((e && e.message) || e); throw e; }
+  }
+  async function workerReset(nameArg) {
+    const w = workerState(nameArg);
+    if (!workerAlive(w) || !w.ready) await workerStart({}, w.name);
+    try { return await workerCall(w, { op: 'reset' }, 60000); }
     catch (e) { w.lastError = String((e && e.message) || e); throw e; }
   }
   async function workerStatus(nameArg) {
     const w = workerState(nameArg);
     if (!workerAlive(w) || !w.ready) return workerSnapshot(w);
+    w.lastUsed = Date.now();
     try { const r = await workerCall(w, { op: 'status' }, 15000); return Object.assign(workerSnapshot(w), { status: r.status || null }); }
     catch (e) { w.lastError = String((e && e.message) || e); return Object.assign(workerSnapshot(w), { statusError: w.lastError }); }
   }
@@ -2028,6 +2267,24 @@ export function createEngine(opts = {}) {
   }
   /** 重启：换一个干净会话（复用 = 放弃进程隔离，脚本脏了就用它） */
   async function workerRestart(nameArg, opts) { await workerStop(nameArg); return workerStart(opts || {}, nameArg); }
+  // P0 会话池：空闲回收（默认 15 min；DSH_WORKER_TTL_MS 可调；0=关闭）。只回收 ready 且无请求在飞的热进程。
+  const WORKER_TTL_MS = (() => {
+    const n = Number(process.env.DSH_WORKER_TTL_MS);
+    return Number.isFinite(n) && n >= 0 ? n : 900000;
+  })();
+  let workerReaper = null;
+  if (WORKER_TTL_MS > 0) {
+    workerReaper = setInterval(() => {
+      const now = Date.now();
+      for (const w of WORKERS.values()) {
+        if (!workerAlive(w) || !w.ready) continue;
+        if (w.lastUsed && now - w.lastUsed > WORKER_TTL_MS) {
+          try { workerStop(w.name).catch(() => {}) } catch (e) { /* 下一轮再试 */ }
+        }
+      }
+    }, 30000);
+    try { workerReaper.unref && workerReaper.unref() } catch (e) {}
+  }
   /** 事务：snapshot / restore / list / prune / mark / revert / marks / drop / help */
   async function txnCall(op, payload) {
     await ensureTxn();
@@ -2123,7 +2380,8 @@ export function createEngine(opts = {}) {
     plan: (op, payload) => planCall(op, payload),
     txn: (op, payload) => txnCall(op, payload),
     preset: (op, payload) => presetCall(op, payload),
-    worker: { start: workerStart, exec: workerExec, status: workerStatus, stop: workerStop, restart: workerRestart,
+    worker: { start: workerStart, exec: workerExec, see: workerSee, watch: workerWatch, reset: workerReset,
+              status: workerStatus, stop: workerStop, restart: workerRestart,
               list: workerList, snapshot: workerSnapshot, state: workerState },
     job: { start: jobStart, status: jobStatus, collect: jobCollect, kill: jobKill, list: jobList, wait: jobWait },
     /** v0.9.4：拉起 GUI Blender + 自动 Connect addon（server.mjs /launch 路由用） */
@@ -2504,9 +2762,11 @@ export function createEngine(opts = {}) {
         if (w) runRec.pathWarnings.push(w);
       }
       runs.set(runId, runRec);
+      const stopRunHb = startHeartbeat(runRec, logDirWsl);
       if (runs.size > 20) { const k = runs.keys().next().value; if (k !== runId) runs.delete(k); }
       ledgerAppend({ id: runId, kind: 'headless', status: 'running', startedAt: t0, script: runRec.script,
-                     outdir: runRec.outdir, timeoutMs: timeoutMs, stage: null });
+                     outdir: runRec.outdir, outdirWsl: outdirWsl, timeoutMs: timeoutMs, stage: null,
+                     stdoutLog: logs ? logs.stdout : null, stderrLog: logs ? logs.stderr : null });
       // v0.8.7（外部反馈 #4 P0-2）/ v0.9.3（D1）：长任务转作业层 —— 客户端超时不再把结果丢掉。
       // 用法：as_job=true 强制转；或给 auto_job_ms（如 120000）表示预计超过它就走作业。
       const autoJobMs = Number(opts.autoJobMs) || 0;
@@ -2752,7 +3012,12 @@ export function createEngine(opts = {}) {
                        stageMs: runRec.stageAt ? (runRec.stageAt - runRec.startedAt) : null,
                        artifacts: runRec.artifacts.slice(0, 8), expectOk: (expectEval ? expectEval.ok : null) });
       } catch (e) { /* ignore */ }
+      try { stopRunHb && stopRunHb(); } catch (e) {}
+      const hygieneWarnings = sceneHygieneAudit(stdout, stderr);
+      runRec.warnings = (pathWarnings || []).concat(hygieneWarnings);
       return { ok: runOk, kind: 'headless', runId: runId, pluginVersion: PLUGIN_VERSION, expect: expectEval,
+               warnings: runRec.warnings, progress: runRec.progress || null, progressAt: runRec.progressAt || null,
+               heartbeat: runRec.heartbeat || null, progressHistory: runRec.progressHistory || [],
                stdoutTruncated: stdout.length > 8000,
         status: failureClass, resumable: true, session: SESSION_NAME,
         failure_hint: FAIL_HINT,
@@ -2792,7 +3057,7 @@ export function createEngine(opts = {}) {
       return true;
     },
     // v0.9.4（P1-1）：worker 现在是多实例 —— 关后端时要把**所有**实例收干净（原来只杀单例）
-    stop() { addon.close(); try { for (const w of WORKERS.values()) { if (workerAlive(w)) w.child.kill('SIGKILL'); } } catch (e) {} },
+    stop() { if (workerReaper) { try { clearInterval(workerReaper); } catch (e) {} workerReaper = null; } addon.close(); try { for (const w of WORKERS.values()) { if (workerAlive(w)) w.child.kill('SIGKILL'); } } catch (e) {} },
   });
 }
 
@@ -2851,4 +3116,42 @@ export function engineProvenance(opts) {
     }
   }
   return out;
+}
+
+
+
+/**
+ * v2.6（本轮反馈 #3）：多灯卫生 —— EEVEE 阴影池溢出的**结构化告警**。
+ *
+ * 现场（4 小时里刷了几千行）：36 盏灯 → 控制台每一帧刷
+ *   Error: Shadow buffer full, may result in missing shadows and lower performance. (3040 / 2048)
+ * 而 scene.eevee.shadow_pool_size = 4096 **静默无效** —— 它是枚举，上限就是 2048（2 GB）。
+ * 旧行为：告警只在 stderr 里刷屏，模型得自己看懂；新行为：进回执 warnings[]，附一条能直接粘贴的修法。
+ */
+export function sceneHygieneAudit(stdout, stderr) {
+  const text = String(stdout || '') + String.fromCharCode(10) + String(stderr || '');
+  const warns = [];
+  const hits = text.match(/Shadow buffer full[^()]*\((\d+)\s*\/\s*(\d+)\)/g) || [];
+  if (hits.length) {
+    const last = hits[hits.length - 1].match(/\((\d+)\s*\/\s*(\d+)\)/);
+    const FIX = ['import bpy',
+      'bpy.context.scene.eevee.shadow_pool_size = "2048"   # 枚举上限就是 2048，写 4096 无效',
+      'for o in bpy.data.objects:',
+      '    if o.type == "LIGHT" and o.data.type in {"POINT", "SPOT"}:',
+      '        o.data.use_shadow = False   # practical 灯基本不需要投影'].join(String.fromCharCode(10));
+    warns.push({
+      code: 'eevee_shadow_pool_full',
+      occurrences: hits.length,
+      used_mb: last ? Number(last[1]) : null,
+      limit_mb: last ? Number(last[2]) : null,
+      hint: 'EEVEE 阴影池溢出（' + (last ? last[1] : '?') + '/' + (last ? last[2] : '?') + ' MB，出现 ' + hits.length + ' 次）：'
+          + '阴影会缺失、渲染变慢，但**不会报错退出** —— 不处理就是一张「阴影丢了」的图。'
+          + '改法：① shadow_pool_size 是枚举且上限 2048（写 4096 会被静默忽略）；'
+          + '② 主力是减投影灯：点光/面光的 use_shadow 全关，只留 2–4 盏真正要投影的；'
+          + '③ 大场景再降 shadow_resolution_scale。',
+      fix: FIX,
+      also: 'K.light_hygiene(apply=True) 可一次做完（返回 before/after 计数）',
+    });
+  }
+  return warns;
 }
