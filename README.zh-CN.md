@@ -1,10 +1,14 @@
 # DSH × Blender 直连实时插件
 
+[English](README.md) · **简体中文**
+
+> **English summary**: DSH × Blender plugin v2.6.0 — 15 model tools, 33 families / 217 plan ops. GUI first (default); headless is a fallback (with `rt_see`, but not the default). Reference gauges, assembly scan/repair/gate/export, blockout and Seedance reference packs. Full English README: [README.md](README.md).
+
 > 🤖 **想让 AI 帮你装？** 别让它猜 —— 把仓库地址和 [`docs/AI-安装提示词.md`](docs/AI-安装提示词.md) 一起发给它
 >（可直接粘贴的提示词 + 验收判据 + 装完必须转达的新功能）。唯一验收判据：`doctor` 回 `kind=ok`。
 
-> **GUI Blender 可选。** 模型既能直连 GUI 做"看一眼 → 改一步 → 再确认"，
-> 也能在**持久无头会话**里连续建模、出图、验收 —— 无头是**交互式**的
+> **GUI Blender 优先（默认）。** 先开 Blender + Connect，模型直连 GUI 做"看一眼 → 改一步 → 再确认"；
+> **无头是备用路径**（没有 GUI / 批处理 / 长活时），但仍然是**交互式**的
 >（`exec` / `see` / `watch` / `reset` 同一条热路径），不是一次性批处理。
 > 15 个模型工具，不用装 MCP、不用 CLI 适配层；
 > 而**你**在 Blender 里原生选中物体，按一个按钮就把它们送进 DSH 当前会话的输入框。
@@ -21,7 +25,7 @@
 
 ## v2.6 亮点（P0–P2，六条）
 
-- **① 交互式无头（P0）—— 新的默认建模路径。** 持久 worker 支持 `preload` 启动前导、`see`（临时相机 + Workbench 离屏）、
+- **① 交互式无头（P0）—— GUI 不可用时的备用路径（不是默认）。** 持久 worker 支持 `preload` 启动前导、`see`（临时相机 + Workbench 离屏）、
   `reset`、`warmup`；`rt_do` / `rt_see` 可显式 `session`（GUI 不在时 `auto` 自动降级），
   `rt_watch` 可无头，`rt_plan(session="auto")` 按 family 自动起 worker 并同步 dispatch。
   实测：`start` 2.24 s（含 1.1 s 首帧初始化），之后 `exec` 0–2 ms、`see` 往返 53–85 ms（320×180）；

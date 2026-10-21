@@ -1,12 +1,16 @@
 # DSH × Blender — direct real-time channel
 
+**English** · [简体中文](README.zh-CN.md)
+
+> **中文简介**：DSH × Blender 直连插件 v2.6.0，15 个模型工具、33 family / 217 op。默认先开 GUI Blender + Connect；无头是备用路径（也能 `rt_see`，不是默认）。支持参考图量具、装配扫描/修复/门/导出、白模与 Seedance 参考包。完整中文说明见 [README.zh-CN.md](README.zh-CN.md)。
+
 > 🤖 **Installing with an AI agent?** Don't let it guess — send it the repo URL plus
 > [`docs/AI-安装提示词.md`](docs/AI-安装提示词.md) (paste-ready prompt + acceptance criteria + the v2.6
 > "tell your owner" checklist). The only acceptance criterion is `doctor` → `kind=ok`.
 
-> **GUI Blender is optional.** The model can drive a live GUI session ("look → change → verify"), or stay in a
-> **persistent headless session** and model, render and validate continuously — headless here is **interactive**
-> (`exec` / `see` / `watch` / `reset` share one hot path), not a one-shot batch job.
+> **GUI Blender is the default.** Start Blender + Connect first; the model drives a live GUI session ("look → change → verify").
+> **Headless is the fallback** (no GUI / batch / long jobs), but it is still **interactive**: `exec` / `see` / `watch` / `reset`
+> share one hot path, so the model can keep working and seeing frames without a window.
 > 15 model tools, no MCP assembly, no CLI adapter; and **you** can select objects natively in Blender and push them
 > into the current DSH draft with one button.
 
@@ -184,7 +188,7 @@ blender_rt_txn    {op:"snapshot", label:"before-edit"}
 
 ## 5. What's new in v2.6 (P0–P2, six items)
 
-- **① Interactive headless (P0) — the new default modeling path.** The persistent worker supports `preload`,
+- **① Interactive headless (P0) — fallback path when GUI is unavailable (not the default).** The persistent worker supports `preload`,
   `see` (temporary camera + Workbench off-screen), `reset` and `warmup`; `rt_do` / `rt_see` accept an explicit
   `session` (with `auto` fallback when no GUI is available), `rt_watch` works headless, and `rt_plan(session="auto")` boots a worker per
   family and dispatches synchronously. Measured: `start` 2.24 s (including 1.1 s first-frame init), then `exec` 0–2 ms and
