@@ -6,7 +6,7 @@
 > **当前版本口径（2026-10-20）**：插件 **v2.6.0** · **15 个模型工具** · plan catalog **33 family / 217 op** ·
 > addon **v1.10**（protocol **11**）· 后端 `127.0.0.1:9877` / addon `127.0.0.1:9876`。
 > 验收判据：**GUI 路线 = `doctor` 回 `kind=ok`**；**纯无头路线**（不装 addon）= `rt_worker(start)` + `see` 出图自证
-> （doctor 的 bpy 往返不可达属预期）。**GUI 可选**：交互式无头（持久 worker + see/watch/reset）可独立建模。
+> （doctor 的 bpy 往返不可达属预期）。**默认先开 GUI**；无 GUI 时交互式无头（持久 worker + see/watch/reset）也能独立建模，但它是备用路径。
 
 ## 0. 目标与完成标准
 
@@ -63,7 +63,7 @@ blender_rt_perf(op="status")                      # 引擎/采样/光追状态
 blender_rt_plan(op="qc_self_check")               # QC 算法自检（自比 IoU 应为 1.0）
 blender_rt_see()                                  # 回一帧视口（有 GUI 时）
 blender_rt_headless(script="print('HEADLESS {ok:1}')")  # 无头进程 + 引擎前导
-blender_rt_worker(op="start")                     # 交互式无头热会话（GUI 可选）
+blender_rt_worker(op="start")                     # 交互式无头热会话（备用；默认先开 GUI）
 blender_rt_worker(op="see", from="4,-4,3", look_at="0,0,1")  # 无头出图
 ~~~
 
@@ -79,7 +79,7 @@ blender_rt_worker(op="see", from="4,-4,3", look_at="0,0,1")  # 无头出图
 | 工具报"后端不可用" | 是否 `blender.exe` 在跑 / 后端 9877 是否在 | Blender 没启动；或 addon 没 Connect；或后端没起来（`blender_viewport(op="start")`） |
 | `doctor` 报 `main-thread-busy` | 是不是刚跑过重活 | 主线程被占；重活改走 `blender_rt_headless` / `blender_rt_worker` |
 | 工具数不是 15、catalog 不是 33/217 | 插件版本 / 是否重启 | 安装 v2.6.0 后**重启 DSH**；`--dump-config` 确认 profile bundle 已加载 |
-| `rt_do`/`rt_see` 连不上但无头可用 | 是否有 GUI | GUI 可选：用 `session="auto"` / `rt_worker` 走交互式无头 |
+| `rt_do`/`rt_see` 连不上但无头可用 | 是否有 GUI | GUI 不可用时的备用：用 `session="auto"` / `rt_worker` 走交互式无头 |
 | 渲染暗部纯黑 | `docs/EEVEE-工作要点.md` §2 | `Shader to RGB` 只含直接光；用双 Background + Is Camera Ray 或加环境灯 |
 | 渲染很慢 | 是否冷启动 | EEVEE 首帧着色器编译约 16 s → 用 `blender_rt_worker` 热会话 |
 | QC 分数与历史不可比 | `engine_at_qc` | 换了引擎（EEVEE ↔ Cycles）；判据只在同引擎内可比 |

@@ -6,7 +6,7 @@
 > **当前版本（2026-10-20）**：插件 **v2.6.0** · **15 个模型工具** · plan catalog **33 family / 217 op** ·
 > Blender 侧 addon **v1.10**（protocol **11**）· 后端 `127.0.0.1:9877` / addon `127.0.0.1:9876`。
 > **验收判据**：GUI 路线 = `doctor` 回 `kind=ok`；纯无头路线（不装 addon）= `blender_rt_worker(start)` + `see` 出图自证
-> （此时 doctor 的 bpy 往返不可达属预期）。**headless-first**：GUI 可选，交互式无头（持久 worker + see/watch/reset）
+> （此时 doctor 的 bpy 往返不可达属预期）。**GUI 优先（无头备用）**：GUI 首选，交互式无头（持久 worker + see/watch/reset）
 > 与 `rt_do/rt_see`（`session/auto`）、`blender_rt_plan(session="auto")` 都可独立工作。
 
 ## 0. 硬规则：先读 README，再动手
@@ -16,7 +16,7 @@
 | 读哪节 | 为什么 |
 |---|---|
 | **§2 前置条件（5 条）** | 缺一条都装不起来。注意：Blender 侧 addon **只支持本包附带的 `addon/dsh_blender_bridge.py`（v1.10+ / protocol 11）**；旧 `MCP for Blender` 自 v2.3 起不支持，必须停用旧 addon 再启用本包 addon（见 [MIGRATIONS.md](MIGRATIONS.md)） |
-| **§3 安装（5 步）** | 构建（**可选**，本仓已提交 `lib/`）→ 配置 → 装进 profile → 起 Blender（**GUI 可选**）→ 验证 |
+| **§3 安装（5 步）** | 构建（**可选**，本仓已提交 `lib/`）→ 配置 → 装进 profile → 起 Blender（**GUI 首选**）→ 验证 |
 | **§8 常见故障**（英文 README 为 §9） | 报错先查表，别自己发明修法 |
 
 **不要凭直觉编**：路径、端口（addon `9876` / 后端 `9877`）、配置项名，一律从 `docs/配置参考.md` 取。
@@ -77,7 +77,7 @@
 ## 3. 装完 / 改完之后的规矩
 
 - **插件升级后必须重启 DSH**（插件是 DSH 启动时加载的模块）；只改了后端才用 `blender_viewport(op="restart")`。
-- **headless-first**：重活/批处理优先 `blender_rt_headless` 或 `blender_rt_worker`（交互式无头）；GUI 不在时 `rt_do/rt_see` 用 `session/auto` 自动降级，不要求用户开窗口。
+- **GUI 优先（无头备用）**：默认先开 GUI Blender + Connect addon；只有在长活/批处理/无 GUI 场景才走 `blender_rt_headless` 或 `blender_rt_worker`。GUI 不在时 `rt_do/rt_see` 用 `session/auto` 自动降级；无头也能 rt_see，不会失明。
 - 长任务（> 1 min、长渲染、批量几何）走 `blender_rt_job(op="start"/"wait")` 或 `blender_rt_headless(as_job=true)`；
   **别用同步 headless 硬等** —— 客户端超时 ≠ 任务失败，按 `runId` 回收结果。
 - 拓扑类改动要回滚，用 `blender_rt_txn` 的文件级 `snapshot/restore`；对象级 `mark/revert` **不含**拓扑 / UV 改动。
@@ -94,7 +94,7 @@
 - **发布 npm**：`npm pack` → `npm publish <tgz> --access public`（包名 `@dsh-external/dsh-blender-plugin`，需维护者 npm 登录）。
   打包面靠 `runtime/.npmignore` + `package.json` 的 `files` 否定模式把 `runtime/ext/venv`（1.2 G）挡在包外 ——
   **改 `files` 后必须 `npm pack --dry-run` 核对**（v2.6.0 实测约 **1.6 MB / 163 文件**（解包 4.8 MB）；历史反例：曾漏成 458 MB / 12638 文件）。
-- **随包 skill 的真源**：`skills/blender-modeling/`（SKILL.md + references + MIT LICENSE/NOTICE；当前 v2.6，headless-first）。
+- **随包 skill 的真源**：`skills/blender-modeling/`（SKILL.md + references + MIT LICENSE/NOTICE；当前 v2.6，GUI 优先（无头备用））。
   插件加载时注册 bundled provider（`ctx.inject(['skills'], …)`，rank 600；用户 `~/.dsh/skills` 的 400 副本仍优先）。
   **改 skill 直接改这里**，独立仓库 `dsh-skill-blender-modeling` 仅作非 DSH 宿主的镜像；改完跑 `node tests/skill_bundle_selftest.mjs`。
 - **选中桥（v2.3 起）**：DSH 侧视口面板 / `blender_rt_pick` / TUI 侧栏面板**已删除**（入口改到 Blender 原生选中）。

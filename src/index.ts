@@ -1827,7 +1827,7 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_headless',
-    description: '【无头 Blender · 第一路径】独立进程跑脚本（blender.exe -b）：不占 GUI 通道、不动你在看的场景。'
+    description: '【无头 Blender · 备用】独立进程跑脚本（blender -b）：GUI 不可用/批处理/长活用；不占 GUI、不动场景。'
       + (IS_WIN ? '⚠ 给 Windows 路径（D:\\x\\y.py）；' : '⚠ cwd 在 UNC 下，WSL 路径要带开头 /；')
       + 'script_file 自动给 __file__ + sys.path。'
       + '批量几何 / 校验 / 渲染 / 不需要"人在回路看视口"的活都先走这里；"看一眼"用 rt_do/rt_see。'

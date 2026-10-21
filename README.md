@@ -52,7 +52,7 @@ reference-image reconstruction SOP and multi-view calibration.
 - **Non-DSH hosts** (Claude Code / Codex / Cursor…): the same directory is a plain `skills/<name>/SKILL.md` bundle — link or copy it to your host's skill root.
 
 Walkthrough (Chinese): [`docs/操作教程.md`](docs/操作教程.md) · configuration: [`docs/配置参考.md`](docs/配置参考.md) ·
-deployment SOP: [`docs/部署SOP.md`](docs/部署SOP.md) · headless-first rationale: [`docs/headless优先-路线决定.md`](docs/headless优先-路线决定.md) ·
+deployment SOP: [`docs/部署SOP.md`](docs/部署SOP.md) · historical headless route (superseded by GUI-first): [`docs/headless优先-路线决定.md`](docs/headless优先-路线决定.md) ·
 host contract v2.3: [`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md) ·
 what changed in v2.6.0: [`docs/v2.6.0-更新说明.md`](docs/v2.6.0-更新说明.md).
 
@@ -60,7 +60,7 @@ what changed in v2.6.0: [`docs/v2.6.0-更新说明.md`](docs/v2.6.0-更新说明
 
 ## 2. Requirements
 
-1. **Blender 4.x / 5.x — GUI optional.** The GUI is needed for the addon channel (`rt_cmd`, GUI-mode `rt_see` / `rt_do`,
+1. **Blender 4.x / 5.x — GUI first.** The GUI is needed for the addon channel (`rt_cmd`, GUI-mode `rt_see` / `rt_do`,
    native selection). Headless tools (`rt_headless` / `rt_job` / `rt_worker` / `rt_do{session}` / `rt_see{session}` /
    `rt_watch{session}`) spawn `blender -b` directly and need **neither a GUI nor a connected addon**. The backend only has to
    find the Blender executable (set `blenderExe` or put it on `PATH`).

@@ -1,12 +1,12 @@
 ---
 name: blender-modeling
-description: Blender 建模与交付教程（v2.6，headless-first）——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → 白模 → 粗形精修 → 修改器栈 → 清理 → 装配/验收 → 交付）。覆盖参考图量测（img_digest/probe/measure/calib）、无头多视轮廓拟合（shapesolve）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout_*，含 4 视图与转台 MP4）、同机位 QC（visualreport_report）、缺陷注入评估（eval_run）、交互式无头会话（worker see/watch，rt_do/rt_see session）与强制门（gate_/deliver_export require_gate）。用于做 3D 物体、按参考图还原、量比例、装配体检、修穿模/浮空、批量白模、交付导出与验收。
+description: Blender 建模与交付教程（v2.6，GUI 优先，无头备用）——先按决策树选形（分面硬表面 / 光滑硬表面 / 有机 / 重复阵列 / 布尔），再走流水线（冻结规格 → 场景准备 → 白模 → 粗形精修 → 修改器栈 → 清理 → 装配/验收 → 交付）。覆盖参考图量测（img_digest/probe/measure/calib）、无头多视轮廓拟合（shapesolve）、装配扫描/清单/合并/修复/门/导出（asm_*）、白模与 Seedance 参考包（blockout_*，含 4 视图与转台 MP4）、同机位 QC（visualreport_report）、缺陷注入评估（eval_run）、交互式无头会话（worker see/watch，rt_do/rt_see session）与强制门（gate_/deliver_export require_gate）。用于做 3D 物体、按参考图还原、量比例、装配体检、修穿模/浮空、批量白模、交付导出与验收。
 license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，见 NOTICE.md）
 ---
 
 # Blender 建模流程
 
-> **v2.6 · 2026-10-21**：配套插件 @dsh-external/dsh-blender-plugin v2.6.0，15 个模型工具，plan 通道 33 family / 217 op。本轮起 **headless-first**：GUI 只是可选加速器，不是前置条件；无头持久会话同样能“改一步、同步看一步”。
+> **v2.6 · 2026-10-21**：配套插件 @dsh-external/dsh-blender-plugin v2.6.0，15 个模型工具，plan 通道 33 family / 217 op。**默认 GUI 优先**：先开 GUI Blender + Connect；无头是备用路径（GUI 不可用/批处理/长活），但无头也能 rt_see，同样能“改一步、同步看一步”。
 > 旧版按 v2/v3/v7 记录的“哪段是哪次实测加的”不再写在正文；需要追溯看 CHANGELOG。下面只写**当前有效口径**。
 
 先定形状，再走流程，改一步看一眼。**不要一口气写完整个模型再回来看**——每一步都要有画面或数字证据。
@@ -39,12 +39,12 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 4. **数字必须可复算**：尺寸、px_per_mm、bbox、md5、IoU 要带来源；没有标定就不许把像素当毫米。
 5. **headless 里优先 bpy.data/bmesh，慎用 bpy.ops**：依赖 screen/context 的 GUI 型 ops 在无头会话可能失败；必须用时先小步验证。
 
-### 0.2 GUI 可选：两种交互式回路
+### 0.2 GUI 优先（默认）：两种交互式回路
 
 - **GUI 回路**（人在 Blender 前）：rt_do / rt_see / rt_watch 走 addon，~50–100 ms/步。
 - **无头回路**（没有人看画面）：rt_worker start + preload，然后 rt_do(session="s1", see=true) / rt_see(session="s1")。每次 exec 后同步 see，图片直接回模型；场景与 K 跨调用保留。**这是同步交互，不是“提交作业—等回合”。**
 - **plan 无头**：blender_rt_plan(op="asm_scan", args={...}, session="auto")；首次冷启动约 2 s，之后复用 worker。
-- 人类看不看得到画面不重要；AI 必须能“改一步、立刻拿到图/数字”。不要让 headless 退化成长时间无反馈的批处理。
+- **默认先开 GUI**；只有没有人看画面/GUI 不可用时才用无头回路。无头也必须能“改一步、立刻拿到图/数字”，不要退化成长时间无反馈的批处理。
 
 ### 0.3 单位与尺度（先定，后建模）
 
@@ -217,9 +217,9 @@ license: MIT（融合自 RobLe3/cc-blender-skill 与 arjun988/blender-skills，�
 
 plan 通道返回 receipt.v2 信封（contract/op/verdict/summary/top_defects/next/images/provenance）。大结果会被截断，完整结果用 out_json 落盘或看 results/；不要因为文本截断就认为 op 没结果。
 
-### 1.4 交互式无头是默认工作方式之一
+### 1.4 GUI 优先；无头是备用交互回路
 
-- **GUI 可选，不是前置条件**。没有人看画面时，用持久 worker 做“改一步、同步看一步”。
+- **默认先开 GUI**；只有没有人看画面/GUI 不可用时，才用持久 worker 做“改一步、同步看一步”。
 - 固定 session：worker start 一次，后面所有 rt_do/rt_see/rt_watch 都带同一个 session；不要每步换名字导致反复冷启动。
 - preload 一次把要用的模块注入 K：imgtools/assembly/blockout/visualreport/shapesolve/gate/txn/deliver 等。preload 后可直接 K.dsh_*_api。
 - 每步 see 50–100 ms 是正常；几秒说明走错通道或冷启动。

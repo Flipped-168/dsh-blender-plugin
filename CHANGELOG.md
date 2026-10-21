@@ -1,10 +1,11 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
-## v2.6.0（2026-10-21）—— 33 family / 217 op · headless-first · 文档与 skill 重写
+## v2.6.0（2026-10-21）—— 33 family / 217 op · GUI 优先 · 无头备用 · 文档与 skill 重写
 
 > v2.5.0 之后的四轮工作（P0 / P1 / P2 + 文档与 skill 重写）并入本版一次发布。
 > 模型工具仍为 **15 个**；plan catalog 从 28 family / 186 op 扩到 **33 family / 217 op**。
-> 新增能力全部走 plan catalog，**不新增模型工具**；GUI 由「必需」改为可选（headless-first）。
+> 新增能力全部走 plan catalog，**不新增模型工具**；GUI 仍是最优先；无头能力补齐（含 rt_see），作为无 GUI / 批处理 / 长活的备用。
+> **2026-10-21 口径更正**：不是 headless-first；默认先开 GUI，headless 仅备用。
 
 ### 测试与文档修正（issue #32 / #33）
 
@@ -21,7 +22,7 @@
 - **全量文本校正**：README 中英、操作教程、配置参考、安装/部署/迁移/AGENTS/CLAUDE 全部对齐 v2.6.0（15 工具 · 33 family / 217 op · addon v1.10 / protocol 11）；删除 28/186、v2.5/v0.9.x 旧口径与“必须 GUI”旧承诺。
 - **skill 架构优先重写**：SKILL.md 以“插件就是建模流程”为主线（catalog → plan op → worker session → 回执/verdict → 门/交付），新增架构铁律、标准状态机、工具选择矩阵、P0–P2 配方、反模式、多 Agent 协议；通用 Blender 知识降为附录 A。
 - **references 校正**：验收清单补 asm/visualreport/eval/强制门；参考图 SOP 改为 img_digest/measure/calib + shapesolve + visualreport；multiview 与英文 overview 标明与当前插件的关系。
-- **工具描述**：rt_do/rt_see/rt_watch/rt_worker/rt_headless/rt_plan 明确 GUI 可选、session 无头、worker see/watch/TTL、plan session=auto；package description 同步 v2.6.0。
+- **工具描述**：rt_do/rt_see/rt_watch/rt_worker/rt_headless/rt_plan 明确 GUI 首选、session 无头、worker see/watch/TTL、plan session=auto；package description 同步 v2.6.0。
 - 文档 grep：用户文档无 28/186/v2.5/v0.9.x 旧口径；skill >50KB 且 skill_bundle_selftest 61/61；npm test 全绿。
 
 ### P2 第三轮（2026-10-20）

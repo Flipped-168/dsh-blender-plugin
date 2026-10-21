@@ -84,9 +84,9 @@ v2.6.0 更新说明：[`docs/v2.6.0-更新说明.md`](docs/v2.6.0-更新说明.m
 
 ## 2. 前置条件（Requirements，5 条）
 
-1. **Blender 4.x / 5.x** —— **GUI 可选**。GUI 用于 addon 直连（`rt_cmd`、部分 `rt_see` / `rt_do`、原生选中）；
+1. **Blender 4.x / 5.x** —— **GUI 首选**。GUI 用于 addon 直连（`rt_cmd`、部分 `rt_see` / `rt_do`、原生选中）；
    无头工具（`rt_headless` / `rt_job` / `rt_worker` / `rt_do{session}` / `rt_see{session}` / `rt_watch{session}`）
-   直接起 `blender -b`，**不需要 GUI，也不需要 addon Connect**。后端需要能找到 Blender 可执行文件（配置 `blenderExe` 或放进 PATH）。
+   直接起 `blender -b`，**无头备用路线**：不需要 GUI，也不需要 addon Connect。后端需要能找到 Blender 可执行文件（配置 `blenderExe` 或放进 PATH）。
 2. **Blender addon —— 只支持本仓附带的 [`addon/dsh_blender_bridge.py`](addon/dsh_blender_bridge.py)**
    （**`DSH Blender Bridge` v1.10**，模块名 `dsh_blender_bridge`）。它监听 `127.0.0.1:9876`，提供 39 条命令
    （24 常驻 + 15 集成门控），含场景查询、视口截图、`execute_code`、选中/活动状态与 5 个可选集成
@@ -204,7 +204,7 @@ blender_rt_txn    {op:"snapshot", label:"before-edit"}
 ## 5. 工具参考（Tool reference，15 个工具）
 
 后端总会由插件自动拉起；**GUI 通道类**（`rt_cmd` / `rt_commands`、不传 `session` 的 `rt_see` / `rt_do` / `rt_watch`）需要 addon 已 Connect；
-**无头类**（`rt_headless` / `rt_job` / `rt_worker` / `rt_plan{session}` / 传了 `session` 的 `rt_do` / `rt_see` / `rt_watch`）不需要 GUI。
+**无头备用类**（`rt_headless` / `rt_job` / `rt_worker` / `rt_plan{session}` / 传了 `session` 的 `rt_do` / `rt_see` / `rt_watch`）不需要 GUI；默认仍先走 GUI。
 参数名就是 schema 里的名字，WSL / Windows / macOS 完全一致。
 
 | 工具 | 作用 |
