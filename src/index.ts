@@ -677,6 +677,8 @@ async function toAttachment(ctx: any, data: Uint8Array, name: string): Promise<{
 function toWslPath(p: any): string {
   const s = String(p == null ? '' : p)
   if (!s) return s
+  // Windows 宿主：D:\... 本来就是本机可用路径，转成 /mnt/d/... 反而读不到（Windows 上无此挂载）。
+  if (process.platform === 'win32') return s
   if (/^[A-Za-z]:[\\/]/.test(s)) return '/mnt/' + s[0].toLowerCase() + s.slice(2).replace(/\\/g, '/')
   const m = s.match(/^\\\\wsl\.localhost\\[^\\]+\\(.*)$/i)
   if (m) return '/' + String(m[1]).replace(/\\/g, '/')
@@ -684,7 +686,14 @@ function toWslPath(p: any): string {
 }
 /** 读本地 PNG（失败返回 null；调用方负责把 why 写进文本，不静默） */
 function readLocalPng(p: any): Uint8Array | null {
-  try { return readFileSync(toWslPath(p)) } catch (e) { return null }
+  const s = String(p == null ? '' : p)
+  if (!s) return null
+  const converted = toWslPath(s)
+  const candidates = converted === s ? [s] : [converted, s]
+  for (const candidate of candidates) {
+    try { return readFileSync(candidate) } catch (e) { /* try next form */ }
+  }
+  return null
 }
 /** 批量附图：≤max 张；返回已附的 attachment 与失败清单（路径/原因） */
 async function attachPaths(ctx: any, paths: any[], tag: string, max = 2): Promise<{ images: any[]; used: string[]; failed: string[] }> {

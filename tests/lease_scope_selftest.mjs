@@ -53,9 +53,29 @@ if (ready) {
   ok('E 裸 token 也能推断维度', Array.isArray(sc2) && sc2[0].kind === 'collection' && sc2[0].value === 'COL_VFX' && sc2[1].kind === 'prefix' && sc2[1].value === 'GEO-GZ-', JSON.stringify(sc2))
   await post('/release', { holder: 'scope-B' })
 }
-try { child.kill('SIGKILL') } catch (e) {}
+// Windows/Node 24 上 child.kill('SIGKILL') 后立刻 process.exit 会在 libuv 关闭 async 句柄时
+// 触发 Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)（exit 127）。先等子进程退出，
+// 再销毁管道，最后用 exitCode 让事件循环自然收尾；不要 process.exit() 抢跑。
+async function stopChild() {
+  if (child.exitCode !== null) return
+  const exited = new Promise((resolve) => {
+    const done = () => resolve()
+    child.once('exit', done)
+    child.once('close', done)
+    setTimeout(done, 3000)
+  })
+  try { child.kill('SIGTERM') } catch (e) {}
+  await exited
+  if (child.exitCode === null) {
+    try { child.kill('SIGKILL') } catch (e) {}
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+await stopChild()
+try { child.stdout && child.stdout.destroy() } catch (e) {}
+try { child.stderr && child.stderr.destroy() } catch (e) {}
 try { fs.rmSync(TMP, { recursive: true, force: true }) } catch (e) {}
 console.log('')
 console.log('lease-scope-selftest：' + pass + ' 通过 / ' + fail + ' 失败')
 if (fail) for (const f of failures) console.log('  x ' + f)
-process.exit(fail ? 1 : 0)
+process.exitCode = fail ? 1 : 0
