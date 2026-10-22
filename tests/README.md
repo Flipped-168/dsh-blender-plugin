@@ -21,6 +21,17 @@ node tests/host_routes_selftest.mjs     # /host/* 路由（需要后端 127.0.0.
   写租约被别的会话持有时**不夺租约**而是跳过（共享同一 Blender 时的有意取舍）。
 - 两条都不进 `npm test` 主链（`host_routes` 依赖真后端），需要时手动跑。
 
+## 工具卡片自检（v2.7 · 进 `npm test`）
+
+```bash
+node tests/tool_cards_selftest.mjs      # 15 个工具的 presentCall / presentResult（不需要 Blender，不起后端）
+```
+
+- 宿主（dsh-TUI / Web）用 `presentCall` / `presentResult` 决定**卡片怎么给人看**；模型侧回执（`render`）不变。
+- 断言：15 个工具都挂了 presenter；标题「Blender <动作> · <要点>」；带代码的调用把代码放进卡片正文；
+  结果卡片去掉单行 JSON 信封、摘要在前、代码在后、图片块原样透传；出错 / 没东西可改时回 `undefined`（宿主默认显示）；
+  `render` 输出仍以信封开头；坏参数不抛、view 全是 lossless JSON。
+
 ## dsh-TUI 宿主半边自检（v2.7 · 进 `npm test`）
 
 ```bash
