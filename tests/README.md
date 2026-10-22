@@ -21,6 +21,17 @@ node tests/host_routes_selftest.mjs     # /host/* 路由（需要后端 127.0.0.
   写租约被别的会话持有时**不夺租约**而是跳过（共享同一 Blender 时的有意取舍）。
 - 两条都不进 `npm test` 主链（`host_routes` 依赖真后端），需要时手动跑。
 
+## dsh-TUI 宿主半边自检（v2.7 · 进 `npm test`）
+
+```bash
+node tests/tui_host_selftest.mjs        # src/tui-host.ts：假宿主接缝 + 假后端 + 一个真 runtime/server.mjs（不需要 Blender / dsh-TUI）
+```
+
+- 草稿文本与 `lib/client.js` **逐字对拍**（16 组选中 payload）：两份实现，靠这里防漂移。
+- 选中桥 CAS：挂上才 `consume(ok)`、挂不上第 3 次 `consume(ok:false)`、空选中直接 `consume(ok:false)`、同一 seq 不重复挂。
+- 页脚字段的每种状态、`@` 提及条目、`/blender status|jobs|doctor`、接缝缺失时零注册、卸载清理。
+- 真后端 `/host/state`：无 Blender 时的形状与「未连接」；再挂一个假 addon，验「AI 操作已暂停」→ `aiPaused=true` → 成功一次后清空。
+
 ## 上游整合 A1–A5 自检（v0.9.6）
 
 ``python

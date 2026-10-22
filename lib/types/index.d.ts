@@ -26,6 +26,8 @@ export declare const inject: string[];
 export interface Config {
     port: number;
     autoStart: boolean;
+    /** v2.7：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
+    tui: boolean;
 }
 export declare const Config: any;
 /** 纯决策：命中 ⇒ dup=true 且计数 +1；未命中 ⇒ 记下新 hash。force=true 一律当未命中处理并重置。 */
