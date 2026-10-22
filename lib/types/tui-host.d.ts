@@ -4,7 +4,7 @@
  * Web 的客户端半边（lib/client.js，`dsh.client.platform = "web"`）在 dsh-TUI 里不加载，
  * 所以 v2.3 的「Blender 原生选中 → 草稿」和 `@` 提及在 TUI 里一直是断的（契约 v2.3 增补 §S5.2）。
  * 这里用 dsh-TUI 的**宿主接缝**补上同一套体验（契约 v2.3 增补 §S6）：
- *   ① Blender 原生选中 → 输入框上下文 chip（`ctx.tuiComposer`）+ toast（`ctx.tuiToast`）
+ *   ① Blender 原生选中 → 输入框上下文 chip（`ctx.tuiContextChips`）+ toast（`ctx.tuiToast`）
  *   ② 页脚状态字段（`ctx.tuiStatus.setField`）：通道 / AI 暂停 / 渲染 / 租约 / 作业
  *   ③ `@` 提及 Blender 对象 / 材质 / 集合（`ctx.tuiMentions`）
  *   ④ `/blender status|doctor|jobs` 命令（`ctx.commands` 是 DSH 核心接缝，Web 也有）+ 子命令补全（`ctx.tuiCommandTrees`）
@@ -33,7 +33,7 @@ export declare function selectionChipTitle(sel: any): string;
  */
 export declare function selectionTick(deps: {
     port: number;
-    composer: any;
+    chips: any;
     notify?: (text: string, color: string) => void;
     state: any;
 }): Promise<void>;
@@ -64,7 +64,7 @@ export declare function registerTuiHost(ctx: any, opts: TuiHostOptions): void;
 export declare function tuiHostSummary(): string;
 export declare const __tuiHostInternals: {
     wired: {
-        composer: boolean;
+        chips: boolean;
         toast: boolean;
         status: boolean;
         mentions: boolean;

@@ -5,7 +5,7 @@
  * Web 的客户端半边（lib/client.js，`dsh.client.platform = "web"`）在 dsh-TUI 里不加载，
  * 所以 v2.3 的「Blender 原生选中 → 草稿」和 `@` 提及在 TUI 里一直是断的（契约 v2.3 增补 §S5.2）。
  * 这里用 dsh-TUI 的**宿主接缝**补上同一套体验（契约 v2.3 增补 §S6）：
- *   ① Blender 原生选中 → 输入框上下文 chip（`ctx.tuiComposer`）+ toast（`ctx.tuiToast`）
+ *   ① Blender 原生选中 → 输入框上下文 chip（`ctx.tuiContextChips`）+ toast（`ctx.tuiToast`）
  *   ② 页脚状态字段（`ctx.tuiStatus.setField`）：通道 / AI 暂停 / 渲染 / 租约 / 作业
  *   ③ `@` 提及 Blender 对象 / 材质 / 集合（`ctx.tuiMentions`）
  *   ④ `/blender status|doctor|jobs` 命令（`ctx.commands` 是 DSH 核心接缝，Web 也有）+ 子命令补全（`ctx.tuiCommandTrees`）
@@ -40,7 +40,7 @@ export interface TuiHostOptions {
 }
 
 /** doctor 用的接线现场：哪些接缝挂上了、选中桥最近一次结果 */
-const wired = { composer: false, toast: false, status: false, mentions: false, commands: false, commandTree: false }
+const wired = { chips: false, toast: false, status: false, mentions: false, commands: false, commandTree: false }
 const bridge = { lastSeq: 0, lastOk: null as null | boolean, lastReason: null as null | string, lastAt: null as null | number }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -175,8 +175,8 @@ export function selectionChipTitle(sel: any): string {
  * 与 Web 桥同一套 CAS 语义（§S3.2）：成功才 consume(ok:true)；挂不上不消费、下一 tick 重试，第 3 次失败
  * consume(ok:false, reason)；空选中直接 consume(ok:false)（没有可重试的东西）。
  */
-export async function selectionTick(deps: { port: number; composer: any; notify?: (text: string, color: string) => void; state: any }): Promise<void> {
-  const { port, composer, notify, state } = deps
+export async function selectionTick(deps: { port: number; chips: any; notify?: (text: string, color: string) => void; state: any }): Promise<void> {
+  const { port, chips, notify, state } = deps
   const body = await getJson(port, '/host/selection/latest')
   if (!body || body.ok !== true || body.unconsumed !== true || !body.selection) return
   const seq = Number(body.seq) || 0
@@ -190,7 +190,7 @@ export async function selectionTick(deps: { port: number; composer: any; notify?
   }
   if (!text) { await done(false, { reason: '没有对象名可插入（空选中）' }); return }
   let staged = false
-  try { staged = composer.attachContext({ key: CHIP_KEY, title: selectionChipTitle(body.selection), content: text }) === true } catch (e) { staged = false }
+  try { staged = chips.attachContext({ key: CHIP_KEY, title: selectionChipTitle(body.selection), content: text }) === true } catch (e) { staged = false }
   if (staged) {
     await done(true, { how: 'tui-chip' })
     if (notify) notify('已接收 Blender 选中 · 挂到下一条消息（未发送）', 'success')
@@ -402,12 +402,12 @@ export function registerTuiHost(ctx: any, opts: TuiHostOptions): void {
       return () => { clearInterval(t); toastQueue.length = 0; wired.toast = false }
     }, tag + 'toast')
   })
-  ctx.inject(['tuiComposer'], (c: any) => {
-    const composer = c.tuiComposer
-    if (!composer || typeof composer.attachContext !== 'function') return
+  ctx.inject(['tuiContextChips'], (c: any) => {
+    const chips = c.tuiContextChips
+    if (!chips || typeof chips.attachContext !== 'function') return
     const state = { lastSeq: 0, fails: 0 }
-    c.effect(() => { wired.composer = true; return () => { wired.composer = false } }, tag + 'selection bridge flag')
-    every(c, SELECTION_POLL_MS, () => selectionTick({ port: opts.port, composer: composer, notify: notify, state: state }), tag + 'selection bridge')
+    c.effect(() => { wired.chips = true; return () => { wired.chips = false } }, tag + 'selection bridge flag')
+    every(c, SELECTION_POLL_MS, () => selectionTick({ port: opts.port, chips: chips, notify: notify, state: state }), tag + 'selection bridge')
   })
 
   // ② 页脚字段（tuiStatus.setField 是 dsh-TUI 较新的接缝：旧版只有 set()，这里不退化成整行状态）
@@ -481,11 +481,11 @@ export function registerTuiHost(ctx: any, opts: TuiHostOptions): void {
 /** doctor 的一行：TUI 宿主半边接上了哪些接缝（非 dsh-TUI 宿主时说明为什么是空的） */
 export function tuiHostSummary(): string {
   const on = (b: boolean) => (b ? '✅' : '—')
-  if (!wired.composer && !wired.status && !wired.mentions && !wired.commandTree) {
+  if (!wired.chips && !wired.status && !wired.mentions && !wired.commandTree) {
     return 'TUI 宿主半边：未启用（不是 dsh-TUI 宿主，或 dsh-TUI 版本没有这些接缝；模型工具不受影响）'
       + (wired.commands ? ' · /blender 命令 ✅' : '')
   }
-  let s = 'TUI 宿主半边：选中 chip ' + on(wired.composer) + ' · 页脚 ' + on(wired.status) + ' · @ 提及 ' + on(wired.mentions)
+  let s = 'TUI 宿主半边：选中 chip ' + on(wired.chips) + ' · 页脚 ' + on(wired.status) + ' · @ 提及 ' + on(wired.mentions)
     + ' · /blender ' + on(wired.commands)
   if (bridge.lastAt) s += ' · 最近一次选中 seq=' + String(bridge.lastSeq) + (bridge.lastOk ? ' 已挂上' : ' 未挂上（' + String(bridge.lastReason || '') + '）')
   return s

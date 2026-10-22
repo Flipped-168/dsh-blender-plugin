@@ -125,10 +125,10 @@ const sel3 = { names: ['Wheel_FL', 'Wheel_FR', 'Axle'], count: 3, active: 'Axle'
 const attaches = []
 const toasts = []
 let attachResult = true
-const composer = { attachContext: (x) => { attaches.push(x); return attachResult } }
+const chips = { attachContext: (x) => { attaches.push(x); return attachResult } }
 const notify = (text, color) => { toasts.push([text, color]) }
 const state = { lastSeq: 0, fails: 0 }
-const tick = () => T.selectionTick({ port: FPORT, composer, notify, state })
+const tick = () => T.selectionTick({ port: FPORT, chips, notify, state })
 
 fake.latest = { ok: true, seq: 1, unconsumed: true, selection: sel3 }
 await tick()
@@ -155,11 +155,11 @@ ok('空选中不挂 chip、直接 consume(ok:false)', attaches.length === 4 && f
   && /空选中/.test(fake.consumed[2].reason), JSON.stringify(fake.consumed[2]))
 
 let threw = null
-try { await T.selectionTick({ port: FPORT, composer: { attachContext: () => { throw new Error('boom') } }, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
+try { await T.selectionTick({ port: FPORT, chips: { attachContext: () => { throw new Error('boom') } }, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
 fake.latest = { ok: true, seq: 4, unconsumed: true, selection: sel3 }
-try { await T.selectionTick({ port: FPORT, composer: { attachContext: () => { throw new Error('boom') } }, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
-try { await T.selectionTick({ port: 1, composer, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
-ok('composer 抛错 / 后端不可达都不抛', threw === null, threw && threw.stack)
+try { await T.selectionTick({ port: FPORT, chips: { attachContext: () => { throw new Error('boom') } }, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
+try { await T.selectionTick({ port: 1, chips, state: { lastSeq: 0, fails: 0 } }) } catch (e) { threw = e }
+ok('attachContext 抛错 / 后端不可达都不抛', threw === null, threw && threw.stack)
 
 // ── D：页脚字段
 const HOLDER = 'plugin-pid-1'
@@ -292,7 +292,7 @@ function fakeCtx(services) {
   const shown = []
   const staged = []
   const services = {
-    tuiComposer: { attachContext: (x) => { staged.push(x); return true } },
+    tuiContextChips: { attachContext: (x) => { staged.push(x); return true } },
     tuiToast: { show: (text, o) => { shown.push([text, o && o.color]); return true } },
   }
   fake.latest = { ok: true, seq: 99, unconsumed: true, selection: sel3 }
