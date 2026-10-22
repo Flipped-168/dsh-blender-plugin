@@ -874,7 +874,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /job /host/ready /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items /host/pick/request /host/pick/answer /host/pick/cancel /host/pick/result /host/pick/remove /host/jobs /host/jobs/log)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /launch /who /lease /release /frame /frame.png /act /commands /cmd /loop /perf /opt /view /headless /plan /worker /txn /preset /job /host/scene-items /host/jobs /host/jobs/log /host/selection /host/selection/latest /host/selection/consume)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。
