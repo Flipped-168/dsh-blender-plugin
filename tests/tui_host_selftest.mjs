@@ -91,7 +91,7 @@ ok('子元素：对象名', T.selectionChipTitle({ names: ['Body'], sub: { type:
 ok('超长名字截断', T.selectionChipTitle({ names: ['x'.repeat(80)], count: 1 }).length <= 40)
 
 // ── 假后端（selection / state / jobs / doctor / scene-items）
-const fake = { latest: null, consumed: [], state: null, jobs: null, doctor: null, items: null, lastQuery: null }
+const fake = { latest: null, consumed: [], state: null, jobs: null, doctor: null, items: null, lastQuery: null, itemFetches: 0, itemDelayMs: 0 }
 const srv = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x')
   const send = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
@@ -110,7 +110,11 @@ const srv = http.createServer((req, res) => {
   if (u.pathname === '/host/state') return fake.state ? send(200, fake.state) : (res.destroy(), undefined)
   if (u.pathname === '/host/jobs') return send(200, fake.jobs || { ok: true, jobs: [], running: 0, total: 0 })
   if (u.pathname === '/doctor') return send(200, fake.doctor || { ok: false, addon: { kind: 'blender-unreachable' } })
-  if (u.pathname === '/host/scene-items') { fake.lastQuery = u.searchParams.get('q'); return send(200, fake.items || { ok: true, objects: [], materials: [], collections: [] }) }
+  if (u.pathname === '/host/scene-items') {
+    fake.lastQuery = u.searchParams.get('q'); fake.itemFetches++
+    setTimeout(() => send(200, fake.items || { ok: true, objects: [], materials: [], collections: [] }), fake.itemDelayMs)
+    return
+  }
   send(404, { ok: false })
 })
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
@@ -187,6 +191,24 @@ ok('插入文本与 Web codec 同口径', items[0].insertText === '<blender-obje
 ok('插入文本不以 @ 开头（不会被当成文件提及）', items.every((it) => !it.insertText.startsWith('@')))
 ok('最多 50 条', T.mentionItems({ ok: true, objects: Array.from({ length: 80 }, (_, i) => ({ name: 'o' + String(i) })) }).length === 50)
 ok('坏响应 → []', T.mentionItems(null).length === 0 && T.mentionItems({ ok: false }).length === 0)
+ok('本地过滤：不分大小写、空 query 给前 50 条', T.filterMentionItems(items, 'cU').length === 1 && T.filterMentionItems(items, '').length === 4
+  && T.filterMentionItems(Array.from({ length: 80 }, (_, i) => ({ label: 'o' + String(i) })), '').length === 50)
+{
+  // 冷启动超时：宿主 300 ms 就 abort；这次回空，但缓存在后台填上，下一次立即有结果
+  fake.items = { ok: true, objects: [{ name: 'Wheel_FL', type: 'MESH' }], materials: [], collections: [] }
+  fake.itemDelayMs = 600
+  fake.itemFetches = 0
+  const src = T.createSceneMentionSource(FPORT)
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 300)
+  const t0 = Date.now()
+  const cold = await src('whe', ac.signal)
+  ok('冷启动：宿主 abort 时立刻回空（不拖住输入）', cold.length === 0 && Date.now() - t0 < 500, String(Date.now() - t0))
+  await sleep(500)
+  const warm = await src('whe', new AbortController().signal)
+  ok('冷启动之后：缓存已填上，立即有结果、没有第二次拉取', warm.length === 1 && fake.itemFetches === 1, JSON.stringify([warm, fake.itemFetches]))
+  fake.itemDelayMs = 0
+}
 
 // ── F：/blender 命令
 const opts = { port: FPORT, holder: HOLDER }
@@ -242,9 +264,12 @@ function fakeCtx(services) {
   ok('子命令补全：/blender 下列 status/doctor/jobs', reg.trees.length === 1 && reg.trees[0].root === 'blender'
     && reg.trees[0].children(['blender']).map((n) => n.name).join(',') === 'status,doctor,jobs' && reg.trees[0].children(['blender', 'status']).length === 0)
   ok('@ 提及提供方注册（id=blender）', reg.mentions.length === 1 && reg.mentions[0].id === 'blender' && reg.mentions[0].title === 'Blender')
-  fake.items = { ok: true, objects: [{ name: 'Wheel_FL', type: 'MESH' }], materials: [], collections: [] }
+  fake.items = { ok: true, objects: [{ name: 'Wheel_FL', type: 'MESH' }, { name: 'Body', type: 'MESH' }], materials: [], collections: [] }
+  fake.itemFetches = 0
   const got = await reg.mentions[0].complete('whe', new AbortController().signal)
-  ok('提及查询带上 q、回条目', fake.lastQuery === 'whe' && got.length === 1 && got[0].insertText === '<blender-object>Wheel_FL</blender-object>', JSON.stringify([fake.lastQuery, got]))
+  ok('提及：首查拉全量（q 为空）再本地过滤', fake.lastQuery === '' && got.length === 1 && got[0].insertText === '<blender-object>Wheel_FL</blender-object>', JSON.stringify([fake.lastQuery, got]))
+  const again = await reg.mentions[0].complete('bo', new AbortController().signal)
+  ok('提及：5 s 内再查走缓存（不再碰后端）', fake.itemFetches === 1 && again.length === 1 && again[0].label === 'Body', JSON.stringify([fake.itemFetches, again]))
   ok('命令 handler 走 rawInput', /诊断/.test((await reg.commands[0].handler({ rawInput: ' doctor', signal: new AbortController().signal })).text))
   ok('doctor 摘要列出接上的接缝', /页脚 ✅/.test(T.tuiHostSummary()) && /\/blender ✅/.test(T.tuiHostSummary()), T.tuiHostSummary())
   for (const [, d] of effects.reverse()) if (typeof d === 'function') d()
@@ -255,6 +280,12 @@ function fakeCtx(services) {
   const { ctx, effects } = fakeCtx({ tuiStatus: { set: () => () => {} } })
   T.registerTuiHost(ctx, opts)
   ok('旧版 tuiStatus（没有 setField）→ 不注册页脚', effects.length === 0)
+}
+{
+  const { ctx } = fakeCtx({ tuiMentions: { register: () => { throw new TypeError('duplicate provider') } } })
+  let threw = null
+  try { T.registerTuiHost(ctx, opts) } catch (e) { threw = e }
+  ok('tuiMentions.register 抛错（重复 / 超额）→ 不往外抛、doctor 里显示未接上', threw === null && !/@ 提及 ✅/.test(T.tuiHostSummary()), threw && threw.message)
 }
 {
   // toast 必须在 tuiToast 自己的 inject 里调（dsh-TUI 按异步上下文认调用方）：选中桥只排队，由 toast 那块的定时器发
