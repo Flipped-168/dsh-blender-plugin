@@ -1027,6 +1027,21 @@ _TF_FIELDS = ("location", "scale", "rotation_euler", "rotation_quaternion",
               "delta_location", "delta_scale", "delta_rotation_euler", "delta_rotation_quaternion")
 TOL_MAT = 1e-6          # matrix_world 对拍容差（Blender 内部按 float32 存 transform）
 
+# v2.7：批量 update 工具优先用 K.dsh_kit.BatchUpdates；旧内核/内联测试里没有时用本地兜底，
+# 避免"kit 与模块版本不一致"直接 AttributeError（模块自身不硬依赖新 kit）。
+_BatchUpdates = getattr(_KIT, "BatchUpdates", None)
+if _BatchUpdates is None:
+    class _BatchUpdates:  # noqa: F811 - 本地兜底，行为与 kit 版一致
+        def __init__(self, view_layer=None):
+            import bpy as _bpy
+            self.vl = view_layer or _bpy.context.view_layer
+            self.stages = 0
+            self.updates = 0
+        def flush(self):
+            self.vl.update()
+            self.updates += 1
+            return self
+
 
 def _snap_transforms(objs):
     """快照 transform：矩阵（对拍用）+ 原始字段（还原用，float 位级一致）。"""
@@ -1075,12 +1090,19 @@ def _snap_diff(a, b, tol=TOL_MAT):
 def _restore_transforms(objs, snap, touched=None):
     """把 transform 还原到快照；只写"动过"的对象（没动的对象逐项对拍即可，绝不重写）。
 
+    v2.7 性能：字段写入不再逐对象 update —— 先全部写完、一次 update 再统一核对；
+    只有兜底写矩阵的对象才需要额外 update。语义与旧实现一致（motion_selftest 第 ④ 条守）。
+
     返回 (mismatches, pre_delta, wrote)：pre_delta = 还原前发现的最大偏差，
     还原后的残余偏差写在各对象的对拍里（mismatches 为空即逐项相等）。
     """
     touched = set(touched or [])
-    bpy.context.view_layer.update()
+    batch = _BatchUpdates()
+    batch.flush()                            # 起始基线（与旧实现一致）
     mism, pre_max, post_max, wrote = [], 0.0, 0.0, []
+    pending = []
+
+    # 第一遍：只写字段，不逐对象 update
     for ob in objs:
         rec = snap.get(ob.name)
         if rec is None:
@@ -1102,25 +1124,54 @@ def _restore_transforms(objs, snap, touched=None):
             mism.append({"name": ob.name, "reason": "字段还原失败: %s" % str(e)[:120]})
             continue
         wrote.append(ob.name)
-        bpy.context.view_layer.update()
+        pending.append((ob, rec))
+
+    if not pending:
+        return mism, pre_max, post_max, wrote
+
+    batch.flush()                            # ★ 一次 update 替代"每对象一次"
+    residual = {}
+    fallback = []
+    for ob, rec in pending:
         now2 = _mat_now(ob)
         d2 = max(abs(a - b) for a, b in zip(rec["matrix"], now2))
+        residual[ob.name] = d2
         if d2 > TOL_MAT:
+            fallback.append((ob, rec))
+
+    if fallback:
+        for ob, rec in fallback:
             try:                            # 兜底：直接写矩阵
                 ob.matrix_world = _mat_of(rec)
-                bpy.context.view_layer.update()
-                now3 = _mat_now(ob)
-                d3 = max(abs(a - b) for a, b in zip(rec["matrix"], now3))
-                d2 = d3
-                if d3 > TOL_MAT:
-                    mism.append({"name": ob.name, "reason": "transform 未还原", "residual": d3,
-                                 "want": _rl(rec["matrix"], 9), "got": _rl(now3, 9)})
             except Exception as e:
                 mism.append({"name": ob.name, "reason": "矩阵还原失败: %s" % str(e)[:120]})
+                residual.pop(ob.name, None)
+        batch.flush()
+        # 兜底写矩阵可能影响子级 / 与其它待核对象互为父子 ⇒ 全部复验；仍不齐的再单对象修一次
+        for ob, rec in pending:
+            if ob.name not in residual:
                 continue
-        post_max = max(post_max, d2)
-    return mism, pre_max, post_max, wrote
+            now3 = _mat_now(ob)
+            d3 = max(abs(a - b) for a, b in zip(rec["matrix"], now3))
+            residual[ob.name] = d3
+            if d3 > TOL_MAT:
+                try:
+                    ob.matrix_world = _mat_of(rec)
+                    batch.flush()
+                    now4 = _mat_now(ob)
+                    d4 = max(abs(a - b) for a, b in zip(rec["matrix"], now4))
+                    residual[ob.name] = d4
+                    if d4 > TOL_MAT:
+                        mism.append({"name": ob.name, "reason": "transform 未还原", "residual": d4,
+                                     "want": _rl(rec["matrix"], 9), "got": _rl(now4, 9)})
+                except Exception as e:
+                    mism.append({"name": ob.name, "reason": "矩阵还原失败: %s" % str(e)[:120]})
+                    residual.pop(ob.name, None)
 
+    for ob, rec in pending:
+        if ob.name in residual:
+            post_max = max(post_max, residual[ob.name])
+    return mism, pre_max, post_max, wrote
 
 def _phase_values(jrec, phases, sweep_deg, margin_frac, V):
     """相位值：有 limits 用 limits（首尾各留 margin），否则 revolute 用 ±sweep_deg/2。"""
