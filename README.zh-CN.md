@@ -24,6 +24,7 @@ DSH × Blender 把 DeepSeek Harness 接到 Blender，让 AI 能在真实 Blender
 - **视觉验收与交付门。** 同机位对比渲染与参考图，输出带裁剪和量测的缺陷报告，跑缺陷注入评估；门不是 pass 就拦住交付。
 - **自动化与长任务。** 一次性无头脚本、后台长任务、参数搜索、批量校验，都不占用 GUI。
 - **原生选中。** 在 Blender 里选中物体或集合，一键送进当前 DSH 草稿。
+- **dsh-TUI 里也能用。** 在 dsh-TUI 里，Blender 选中会以上下文 chip 的形式挂到下一条消息上；页脚显示 Blender 通道状态（连接 / AI 暂停 / 渲染 / 作业）；`@` 可以提及场景里的对象、材质和集合；`/blender status|doctor|jobs` 不经过模型直接查状态。这些都要 dsh-TUI 提供对应接缝，没有就自动不启用。
 
 ## 快速开始
 

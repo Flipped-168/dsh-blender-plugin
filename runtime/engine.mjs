@@ -796,7 +796,9 @@ export function createEngine(opts = {}) {
     'get_activity_state', 'get_selection', 'send_selection_to_dsh']);
   const injected = new Set();
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
-  const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0 };
+  const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0,
+                    // v2.7（/host/state）：最近一次出错的时刻；addon「暂停 AI 操作」拒掉命令的时刻（成功一次即清空）
+                    lastErrorAt: null, aiPausedAt: null };
   const rawSend = addon.send.bind(addon);
   /**
    * @param {object} [opts] `{noMark:true}` = 这条命令**不算"会改场景"**（不参与 scene_version 计数）。
@@ -830,11 +832,15 @@ export function createEngine(opts = {}) {
       const r = await rawSend(type, params, timeoutMs);
       metrics.lastOkAt = Date.now();
       metrics.lastDiagnosis = null;
+      metrics.aiPausedAt = null;
       return r;
     } catch (e) {
       const msg = String((e && e.message) || e);
       metrics.errors++;
       metrics.lastError = msg;
+      metrics.lastErrorAt = Date.now();
+      // addon v1.10 暂停时回 {error:'AI_PAUSED', message:'AI 操作已暂停：…'}，协议层只留下 message
+      if (/AI_PAUSED|AI 操作已暂停/.test(msg)) metrics.aiPausedAt = metrics.lastErrorAt;
       const transport = /timeout|closed|ECONN|ECONNRESET|socket/i.test(msg);
       if (transport) metrics.timeouts++;
       // v0.7.0：只有**传输/超时类**错误才做三级判定；执行类错误（代码抛错/编译错）不该被误判成 main-thread-busy
@@ -2387,6 +2393,8 @@ export function createEngine(opts = {}) {
     /** v0.9.4：拉起 GUI Blender + 自动 Connect addon（server.mjs /launch 路由用） */
     launchBlender: (opts) => launchBlender(opts || {}),
     sceneEpoch: sceneEpoch,
+    /** v2.7（/host/state）：render_guard 标记文件（零 Blender 往返） */
+    renderFlag: () => readRenderFlag(),
     /** 通道指标快照（inflight / last_cmd / 超时计数） */
     metrics() {
       return { ...metrics, lastCmdAgeMs: metrics.lastCmdAt ? Date.now() - metrics.lastCmdAt : null };

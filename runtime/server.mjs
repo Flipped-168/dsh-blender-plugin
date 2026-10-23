@@ -270,6 +270,41 @@ function clampItemsLimit(v, dflt = 200) {
 }
 function hostNormEmpty(v) { return (v === '' || v == null) ? null : v; }
 
+/**
+ * v2.7：`GET /host/state` 的响应体（纯内存，零 Blender 往返；任何一块取不到都给保守默认值，不抛）。
+ * 「AI 已暂停」只能在 addon 拒掉一条命令之后才知道（后端不为它轮询 Blender），成功一次就清空。
+ */
+function hostStateView() {
+  const now = Date.now();
+  const age = (t) => (t ? now - t : null);
+  let m = {};
+  try { m = engine.metrics() || {}; } catch (e) { m = {}; }
+  let render = { busy: false, ageMs: null, scene: null };
+  try {
+    const g = engine.renderFlag();
+    if (g && g.present) render = { busy: !g.stale, ageMs: g.ageMs, scene: (g.info && g.info.scene) || null };
+  } catch (e) { /* 读不到标记 = 不在渲染 */ }
+  let running = 0;
+  try { running = (engine.job.list() || []).filter((j) => j && j.status === 'running').length; } catch (e) { running = 0; }
+  return {
+    ok: true,
+    channel: {
+      lastOkAgeMs: age(m.lastOkAt),
+      lastCmd: m.lastCmd || null,
+      lastCmdAgeMs: age(m.lastCmdAt),
+      inflight: Number(m.inflight) || 0,
+      lastError: m.lastError ? String(m.lastError).slice(0, 200) : null,
+      lastErrorAgeMs: age(m.lastErrorAt),
+      diagnosis: (m.lastDiagnosis && m.lastDiagnosis.kind) ? String(m.lastDiagnosis.kind) : null,
+      aiPaused: !!m.aiPausedAt,
+    },
+    lease: leaseView(),
+    render: render,
+    jobs: { running: running },
+    backend: { pid: process.pid, uptimeMs: now - stats.startedAt },
+  };
+}
+
 async function handleHost(req, res, url, p) {
   const origin = req.headers.origin || null;
 
@@ -323,6 +358,13 @@ async function handleHost(req, res, url, p) {
                          stdout: (snap.stdoutTail === undefined ? null : snap.stdoutTail),
                          stderr: (snap.stderrTail === undefined ? null : snap.stderrTail),
                          job: trimJob(snap) }, origin);
+    return;
+  }
+
+  // v2.7（dsh-TUI 页脚状态字段，契约 v2.3 增补 §S6）：通道 / 租约 / 渲染 / 作业 / AI 暂停一次给全。
+  // **零 Blender 往返**：只读内存里的 engine.metrics()、租约表、render_guard 标记文件与作业台账。
+  if (req.method === 'GET' && p === '/host/state') {
+    hostJson(res, 200, hostStateView(), origin);
     return;
   }
 
@@ -874,7 +916,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /launch /who /lease /release /frame /frame.png /act /commands /cmd /loop /perf /opt /view /headless /plan /worker /txn /preset /job /host/scene-items /host/jobs /host/jobs/log /host/selection /host/selection/latest /host/selection/consume)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /launch /who /lease /release /frame /frame.png /act /commands /cmd /loop /perf /opt /view /headless /plan /worker /txn /preset /job /host/scene-items /host/jobs /host/jobs/log /host/state /host/selection /host/selection/latest /host/selection/consume)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。

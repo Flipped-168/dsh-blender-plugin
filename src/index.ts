@@ -26,6 +26,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { registerTuiHost, tuiHostSummary } from './tui-host.js'
 
 const IS_WIN = process.platform === 'win32'
 
@@ -227,6 +228,8 @@ const HOSTNAME = '127.0.0.1'
 export interface Config {
   port: number
   autoStart: boolean
+  /** v2.7：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
+  tui: boolean
 }
 
 /**
@@ -312,6 +315,7 @@ export const Config = z
   ? z.object({
       port: z.natural().default(resolveHttpPort()),
       autoStart: z.boolean().default(true),
+      tui: z.boolean().default(true),
     })
   : undefined
 
@@ -1497,6 +1501,9 @@ export function apply(ctx: any, config: Config): void {
   const port = Number.isFinite(Number(cfgIn.port)) && Number(cfgIn.port) > 0 ? Number(cfgIn.port) : resolveHttpPort()
   const autoStart = cfgIn.autoStart === undefined ? true : !!cfgIn.autoStart
 
+  // v2.7：dsh-TUI 宿主半边（契约 v2.3 增补 §S6）。各块按接缝是否存在启用；Web / headless 上什么都不做。
+  if (cfgIn.tui !== false) registerTuiHost(ctx, { port: port, holder: HOLDER })
+
   void (async () => { if (autoStart && !paused) await ensureBackend(port) })()
 
   // 常驻看护：每 15s 探活一次，掉线自动拉起（宿主重启 / 进程被杀 / 端口被回收都能自愈）。
@@ -2639,6 +2646,7 @@ export function apply(ctx: any, config: Config): void {
           const lines: string[] = []
           lines.push('诊断：' + String((d && d.kind) || (diag && diag.kind) || (d && d.ok ? 'ok' : 'unknown')))
           lines.push('宿主 API：' + HOST_API)                      // v0.9.2（R2）：DSH 升级后一眼看出插件挂的是哪份 dsh-tools
+          lines.push(tuiHostSummary())                             // v2.7：dsh-TUI 宿主半边接上了哪些接缝
           lines.push('插件：v' + PLUGIN_VERSION + ' @ ' + HERE)
           lines.push('schemastery：' + (schemaResolve.via
             ? ('已解析（' + schemaResolve.via + '）')

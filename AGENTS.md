@@ -102,6 +102,8 @@
   addon v1.10 起编辑模式点/线/面、姿态骨骼、曲线/晶格控制点也进入 `selection.sub`（见契约 §S1.3），N 面板另有「暂停 AI 操作」。
   契约唯一真源 `docs/宿主集成-接口契约-v2.3增补.md`（顶部有 v2.6 兼容声明）；回归
   `node tests/selection_store_selftest.mjs` + `node tests/client_bundle_selftest.mjs`（改后两者都必须在 `npm test` 里绿）。
+  **dsh-TUI 宿主半边（v2.7）**：`src/tui-host.ts` 用 dsh-TUI 接缝补上 TUI 里的选中（上下文 chip）/ 页脚状态字段 / `@` 提及 / `/blender` 命令，
+  按接缝是否存在启用（契约 §S6；回归 `node tests/tui_host_selftest.mjs`）。
   两个 N 面板模式：**多选 / 集合**（大装配体用集合）。**装完/升级完必须主动告诉用户这些功能**（话术见 `docs/AI-安装提示词.md` §③.5）。
 
 ## 5. 给用户的一段提示词
