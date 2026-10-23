@@ -13,3 +13,6 @@ dsh-blender.config.json
 venv/
 runtime/ext/venv/
 .venv/
+
+# 工作树/构建用的依赖符号链接（node_modules/ 只匹配目录，符号链接要单独忽略）
+node_modules
