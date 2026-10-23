@@ -15,11 +15,28 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LOCK = path.join(HERE, 'capability.lock.json');
 const engine = await import(pathToFileURL(path.join(HERE, "..", "runtime", "engine.mjs")).href);
-const cat = engine.catalogPayload({});
 
-const families = (cat.families || [])
-  .map((f) => ({ f: String(f.f || f.family || f.prefix), ops: (f.ops || []).length }))
+// v2.7（issue #42）：`catalogPayload({}).families` 给的是族名**字符串数组**，旧代码却按对象读
+// （`f.f || f.family || f.prefix`）⇒ 锁内 33 行全塌成 {f:"undefined", ops:0}，族名 / 逐族 op 这一维
+// 实际失效。逐族 op 数改取 `full:true` 的 `detail`（与 `ops_count` 同源）。
+const cat = engine.catalogPayload({ full: true });
+const detail = Array.isArray(cat.detail) ? cat.detail : [];
+const families = detail
+  .map((e) => ({ f: String(e.family), ops: Array.isArray(e.ops) ? e.ops.length : 0 }))
   .sort((a, b) => a.f.localeCompare(b.f));
+
+// 取数面自检：结构不对就明说，不静默写出退化锁（#42 的教训 —— 假绿比红更坏）
+const famOpsSum = families.reduce((sum, x) => sum + x.ops, 0);
+const badShape = [];
+if (!detail.length) badShape.push("catalog.detail 为空（engine.catalogPayload({full:true}) 没给逐族明细）");
+if (families.some((x) => !x.f || x.f === "undefined")) badShape.push("存在空 / undefined 族名");
+if (new Set(families.map((x) => x.f)).size !== families.length) badShape.push("族名重复");
+if (Number(cat.ops_count) !== famOpsSum) badShape.push("逐族 op 数之和 " + famOpsSum + " ≠ ops_count " + Number(cat.ops_count));
+if (badShape.length) {
+  console.log("能力锁：取数面异常（不写锁，也不判绿）");
+  for (const b of badShape) console.log("  x " + b);
+  process.exit(1);
+}
 
 // 工具名取模型侧真源 src/index.ts（工具注册处）
 // tarball guard (issue #40): files 面不含 src/ ⇒ tarball 用户读不到真源，工具维度不可判（family/op 维度仍照判）。
