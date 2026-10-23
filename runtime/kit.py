@@ -353,7 +353,7 @@ def selftest():
 
 # ────────────────────────────── 批量 update ──────────────────────────────
 class BatchUpdates:
-    """多步数据写入 + 单次 `view_layer.update()` 的显式批次工具（v2.7 性能）。
+    """多步数据写入 + 单次 `view_layer.update()` 的显式批次工具（v2.6.1 性能）。
 
     用法：
         batch = _KIT.BatchUpdates()

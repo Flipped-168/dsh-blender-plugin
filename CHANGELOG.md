@@ -1,5 +1,33 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## v2.6.1（2026-10-23）—— 性能优化（选中轮询 / 审计 / 批处理 update）+ 平台与测试修复
+
+> v2.6.0 之后合入的改动打包为本版（含此前 PR 中标注为 v2.7 的 dsh-TUI 宿主半边）。
+> 模型工具仍 **15 个**；plan catalog 仍 **33 family / 217 op**；addon 仍 **v1.10 / protocol 11**。
+
+### 性能（真实成品文件实测）
+- **选中轮询 1200 ms → 100 ms**（Web 客户端 + dsh-TUI 宿主半边）：端到端 p50 ~993 ms → ~156 ms
+  （本机回环，8 次选中变化；CAS consume 语义不变）。
+- **`audit._tris` 大网格快路径**：面数 ≥256 时批量 `foreach_get("loop_total")`；
+  137k 面 59.3 ms → 15.5 ms（3.8×），逐值等价。
+- **批处理 update 第 1/2 步**：新增 `K.dsh_kit.BatchUpdates`；`motion._restore_transforms` 改为
+  「先写全部字段 → 一次 update → 统一核对」，真实成品 300 对象还原 32× / 91×
+  （行星发动机 / 太空电梯），motion selftest 25/25。
+- 实测否定了「msgbus 订阅选中」：Blender 5.2 上 `Object.select` 不是 RNA 属性；
+  选中变化继续用 `depsgraph_update_post`（0.3–0.7 ms）。
+
+### 功能（v2.6.0 之后合入）
+- **#35 工具卡片**：15 个工具的 `presentCall` / `presentResult`，宿主不再显示整段 JSON。
+- **#36 dsh-TUI 宿主半边**：选中上下文 chip、页脚状态字段、`@` 提及、`/blender status|doctor|jobs`；
+  按接缝能力检测启用，新增只读 `GET /host/state`。
+
+### 修复
+- **#38 / #39 / #43 Windows 终端弹窗**：三处 blender `spawn` + 两处 `execFileSync` 补 `windowsHide: true`，
+  并加 `tests/windows_hide_selftest.mjs` 静态自检（进 `npm test`）。
+- **#40 / #41 capability lock**：发布 tarball（无 `src/`）不再 ENOENT，降级工具维度并显式打印 SKIP。
+- **#42 capability lock families**：逐族取数改用族名字符串 + `full:true` detail，恢复族名 / 逐族 op 维度；
+  用 `--update` 重新落锁。
+
 ## v2.6.0（2026-10-21）—— 33 family / 217 op · GUI 优先 · 无头备用 · 文档与 skill 重写
 
 > v2.5.0 之后的四轮工作（P0 / P1 / P2 + 文档与 skill 重写）并入本版一次发布。

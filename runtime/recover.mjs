@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const RECOVER_VERSION = '2.6.0'
+export const RECOVER_VERSION = '2.6.1'
 const NL = String.fromCharCode(10)
 const STAGE_TAG = 'DSH_STAGE '
 const PROGRESS_TAG = 'DSH_PROGRESS '

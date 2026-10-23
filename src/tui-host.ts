@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * @dsh-external/dsh-blender-plugin —— dsh-TUI 宿主半边（v2.7，host 侧 / Node 进程内）。
+ * @dsh-external/dsh-blender-plugin —— dsh-TUI 宿主半边（v2.6.1，host 侧 / Node 进程内）。
  *
  * Web 的客户端半边（lib/client.js，`dsh.client.platform = "web"`）在 dsh-TUI 里不加载，
  * 所以 v2.3 的「Blender 原生选中 → 草稿」和 `@` 提及在 TUI 里一直是断的（契约 v2.3 增补 §S5.2）。
@@ -17,7 +17,7 @@
  *   - 选中**不自动发送**：chip 只在用户自己发下一条消息时随消息走，用户可以删掉。
  */
 
-const SELECTION_POLL_MS = 100 // v2.7 性能实测：1200→100ms（契约 §S3.2）
+const SELECTION_POLL_MS = 100 // v2.6.1 性能实测：1200→100ms（契约 §S3.2）
 const STATE_POLL_MS = 3000
 const HTTP_TIMEOUT_MS = 1500
 /** toast 队列的发送间隔（见 ① 的说明：toast 必须在 tuiToast 自己的 inject 上下文里调） */

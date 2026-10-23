@@ -35,7 +35,7 @@ const IS_WIN = process.platform === 'win32'
  * description 由**已加载的那份 lib** 生成 → 会话里一眼能看出自己跑的是哪一代，
  * 不会再出现「读的是新源码、跑的是旧 lib」那种排查事故（外部反馈 j20-build 的元教训）。
  */
-const PLUGIN_VERSION = '2.6.0'
+const PLUGIN_VERSION = '2.6.1'
 // 注意：必须**先加前缀、再交给 defineTool** —— defineTool 负责校验与规范化，
 // 自己 spread 一个成品对象会绕过它（实测：spread 版本会让插件 fiber 直接 failed）。
 //
@@ -140,7 +140,7 @@ function isPlainObjectLike(v: any): boolean {
 
 const vTool = (spec: any): any => defineTool({
   ...spec,
-  // v2.7：工具卡片（只管宿主 UI 怎么显示，不改模型侧回执；见 cardPresenters）
+  // v2.6.1：工具卡片（只管宿主 UI 怎么显示，不改模型侧回执；见 cardPresenters）
   ...cardPresenters(spec),
   description: '[v' + PLUGIN_VERSION + '] ' + String((spec && spec.description) || ''),
   // v0.9.4（P0 返回通道）：所有工具**唯一出口**都过一遍 losslessSanitize ——
@@ -228,7 +228,7 @@ const HOSTNAME = '127.0.0.1'
 export interface Config {
   port: number
   autoStart: boolean
-  /** v2.7：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
+  /** v2.6.1：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
   tui: boolean
 }
 
@@ -1041,7 +1041,7 @@ function renderStructured(_args: unknown, value: any): any[] {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * v2.7（工具卡片）：presentCall / presentResult —— **只管给人看的卡片**，模型侧回执
+ * v2.6.1（工具卡片）：presentCall / presentResult —— **只管给人看的卡片**，模型侧回执
  * （render 的输出）一个字节都不动。宿主（dsh-TUI / Web）没有这两个方法时显示的是
  * `Blender_rt_do({"code":"import bpy\n…"})` 这种整段 JSON 参数 + 原始回执（含单行 JSON 信封）。
  *   - 调用卡片：标题写成「Blender <动作> · <要点>」；带代码的调用把代码放进卡片正文。
@@ -1501,7 +1501,7 @@ export function apply(ctx: any, config: Config): void {
   const port = Number.isFinite(Number(cfgIn.port)) && Number(cfgIn.port) > 0 ? Number(cfgIn.port) : resolveHttpPort()
   const autoStart = cfgIn.autoStart === undefined ? true : !!cfgIn.autoStart
 
-  // v2.7：dsh-TUI 宿主半边（契约 v2.3 增补 §S6）。各块按接缝是否存在启用；Web / headless 上什么都不做。
+  // v2.6.1：dsh-TUI 宿主半边（契约 v2.3 增补 §S6）。各块按接缝是否存在启用；Web / headless 上什么都不做。
   if (cfgIn.tui !== false) registerTuiHost(ctx, { port: port, holder: HOLDER })
 
   void (async () => { if (autoStart && !paused) await ensureBackend(port) })()
@@ -2646,7 +2646,7 @@ export function apply(ctx: any, config: Config): void {
           const lines: string[] = []
           lines.push('诊断：' + String((d && d.kind) || (diag && diag.kind) || (d && d.ok ? 'ok' : 'unknown')))
           lines.push('宿主 API：' + HOST_API)                      // v0.9.2（R2）：DSH 升级后一眼看出插件挂的是哪份 dsh-tools
-          lines.push(tuiHostSummary())                             // v2.7：dsh-TUI 宿主半边接上了哪些接缝
+          lines.push(tuiHostSummary())                             // v2.6.1：dsh-TUI 宿主半边接上了哪些接缝
           lines.push('插件：v' + PLUGIN_VERSION + ' @ ' + HERE)
           lines.push('schemastery：' + (schemaResolve.via
             ? ('已解析（' + schemaResolve.via + '）')
@@ -2858,6 +2858,6 @@ export const __internals = {
     register: registerBundledSkill,
     parseFrontmatter: parseSkillFrontmatter,
   },
-  // v2.7：工具卡片 presenter（tests/tool_cards_selftest.mjs 直接断言）
+  // v2.6.1：工具卡片 presenter（tests/tool_cards_selftest.mjs 直接断言）
   cards: { specs: CARD_SPECS, presenters: cardPresenters },
 }

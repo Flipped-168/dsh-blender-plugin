@@ -7,7 +7,7 @@
 1. **安装 / 配置 / 排查前先读** `README.zh-CN.md` 的 §2 前置条件、§3 安装（构建可选）、§8 常见故障（英文见 `README.md` 的 §9）。
    「装好了」的判据：**GUI 路线 = `doctor` 回 `kind=ok`**（`curl -sS http://127.0.0.1:9877/doctor` 与 `blender_viewport(op="doctor")`）；
    **纯无头路线**（不装 addon）用 `blender_rt_worker(start)` + `see` 出图自证（doctor 的 bpy 往返不可达属预期）。
-2. **当前版本 v2.6.0**：**15 个模型工具** · plan catalog **33 family / 217 op** · addon **v1.10**（protocol **11**）。
+2. **当前版本 v2.6.1**：**15 个模型工具** · plan catalog **33 family / 217 op** · addon **v1.10**（protocol **11**）。
    升级插件后必须**重启 DSH**；旧 `MCP for Blender` 自 v2.3 起不再支持（迁移见 [MIGRATIONS.md](MIGRATIONS.md)）。
 3. **GUI 优先（无头备用）**：默认先开 GUI Blender + Connect。无头是备用：`blender_rt_worker`（`start/exec/see/watch/reset`、`preload`/`warmup`、空闲 TTL），
    `blender_rt_do/rt_see` 支持 `session/auto`，`blender_rt_plan(session="auto")` 同步无头路由；只有长活/批处理/无 GUI 才走

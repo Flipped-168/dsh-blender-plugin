@@ -47,7 +47,7 @@ def _kernel():
 
 
 def _tris(me):
-    # v2.7（性能实测，太空电梯 137k 面）：逐面 len(p.vertices) 走 RNA 要 54–59 ms；
+    # v2.6.1（性能实测，太空电梯 137k 面）：逐面 len(p.vertices) 走 RNA 要 54–59 ms；
     # 先把 loop_total 批量读进 list 再求和只要 14–15 ms（约 3.8×）。小网格保留原路径，避免固定开销。
     n = len(me.polygons)
     if n == 0:

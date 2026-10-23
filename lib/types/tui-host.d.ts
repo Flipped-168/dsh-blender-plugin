@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-blender-plugin —— dsh-TUI 宿主半边（v2.7，host 侧 / Node 进程内）。
+ * @dsh-external/dsh-blender-plugin —— dsh-TUI 宿主半边（v2.6.1，host 侧 / Node 进程内）。
  *
  * Web 的客户端半边（lib/client.js，`dsh.client.platform = "web"`）在 dsh-TUI 里不加载，
  * 所以 v2.3 的「Blender 原生选中 → 草稿」和 `@` 提及在 TUI 里一直是断的（契约 v2.3 增补 §S5.2）。

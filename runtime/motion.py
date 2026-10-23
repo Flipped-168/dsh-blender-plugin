@@ -1027,7 +1027,7 @@ _TF_FIELDS = ("location", "scale", "rotation_euler", "rotation_quaternion",
               "delta_location", "delta_scale", "delta_rotation_euler", "delta_rotation_quaternion")
 TOL_MAT = 1e-6          # matrix_world 对拍容差（Blender 内部按 float32 存 transform）
 
-# v2.7：批量 update 工具优先用 K.dsh_kit.BatchUpdates；旧内核/内联测试里没有时用本地兜底，
+# v2.6.1：批量 update 工具优先用 K.dsh_kit.BatchUpdates；旧内核/内联测试里没有时用本地兜底，
 # 避免"kit 与模块版本不一致"直接 AttributeError（模块自身不硬依赖新 kit）。
 _BatchUpdates = getattr(_KIT, "BatchUpdates", None)
 if _BatchUpdates is None:
@@ -1090,7 +1090,7 @@ def _snap_diff(a, b, tol=TOL_MAT):
 def _restore_transforms(objs, snap, touched=None):
     """把 transform 还原到快照；只写"动过"的对象（没动的对象逐项对拍即可，绝不重写）。
 
-    v2.7 性能：字段写入不再逐对象 update —— 先全部写完、一次 update 再统一核对；
+    v2.6.1 性能：字段写入不再逐对象 update —— 先全部写完、一次 update 再统一核对；
     只有兜底写矩阵的对象才需要额外 update。语义与旧实现一致（motion_selftest 第 ④ 条守）。
 
     返回 (mismatches, pre_delta, wrote)：pre_delta = 还原前发现的最大偏差，

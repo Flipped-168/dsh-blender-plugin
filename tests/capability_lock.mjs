@@ -16,7 +16,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LOCK = path.join(HERE, 'capability.lock.json');
 const engine = await import(pathToFileURL(path.join(HERE, "..", "runtime", "engine.mjs")).href);
 
-// v2.7（issue #42）：`catalogPayload({}).families` 给的是族名**字符串数组**，旧代码却按对象读
+// v2.6.1（issue #42）：`catalogPayload({}).families` 给的是族名**字符串数组**，旧代码却按对象读
 // （`f.f || f.family || f.prefix`）⇒ 锁内 33 行全塌成 {f:"undefined", ops:0}，族名 / 逐族 op 这一维
 // 实际失效。逐族 op 数改取 `full:true` 的 `detail`（与 `ops_count` 同源）。
 const cat = engine.catalogPayload({ full: true });

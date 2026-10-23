@@ -147,7 +147,7 @@ const jsonOut = arg('--json', '')
 if (jsonOut) writeFileSync(resolve(jsonOut), JSON.stringify(parsed, null, 1) + '\n')
 
 const withTimeout = parsed.summary.filter((t) => typeof t.timeoutMs === 'number')
-// v2.7：工具卡片 presenter 要经得起宿主的 defineTool（它不认的字段会被丢掉）
+// v2.6.1：工具卡片 presenter 要经得起宿主的 defineTool（它不认的字段会被丢掉）
 const withCards = parsed.summary.filter((t) => t.hasPresentCall && t.hasPresentResult)
 const ok = parsed.count === EXPECTED_TOOLS && parsed.errors.length === 0 && withTimeout.length === EXPECTED_TIMEOUTS
   && withCards.length === EXPECTED_TOOLS

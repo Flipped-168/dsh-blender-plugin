@@ -797,7 +797,7 @@ export function createEngine(opts = {}) {
   const injected = new Set();
   /** 通道侧指标：谁在写 / 忙不忙 / 队列多深（供 /status、/who 用） */
   const metrics = { calls: 0, errors: 0, timeouts: 0, inflight: 0, lastCmd: null, lastCmdAt: null, lastOkAt: null, lastError: null, lastDiagnosis: null, views: 0, headlessRuns: 0, lastHeadlessMs: null, workerStarts: 0, workerExecs: 0,
-                    // v2.7（/host/state）：最近一次出错的时刻；addon「暂停 AI 操作」拒掉命令的时刻（成功一次即清空）
+                    // v2.6.1（/host/state）：最近一次出错的时刻；addon「暂停 AI 操作」拒掉命令的时刻（成功一次即清空）
                     lastErrorAt: null, aiPausedAt: null };
   const rawSend = addon.send.bind(addon);
   /**
@@ -2393,7 +2393,7 @@ export function createEngine(opts = {}) {
     /** v0.9.4：拉起 GUI Blender + 自动 Connect addon（server.mjs /launch 路由用） */
     launchBlender: (opts) => launchBlender(opts || {}),
     sceneEpoch: sceneEpoch,
-    /** v2.7（/host/state）：render_guard 标记文件（零 Blender 往返） */
+    /** v2.6.1（/host/state）：render_guard 标记文件（零 Blender 往返） */
     renderFlag: () => readRenderFlag(),
     /** 通道指标快照（inflight / last_cmd / 超时计数） */
     metrics() {

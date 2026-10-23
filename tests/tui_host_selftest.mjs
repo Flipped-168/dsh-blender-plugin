@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tests/tui_host_selftest.mjs —— v2.7：dsh-TUI 宿主半边（src/tui-host.ts，契约 v2.3 增补 §S6）
+ * tests/tui_host_selftest.mjs —— v2.6.1：dsh-TUI 宿主半边（src/tui-host.ts，契约 v2.3 增补 §S6）
  *
  * 不需要 Blender，也不需要 dsh-TUI：宿主接缝全用假的，后端用一个假 HTTP 服务 + 一个真 runtime/server.mjs。
  *   A 草稿文本与 Web 客户端（lib/client.js）**逐字一致**（两份实现，靠这里对拍防漂移）
@@ -35,7 +35,7 @@ function ok(name, cond, detail) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-console.log('== dsh-TUI 宿主半边自检（v2.7）==')
+console.log('== dsh-TUI 宿主半边自检（v2.6.1）==')
 
 // ── A：与 Web 客户端逐字一致
 let client = null

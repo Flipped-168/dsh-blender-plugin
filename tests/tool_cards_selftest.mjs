@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tests/tool_cards_selftest.mjs —— v2.7：工具卡片（presentCall / presentResult）
+ * tests/tool_cards_selftest.mjs —— v2.6.1：工具卡片（presentCall / presentResult）
  *
  * 宿主（dsh-TUI / Web）用这两个方法决定卡片怎么显示；没有它们时卡片头是整段 JSON 参数、
  * 正文是原始回执（renderStructured 的第 0 块是单行 JSON 信封）。本测试固定：
