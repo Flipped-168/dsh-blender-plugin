@@ -178,7 +178,8 @@ function winLocalAppData() {
   try {
     // cwd 要给 Windows 侧目录：在 UNC 路径下 cmd.exe 会警告 "UNC 路径不支持" 并回退到 C:Windows
     const cwd = fs.existsSync('/mnt/c') ? '/mnt/c' : (fs.existsSync('/mnt/d') ? '/mnt/d' : undefined);
-    const out = execFileSync('cmd.exe', ['/c', 'echo', '%LOCALAPPDATA%'], { encoding: 'utf8', timeout: 5000, cwd: cwd }).trim();
+    // windowsHide: WSL 侧 spawn Windows 可执行体（cmd.exe，console-subsystem）时避免新配控制台（issue #43）
+    const out = execFileSync('cmd.exe', ['/c', 'echo', '%LOCALAPPDATA%'], { encoding: 'utf8', timeout: 5000, cwd: cwd, windowsHide: true }).trim();
     if (/^[A-Za-z]:\\/.test(out)) _lad = out;
   } catch (e) { /* 无 interop（纯 Linux）→ 走 os.tmpdir() */ }
   return _lad;
@@ -299,7 +300,8 @@ function detectBlenderExe() {
   // PATH 兜底（Linux 用 which，Windows 用 where）
   try {
     const cmd = IS_WIN ? 'where.exe' : 'which';
-    const out = execFileSync(cmd, ['blender'], { encoding: 'utf8', timeout: 5000 }).split(/\r?\n/).filter(Boolean)[0];
+    // windowsHide: where.exe 是 console-subsystem，宿主无控制台时会被新配控制台（issue #43；非 Windows no-op）
+    const out = execFileSync(cmd, ['blender'], { encoding: 'utf8', timeout: 5000, windowsHide: true }).split(/\r?\n/).filter(Boolean)[0];
     if (out) return { exe: IS_WIN ? out.trim() : out.trim(), from: 'auto:path' };
   } catch (e) { /* 没装到 PATH */ }
   return { exe: null, from: 'not-found' };

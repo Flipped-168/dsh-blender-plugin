@@ -43,6 +43,17 @@ node tests/tui_host_selftest.mjs        # src/tui-host.ts：假宿主接缝 + �
 - 页脚字段的每种状态、`@` 提及条目、`/blender status|jobs|doctor`、接缝缺失时零注册、卸载清理。
 - 真后端 `/host/state`：无 Blender 时的形状与「未连接」；再挂一个假 addon，验「AI 操作已暂停」→ `aiPaused=true` → 成功一次后清空。
 
+## Windows 子进程藏窗自检（v2.7 · 进 `npm test`）
+
+```bash
+node tests/windows_hide_selftest.mjs     # 静态扫描 runtime/*.mjs 的 child_process 调用（不需要 Blender / 不需要 Windows）
+```
+
+- 规则：Windows 上会创建控制台的 child_process 调用必须带 `windowsHide: true`；GUI 启动 `runtime/launch.mjs`（`detached: true` ⇒ libuv `DETACHED_PROCESS`）允许用 `detached: true` 替代。
+- 背景 issue #38 / #43：`spawn` 族修了、同族的 `execFileSync` 漏了 ⇒ 用静态扫描把**整个 `runtime/*.mjs` 面**锁住，而不是只修当前这几处。
+- 实现：先遮掉字符串 / 注释 / 正则字面量（`/['"]/` 这类不会把后面代码带偏），再做括号配对；`exec(compile(...))` 这种字符串里的 Python 代码不会被误判成调用。
+- 反例实测：删掉 config / engine 的 `windowsHide`、删掉 launch 的 `detached` 均 exit 1，并指到文件:行。
+
 ## 上游整合 A1–A5 自检（v0.9.6）
 
 ``python

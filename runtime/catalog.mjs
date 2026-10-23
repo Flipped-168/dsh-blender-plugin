@@ -377,6 +377,8 @@ export function probeDiskCatalog(timeoutMs) {
     const out = execFileSync(process.execPath, ['-e', js], {
       encoding: 'utf8', timeout: Math.max(2000, Math.min(30000, Number(timeoutMs) || 8000)),
       stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env, { DSH_PROVENANCE_PROBE: '1' }),
+      // windowsHide: node.exe 是 console-subsystem，宿主无控制台时会被新配控制台（issue #43；非 Windows no-op）
+      windowsHide: true,
     });
     const line = String(out).trim().split(String.fromCharCode(10)).filter(Boolean).pop() || '';
     return JSON.parse(line);
