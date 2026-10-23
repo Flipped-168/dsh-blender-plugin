@@ -17,7 +17,7 @@
  *   - 选中**不自动发送**：chip 只在用户自己发下一条消息时随消息走，用户可以删掉。
  */
 
-const SELECTION_POLL_MS = 1200
+const SELECTION_POLL_MS = 100 // v2.7 性能实测：1200→100ms（契约 §S3.2）
 const STATE_POLL_MS = 3000
 const HTTP_TIMEOUT_MS = 1500
 /** toast 队列的发送间隔（见 ① 的说明：toast 必须在 tuiToast 自己的 inject 上下文里调） */

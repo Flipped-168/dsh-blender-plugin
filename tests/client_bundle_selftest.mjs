@@ -187,7 +187,7 @@ if (!st) {
   }
 
   // v2.3 选中桥：文本与插入路径
-  ok('选中轮询间隔 = 1200 ms', st.SELECTION_POLL_MS === 1200, st.SELECTION_POLL_MS);
+  ok('选中轮询间隔 = 100 ms', st.SELECTION_POLL_MS === 100, st.SELECTION_POLL_MS);
   ok('草稿名单上限 = 24', st.SELECTION_DRAFT_NAME_LIMIT === 24, st.SELECTION_DRAFT_NAME_LIMIT);
   const selPayload = { selection: { count: 2, names: ['GEO-blade', 'GEO-guard'], truncated: false, active: 'GEO-blade', mode: 'OBJECT' } };
   const selText = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(selPayload) : null;
