@@ -1792,7 +1792,7 @@ export function createEngine(opts = {}) {
       if (w) j.pathWarnings.push(w);
     }
     const child = spawn(BLENDER_EXE, args, { env: withWslEnv(baseChildEnv(Object.assign({}, envPairs)), opts.env),
-                                             stdio: ['ignore', 'pipe', 'pipe'], detached: false });
+                                             stdio: ['ignore', 'pipe', 'pipe'], detached: false, windowsHide: true });
     j.child = child; j.pid = child.pid;
     // v0.9.3（D5）：stage 扫描 + 行数/字节计数（stdout 仍然 pipe 到日志文件）
     const scanOut = makeStageScanner(j), scanErr = makeStageScanner(j);
@@ -2146,7 +2146,7 @@ export function createEngine(opts = {}) {
       if (USER_CONFIG_WIN) childEnv.BLENDER_USER_CONFIG = USER_CONFIG_WIN;
       if (USER_SCRIPTS_WIN) childEnv.BLENDER_USER_SCRIPTS = USER_SCRIPTS_WIN;
     }
-    const child = spawn(BLENDER_EXE, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(BLENDER_EXE, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     w.child = child; w.port = port; w.ready = false; w.startedAt = Date.now();
     w.gpu = null; w.pid = child.pid; w.lastError = null; w.stdoutTail = ''; w.stderrTail = '';
     const info = await new Promise((resolve) => {
@@ -2804,7 +2804,7 @@ export function createEngine(opts = {}) {
         const CAP = 262144;
         let child = null;
         try {
-          child = spawn(BLENDER_EXE, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+          child = spawn(BLENDER_EXE, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
           runRec.child = child; runRec.pid = child.pid;
         } catch (e) {
           return resolve({ spawnErr: e });
