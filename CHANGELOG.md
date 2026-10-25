@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 新增
+- **headless：`opts.hardExit`（默认开启）**——无头脚本在 `done` 标记之后显式冲刷 stdout/stderr，
+  随即 `os._exit(0)` 跳过 Blender 自身退出拆解。现场：Blender 5.2.3（Steam）在 .blend 加载材质带
+  Value→Material Output.Thickness 连线时，glTF 导出**成功、产物完整、done 已打出**之后，
+  在退出期命中导出器 AV（0xC0000005），结果被 exitCode≠0 顶成"失败"。
+  依赖正常 teardown 的调用方（`bpy.app.handlers` 落盘、延迟自动保存）传 `hardExit=false` 回旧行为。
+  作业路径与同步路径同一份实现（`runtime/hard_exit.mjs`）；
+  新增 `tests/headless_hard_exit_selftest.mjs`（顺序契约 / 开关语义 / 接线断言，已入 `npm test` 主链，
+  `npm run test:hardexit`）。
 ### 修复
 - **headless：`file=` 缺失/空串/参数名误写不再静默成功**（旧症状：`file=""` 或 `blend=<路径>` →
   `ok=true / exitCode=0 / inputFile=null / 零警告`，脚本拿到出厂空场景）：
