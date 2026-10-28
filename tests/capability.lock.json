@@ -1,7 +1,7 @@
 {
-  "families_count": 28,
-  "ops_count": 186,
-  "tools_count": 16,
+  "families_count": 34,
+  "ops_count": 228,
+  "tools_count": 15,
   "tools": [
     "blender_rt_cmd",
     "blender_rt_commands",
@@ -11,7 +11,6 @@
     "blender_rt_loop",
     "blender_rt_opt",
     "blender_rt_perf",
-    "blender_rt_pick",
     "blender_rt_plan",
     "blender_rt_preset",
     "blender_rt_see",
@@ -22,116 +21,140 @@
   ],
   "families": [
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "assembly",
+      "ops": 8
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "audit",
+      "ops": 14
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "blockout",
+      "ops": 7
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "calib",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "clearance",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "contract",
+      "ops": 19
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "deliver",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "eval",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "ext",
+      "ops": 2
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "face",
+      "ops": 4
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "fix",
+      "ops": 4
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "gate",
+      "ops": 7
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "generator",
+      "ops": 7
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "gui",
+      "ops": 4
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "human",
+      "ops": 6
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "img",
+      "ops": 11
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "material",
+      "ops": 6
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "montage",
+      "ops": 2
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "motion",
+      "ops": 10
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "pipe",
+      "ops": 7
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "plan",
+      "ops": 8
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "print",
+      "ops": 5
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "qc",
+      "ops": 16
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "qc_render",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "render",
+      "ops": 3
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "render_guard",
+      "ops": 5
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "sculpt",
+      "ops": 8
     },
     {
-      "f": "undefined",
-      "ops": 0
+      "f": "shape",
+      "ops": 12
+    },
+    {
+      "f": "shapesolve",
+      "ops": 3
+    },
+    {
+      "f": "surface",
+      "ops": 11
+    },
+    {
+      "f": "sweep",
+      "ops": 4
+    },
+    {
+      "f": "uv",
+      "ops": 7
+    },
+    {
+      "f": "vehicle",
+      "ops": 10
+    },
+    {
+      "f": "visualreport",
+      "ops": 3
     }
   ]
 }

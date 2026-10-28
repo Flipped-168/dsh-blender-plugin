@@ -178,7 +178,8 @@ function winLocalAppData() {
   try {
     // cwd 要给 Windows 侧目录：在 UNC 路径下 cmd.exe 会警告 "UNC 路径不支持" 并回退到 C:Windows
     const cwd = fs.existsSync('/mnt/c') ? '/mnt/c' : (fs.existsSync('/mnt/d') ? '/mnt/d' : undefined);
-    const out = execFileSync('cmd.exe', ['/c', 'echo', '%LOCALAPPDATA%'], { encoding: 'utf8', timeout: 5000, cwd: cwd }).trim();
+    // windowsHide: WSL 侧 spawn Windows 可执行体（cmd.exe，console-subsystem）时避免新配控制台（issue #43）
+    const out = execFileSync('cmd.exe', ['/c', 'echo', '%LOCALAPPDATA%'], { encoding: 'utf8', timeout: 5000, cwd: cwd, windowsHide: true }).trim();
     if (/^[A-Za-z]:\\/.test(out)) _lad = out;
   } catch (e) { /* 无 interop（纯 Linux）→ 走 os.tmpdir() */ }
   return _lad;
@@ -299,7 +300,8 @@ function detectBlenderExe() {
   // PATH 兜底（Linux 用 which，Windows 用 where）
   try {
     const cmd = IS_WIN ? 'where.exe' : 'which';
-    const out = execFileSync(cmd, ['blender'], { encoding: 'utf8', timeout: 5000 }).split(/\r?\n/).filter(Boolean)[0];
+    // windowsHide: where.exe 是 console-subsystem，宿主无控制台时会被新配控制台（issue #43；非 Windows no-op）
+    const out = execFileSync(cmd, ['blender'], { encoding: 'utf8', timeout: 5000, windowsHide: true }).split(/\r?\n/).filter(Boolean)[0];
     if (out) return { exe: IS_WIN ? out.trim() : out.trim(), from: 'auto:path' };
   } catch (e) { /* 没装到 PATH */ }
   return { exe: null, from: 'not-found' };
@@ -315,14 +317,6 @@ export const CFG = {
   // 通道
   addonHost: process.env.DSH_BLENDER_ADDON_HOST || FILE.cfg.addonHost || '127.0.0.1',
   addonPort: num(process.env.DSH_BLENDER_ADDON_PORT || FILE.cfg.addonPort, 9876),
-  // Blender 侧 addon 的线上协议：auto（默认，探测一次）/ flat / category-action。
-  // 见 runtime/addon-protocol.mjs；探测结果会出现在 /doctor 与 /who 里。
-  // 旧值 'ahujasid' 是**已弃用别名**（v2.0.0 协议判别 id 改名 'flat'）：归一化为 'flat'，旧配置文件不炸。
-  addonProtocol: (function () {
-    const v = String(process.env.DSH_BLENDER_ADDON_PROTOCOL || FILE.cfg.addonProtocol || 'auto').trim().toLowerCase();
-    if (v === 'ahujasid') return 'flat';   // 已弃用别名（兼容，不是痕迹）
-    return v === 'flat' || v === 'category-action' ? v : 'auto';
-  })(),
   httpPort: num(process.env.DSH_BLENDER_HTTP_PORT || FILE.cfg.httpPort, 9877),
   /**
    * Windows 侧启动代理（D:/DSH/blender/launch-agent.mjs，默认 127.0.0.1:9878）。
@@ -377,7 +371,6 @@ export function describeConfig(over) {
     // WSL 报发行版名（UNC 里用的就是它）；原生 Linux 报自己的发行版 —— 别再把 Manjaro 报成 'Ubuntu'（issue #11）
     distro: (IS_WIN || IS_MAC) ? null : (IS_WSL ? DISTRO : linuxDistroName()),
     addon: CFG.addonHost + ':' + String(CFG.addonPort),
-    addonProtocol: CFG.addonProtocol,
     http: '127.0.0.1:' + String(o.httpPort || CFG.httpPort),
     workDir: { win: CFG.workDirWin, wsl: CFG.workDirWsl, from: CFG.source.workDir, fallback: CFG.workDirFallback,
                // v0.9.6（D3）：这个工作目录 Windows 侧看不看得见（false = 无头脚本会打不开，必须换目录）

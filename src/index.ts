@@ -8,7 +8,7 @@
  *       blender_rt_do       跑一段 Python + 立刻回一帧（整步 ~105ms）
  *       blender_rt_watch    指定时间窗内连续采样若干帧（看动画/交互行为）
  *       blender_rt_loop     内环：一次调用在 Blender 主线程跑几千次迭代
- *       blender_rt_cmd/commands  透传 addon 任意命令（34 条：19 常驻 + 15 集成门控）
+ *       blender_rt_cmd/commands  透传 addon 任意命令（39 条：24 常驻 + 15 集成门控）
  *       blender_rt_perf/opt 渲染性能预设 / 对象精简
  *       blender_rt_headless 无头进程（blender -b）：重活不占 GUI 通道
  *       blender_viewport   后端运维：status / doctor / who / lease / release / start / stop / restart
@@ -26,6 +26,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { registerTuiHost, tuiHostSummary } from './tui-host.js'
 
 const IS_WIN = process.platform === 'win32'
 
@@ -34,7 +35,7 @@ const IS_WIN = process.platform === 'win32'
  * description 由**已加载的那份 lib** 生成 → 会话里一眼能看出自己跑的是哪一代，
  * 不会再出现「读的是新源码、跑的是旧 lib」那种排查事故（外部反馈 j20-build 的元教训）。
  */
-const PLUGIN_VERSION = '2.1.0'
+const PLUGIN_VERSION = '2.6.1'
 // 注意：必须**先加前缀、再交给 defineTool** —— defineTool 负责校验与规范化，
 // 自己 spread 一个成品对象会绕过它（实测：spread 版本会让插件 fiber 直接 failed）。
 //
@@ -139,6 +140,8 @@ function isPlainObjectLike(v: any): boolean {
 
 const vTool = (spec: any): any => defineTool({
   ...spec,
+  // v2.6.1：工具卡片（只管宿主 UI 怎么显示，不改模型侧回执；见 cardPresenters）
+  ...cardPresenters(spec),
   description: '[v' + PLUGIN_VERSION + '] ' + String((spec && spec.description) || ''),
   // v0.9.4（P0 返回通道）：所有工具**唯一出口**都过一遍 losslessSanitize ——
   // 一个字段写错（NaN / undefined / -0）不该让整条工具通道变成不可用。
@@ -225,6 +228,8 @@ const HOSTNAME = '127.0.0.1'
 export interface Config {
   port: number
   autoStart: boolean
+  /** v2.6.1：dsh-TUI 宿主半边（选中 chip / 页脚字段 / @ 提及 / /blender 命令）；只在有对应接缝的宿主生效 */
+  tui: boolean
 }
 
 /**
@@ -250,7 +255,7 @@ function resolveHttpPort(): number {
   return 9877
 }
 /** 后端未就绪时的统一提示（不假设任何本机路径） */
-const BACKEND_HINT = '先确认 Blender 在运行且 addon（DSH Blender Bridge，旧名 MCP for Blender）已 Connect；然后 blender_viewport op=start 拉起后端。'
+const BACKEND_HINT = '先确认 Blender 在运行且本仓 addon（DSH Blender Bridge v1.10+）已 Connect；然后 blender_viewport op=start 拉起后端。'
   + '端口/工作目录/blender.exe 可用 DSH_BLENDER_* 环境变量或包根 dsh-blender.config.json 配置（见 docs/配置参考.md）。'
 
 /**
@@ -280,7 +285,6 @@ const T = {
   job: 660000,
   viewport: 60000,    // status/doctor/lease + start/restart 的重试窗口
   // v1.2：等用户点选 —— 后端 TTL 默认 120 s（夹 [5,600]），静态截止留余量盖住最长 600 s + 收尾
-  pick: 660000,
 }
 
 /**
@@ -311,6 +315,7 @@ export const Config = z
   ? z.object({
       port: z.natural().default(resolveHttpPort()),
       autoStart: z.boolean().default(true),
+      tui: z.boolean().default(true),
     })
   : undefined
 
@@ -324,6 +329,7 @@ function base(port: number): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 import { probeHttp, decideStart, waitHttp } from '../runtime/backend_probe.mjs'
+import { detectFileAlias } from '../runtime/file_guard.mjs'
 
 async function probe(port: number, timeoutMs = 1500): Promise<boolean> {
   const ac = new AbortController()
@@ -674,6 +680,328 @@ async function toAttachment(ctx: any, data: Uint8Array, name: string): Promise<{
   }
 }
 
+/** Windows / UNC 路径 → WSL 路径（本机 DSH 在 WSL 里跑；Windows 宿主则原样返回）。 */
+function toWslPath(p: any): string {
+  const s = String(p == null ? '' : p)
+  if (!s) return s
+  // Windows 宿主：D:\... 本来就是本机可用路径，转成 /mnt/d/... 反而读不到（Windows 上无此挂载）。
+  if (process.platform === 'win32') return s
+  if (/^[A-Za-z]:[\\/]/.test(s)) return '/mnt/' + s[0].toLowerCase() + s.slice(2).replace(/\\/g, '/')
+  const m = s.match(/^\\\\wsl\.localhost\\[^\\]+\\(.*)$/i)
+  if (m) return '/' + String(m[1]).replace(/\\/g, '/')
+  return s
+}
+/** 读本地 PNG（失败返回 null；调用方负责把 why 写进文本，不静默） */
+function readLocalPng(p: any): Uint8Array | null {
+  const s = String(p == null ? '' : p)
+  if (!s) return null
+  const converted = toWslPath(s)
+  const candidates = converted === s ? [s] : [converted, s]
+  for (const candidate of candidates) {
+    try { return readFileSync(candidate) } catch (e) { /* try next form */ }
+  }
+  return null
+}
+/** 批量附图：≤max 张；返回已附的 attachment 与失败清单（路径/原因） */
+async function attachPaths(ctx: any, paths: any[], tag: string, max = 2): Promise<{ images: any[]; used: string[]; failed: string[] }> {
+  const images: any[] = [], used: string[] = [], failed: string[] = []
+  const seen = new Set<string>()
+  for (const p of paths || []) {
+    if (images.length >= max) break
+    const s = String(p == null ? '' : p)
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    const data = readLocalPng(s)
+    if (!data) { failed.push(s + '（读不到）'); continue }
+    const att = await toAttachment(ctx, data, tag + '-' + String(Date.now()) + '-' + String(images.length) + '.png')
+    if (att.ref) { images.push(att.ref); used.push(s) } else failed.push(s + '（' + String(att.why || '附图失败') + '）')
+  }
+  return { images, used, failed }
+}
+/** 无头 see 兜底：走 /worker 的 see op（Workbench 离屏；不依赖 GUI addon）。返回 {text,image} 或 null。 */
+async function watchViaWorker(ctx: any, port: number, args: any, session?: string): Promise<any> {
+  const size = Math.max(120, Math.min(1600, Number((args && args.max_size) || 420)))
+  const spec: any = {
+    width: size, height: Math.max(120, Math.round(size * 9 / 16)),
+    seconds: Math.max(0.2, Math.min(20, Number((args && args.seconds) || 2))),
+    fps: Math.max(0.5, Math.min(8, Number((args && args.fps) || 4))),
+    code: args && args.code ? String(args.code) : undefined,
+  }
+  const nm = session ? String(session) : 'watch'
+  try {
+    await backendPost(port, '/worker', { op: 'start', name: nm, engine: 'workbench', warmup: true, isolated: true }, 120000)
+    const r: any = await backendPost(port, '/worker', { op: 'watch', name: nm, spec: spec, isolated: true }, 180000)
+    const res = (r && r.result) || {}
+    if (!r || r.ok !== true || res.ok !== true) return { text: 'WATCH 无头失败 · ' + String((r && (r.error || res.error)) || 'unknown') }
+    const fr: any[] = res.frames || []
+    const hashes = fr.filter((x) => x && x.ok).map((x) => x.hash)
+    const distinct = new Set(hashes).size
+    const parts: string[] = []
+    if (res.code) parts.push('code: ' + (res.code.ok ? 'ok' : '失败') + (res.code.error ? ' · ' + String(res.code.error) : ''))
+    parts.push('WATCH(headless) ' + String(res.sampled || fr.length) + ' 帧 · 不同画面 ' + String(distinct) + '/' + String(hashes.length)
+      + ' · ' + String(res.ms || 0) + 'ms' + (res.static_render ? ' · 无动画帧范围，静态重复采样' : ''))
+    parts.push('timeline: ' + fr.slice(0, 16).map((x) => String(x.frame) + ':' + String(x.hash)).join(' '))
+    const images: any[] = []
+    let whyNot = ''
+    const picks = Array.isArray(res.picks) ? res.picks.slice(0, 6) : []
+    for (let i = 0; i < picks.length; i++) {
+      const p = picks[i]
+      let data: Uint8Array | null = null
+      if (p.png_b64) { try { data = Buffer.from(String(p.png_b64), 'base64') } catch (e) { data = null } }
+      if (!data && p.path) data = readLocalPng(p.path)
+      if (!data) { if (!whyNot) whyNot = '无 png_b64/path'; continue }
+      const att = await toAttachment(ctx, data, 'watch-hl-' + String(p.frame) + '-' + String(p.hash) + '.png')
+      if (att.ref) images.push(att.ref)
+      else if (!whyNot) whyNot = att.why
+    }
+    parts.push('附帧：' + String(images.length) + ' 张' + (whyNot ? ' · ⚠ ' + whyNot : ''))
+    return images.length ? { text: parts.join(String.fromCharCode(10)), images: images } : { text: parts.join(String.fromCharCode(10)) }
+  } catch (e) {
+    return { text: 'WATCH 无头异常 · ' + String((e && e.message) || e) }
+  }
+}
+async function seeViaWorker(ctx: any, port: number, spec: any, name?: string): Promise<any | null> {
+  try {
+    const r: any = await backendPost(port, '/worker', { op: 'see', name: name || 'default', spec: spec || {}, isolated: true }, 90000)
+    if (!r || r.ok !== true) return null
+    const res = (r.result && typeof r.result === 'object') ? r.result : {}
+    if (res.ok === false) return { text: '无头 see 失败 · ' + String(res.error || 'unknown') + (res.traceback ? String.fromCharCode(10) + String(res.traceback).slice(-1200) : '') }
+    let data: Uint8Array | null = null
+    if (res.png_b64) { try { data = Buffer.from(String(res.png_b64), 'base64') } catch (e) { data = null } }
+    if (!data && res.path) data = readLocalPng(res.path)
+    const att = data ? await toAttachment(ctx, data, 'headless-see-' + String(Date.now()) + '.png') : { why: '没有 png_b64/path' }
+    const text = '无头 see（Workbench 离屏，GUI 未连接自动降级）· ' + String(res.ms) + 'ms · ' + String(res.width) + 'x' + String(res.height)
+      + ' · ' + String(res.bytes || 0) + 'B' + (res.coverage_estimate === null || res.coverage_estimate === undefined ? '' : (' · 覆盖 ' + (Number(res.coverage_estimate) * 100).toFixed(2) + '%'))
+      + ' · 场景与用户视口未改动'
+    return att.ref ? { text: text, image: att.ref } : { text: text + String.fromCharCode(10) + '⚠ 图片未回传：' + String(att.why || '未知原因') }
+  } catch (e) {
+    return null
+  }
+}
+
+/** 交互式无头一步：exec 代码 + 可选 see（持久 worker；不是 job / 不是异步回合）。 */
+async function doViaSession(ctx: any, port: number, opts: any): Promise<any | null> {
+  try {
+    const nm = String(opts.session || 'interactive')
+    const preload = opts.preload ? String(opts.preload) : ''
+    if (preload) {
+      const st: any = await backendPost(port, '/worker', { op: 'start', name: nm, preload: preload, engine: 'workbench', warmup: true, isolated: true }, 120000)
+      if (!st || st.ok !== true) return { text: '无头会话启动失败 · ' + String((st && (st.error || st.raw)) || 'unknown') }
+    }
+    let code = String(opts.code || '')
+    if (!code && opts.file) {
+      const data = readLocalPng(opts.file)
+      if (!data) return { text: '读不到脚本文件：' + String(opts.file) }
+      code = Buffer.from(data).toString('utf8')
+    }
+    if (!code) return null
+    const r: any = await backendPost(port, '/worker', { op: 'exec', name: nm, code: code, isolated: true }, 180000)
+    const rr = (r && r.result) || {}
+    if (!r || r.ok !== true) {
+      return { text: 'ACT(session) 失败 · ' + String((r && (r.error || rr.error)) || 'unknown') + (rr.traceback ? String.fromCharCode(10) + String(rr.traceback).slice(-1800) : '') }
+    }
+    const parts: string[] = ['ACT(session=' + nm + ') ok · ' + String(rr.ms) + 'ms']
+    if (rr.stdout && String(rr.stdout).trim()) parts.push('stdout: ' + String(rr.stdout).trim().slice(0, 3000))
+    if (rr.stderr && String(rr.stderr).trim()) parts.push('stderr: ' + String(rr.stderr).trim().slice(0, 1200))
+    let image: any = undefined
+    const see = opts.see !== false
+    if (see) {
+      const size = Math.max(120, Math.min(1600, Number(opts.max_size || 560)))
+      const spec: any = {
+        from: numTriple(opts.from) || [7, -7, 5],
+        look_at: numTriple(opts.look_at) || [0, 0, 1],
+        lens: opts.lens === undefined ? undefined : Number(opts.lens),
+        ortho: opts.ortho === undefined ? undefined : !!opts.ortho,
+        ortho_scale: opts.ortho_scale === undefined ? undefined : Number(opts.ortho_scale),
+        width: size, height: Math.max(120, Math.round(size * 9 / 16)),
+      }
+      const vs = String(opts.view_size || '')
+      const mm = vs.match(/^(\d+)\s*[x×]\s*(\d+)$/)
+      if (mm) { spec.width = Number(mm[1]); spec.height = Number(mm[2]) }
+      const sr: any = await backendPost(port, '/worker', { op: 'see', name: nm, spec: spec, isolated: true }, 90000)
+      const sres = (sr && sr.result) || {}
+      if (sres.ok !== false) {
+        let data: Uint8Array | null = null
+        if (sres.png_b64) { try { data = Buffer.from(String(sres.png_b64), 'base64') } catch (e) { data = null } }
+        if (!data && sres.path) data = readLocalPng(sres.path)
+        const att = data ? await toAttachment(ctx, data, 'session-see-' + String(Date.now()) + '.png') : { why: '没有 png_b64/path' }
+        if (att.ref) image = att.ref
+        parts.push('SEE(session) ' + String(spec.width) + 'x' + String(spec.height) + ' · ' + String(sres.ms) + 'ms'
+          + (sres.coverage_estimate === null || sres.coverage_estimate === undefined ? '' : (' · 覆盖 ' + (Number(sres.coverage_estimate) * 100).toFixed(2) + '%')))
+        if (!image) parts.push('⚠ 图片未回传：' + String(att.why || '未知原因'))
+      } else {
+        parts.push('SEE(session) 失败: ' + String(sres.error || 'unknown'))
+      }
+    }
+    const out: any = { text: parts.join(String.fromCharCode(10)) }
+    if (image) out.image = image
+    return out
+  } catch (e) {
+    return null
+  }
+}
+
+/** 从 plan 回执里收集可附图路径（≤2 张；只认常见产物字段） */
+function planImagePaths(res: any): string[] {
+  const r = (res && typeof res === 'object') ? res : {}
+  const out: string[] = []
+  const push = (x: any) => { const s = typeof x === 'string' ? x : (x && (x.path || x.crop || x.out || x.file)); if (s) out.push(String(s)) }
+  if (Array.isArray(r.images)) for (const x of r.images) push(x)
+  else if (r.images && typeof r.images === 'object') {
+    for (const k of ['overlay', 'sheet', 'crops', 'per_view']) {
+      const v = r.images[k]
+      if (Array.isArray(v)) for (const x of v) push(x)
+      else if (v) push(v)
+    }
+  }
+  for (const k of ['overlay', 'sheet', 'diff_heat', 'annotated', 'atlas', 'out']) push(r[k])
+  if (Array.isArray(r.crops)) for (const c of r.crops) push(c)
+  if (Array.isArray(r.views)) for (const v of r.views) push(v)
+  if (r.overlay && r.overlay.path) push(r.overlay.path)
+  if (r.sheet && r.sheet.path) push(r.sheet.path)
+  return out
+}
+
+/** P1：plan op → 无头 worker 的模块 API（不给 GUI 也能跑；op 前缀路由 + 别名） */
+const PLAN_HEADLESS_MAP: any[] = [
+  ['visualreport_', 'dsh_visualreport_api', 'visualreport,qc,imgtools'],
+  ['shapesolve_', 'dsh_shapesolve_api', 'shapesolve,imgtools'],
+  ['eval_', 'dsh_evalharness_api', 'evalharness,assembly,audit,contract,clearance,gate,imgtools,calib,mesh_fix'],
+  ['surface_', 'dsh_surface_api', 'surface,audit'],
+  ['blockout_', 'dsh_blockout_api', 'blockout,qc,qc_render,montage'],
+  ['asm_', 'dsh_assembly_api', 'assembly,audit,contract,clearance,gate,mesh_fix,geo,txn'],
+  ['img_', 'dsh_img_api', 'imgtools'],
+  ['audit_', 'dsh_audit_api', 'audit'],
+  ['qc_', 'dsh_qc_api', 'qc,imgtools'],
+  ['gate_', 'dsh_gate_api', 'gate,audit'],
+  ['shape_', 'dsh_shape_api', 'shapegen,imgtools'],
+  ['vehicle_', 'dsh_vehicle_api', 'vehicle,audit,clearance,gate'],
+  ['clear_', 'dsh_clearance_api', 'clearance'],
+  ['deliver_', 'dsh_deliver_api', 'deliver,gate'],
+  ['fix_', 'dsh_fix_api', 'mesh_fix'],
+  ['uv_', 'dsh_uv_api', 'uv_tools'],
+  ['print_', 'dsh_print_api', 'printcheck'],
+  ['sculpt_', 'dsh_sculpt_api', 'sculpt'],
+  ['sweep_', 'dsh_sweep_api', 'sweep'],
+  ['material_', 'dsh_material_api', 'material'],
+  ['motion_', 'dsh_motion_api', 'motion'],
+  ['generator_', 'dsh_generator_api', 'generator'],
+  ['face_', 'dsh_face_api', 'faceeval'],
+  ['human_', 'dsh_human_api', 'human,imgtools'],
+]
+const PLAN_HEADLESS_ALIAS: any = {
+  qc_visual_report: ['dsh_visualreport_api', 'report', 'visualreport,qc,imgtools'],
+  shape_solve: ['dsh_shapesolve_api', 'solve', 'shapesolve,imgtools'],
+  fix_clash: ['dsh_assembly_api', 'repair', 'assembly,audit,contract,clearance,gate,mesh_fix,geo,txn'],
+  fix_interference: ['dsh_assembly_api', 'fix_interference', 'assembly,audit,contract,clearance,gate,mesh_fix,geo,txn'],
+  audit_clash_all: ['dsh_assembly_api', 'scan', 'assembly,audit,contract,clearance,gate,mesh_fix,geo,txn'],
+  model_preflight: ['dsh_gate_api', 'preflight', 'gate,audit'],
+  model_checkpoint: ['dsh_gate_api', 'checkpoint', 'gate,txn'],
+  model_deliver: ['dsh_gate_api', 'deliver', 'gate,audit,txn,deliver'],
+}
+function planHeadlessTarget(op: string): any {
+  const o = String(op || '')
+  if (PLAN_HEADLESS_ALIAS[o]) {
+    const a = PLAN_HEADLESS_ALIAS[o]
+    return { api: a[0], sub: a[1], preload: a[2] }
+  }
+  for (const row of PLAN_HEADLESS_MAP) {
+    const p = String(row[0])
+    if (o.indexOf(p) === 0) return { api: row[1], sub: o.slice(p.length), preload: row[2] }
+  }
+  return null
+}
+/** 用持久 worker 执行一个 plan op（不依赖 GUI addon；模块由 preload 注入 K） */
+async function planViaWorker(ctx: any, port: number, op: string, payload: any, session?: string): Promise<any> {
+  const t = planHeadlessTarget(op)
+  if (!t) return { ok: false, error: '该 plan op 没有无头映射（先 op="catalog" 查，或走 GUI 通道）' }
+  const nm = session ? String(session) : ('plan-' + String(t.api).replace(/^dsh_|_api$/g, ''))
+  try {
+    const st: any = await backendPost(port, '/worker', { op: 'start', name: nm, preload: t.preload, engine: 'workbench', warmup: false, isolated: true }, 120000)
+    if (!st || st.ok !== true) return { ok: false, error: '无头 worker 启动失败：' + String((st && (st.error || st.raw)) || 'unknown') }
+    const code = 'import json as _json\n_s = _json.dumps(_json.loads(' + JSON.stringify(JSON.stringify(payload || {})) + '))\n'
+      + '_r = K.' + t.api + '["dispatch"](' + JSON.stringify(String(t.sub)) + ', _s)\n'
+      + 'print("HEADLESS " + (_r if isinstance(_r, str) else _json.dumps(_r, ensure_ascii=False)))'
+    const r: any = await backendPost(port, '/worker', { op: 'exec', name: nm, code: code, isolated: true }, 900000)
+    const rr = (r && r.result) || {}
+    if (!r || r.ok !== true) {
+      return { ok: false, error: '无头 plan 执行失败：' + String((r && (r.error || rr.error)) || 'unknown'),
+               hint: String(rr.traceback || '').slice(-1200) }
+    }
+    return { ok: true, res: rr.result, via: 'worker:' + nm }
+  } catch (e) {
+    return { ok: false, error: '无头 plan 异常：' + String((e && e.message) || e) }
+  }
+}
+/** plan 回执统一收尾：信封 + 附图（GUI/无头共用） */
+async function finishPlanResponse(ctx: any, op: string, res: any, argsIn: any): Promise<any> {
+  const txt = typeof res === 'string' ? res : JSON.stringify(res, null, 1)
+  const CAP = 12000
+  const env = planEnvelope(op, res)
+  const attachWanted = (argsIn && argsIn.attach_images !== undefined)
+    ? !!argsIn.attach_images
+    : ['img_digest', 'qc_compare', 'visualreport_report', 'qc_visual_report', 'shapesolve_solve'].indexOf(op) >= 0
+  let images: any[] = []
+  let attachNote = ''
+  if (attachWanted) {
+    const att = await attachPaths(ctx, planImagePaths(res), 'plan-' + op.replace(/[^a-z0-9_]+/gi, '_'), 2)
+    images = att.images
+    if (att.used.length) attachNote = String.fromCharCode(10) + '附图：' + String(att.used.length) + ' 张（' + att.used.join(' · ') + '）'
+    if (att.failed.length) attachNote += String.fromCharCode(10) + '⚠ 部分图未附：' + att.failed.slice(0, 2).join(' · ')
+  }
+  const head = 'PLAN ' + op + ' ok · ' + String(txt.length) + ' chars · verdict=' + String(env.verdict)
+    + (env.summary ? (' · ' + String(env.summary)) : '') + attachNote + String.fromCharCode(10)
+  return {
+    text: head + (txt.length > CAP ? txt.slice(0, CAP) + String.fromCharCode(10) + '…[已截断，共 ' + String(txt.length) + ' 字符；结构化全量见后端 results/ 目录或用 headless(outJson=…) 落盘]' : txt),
+    envelope: env,
+    ...(images.length ? { images: images } : {}),
+  }
+}
+/** 弱模型契约 v2：verdict-first 信封（单行、≤2k）——plan 与 headless 共用口径 */
+function planEnvelope(op: string, res: any): any {
+  const r = (res && typeof res === 'object') ? res : { value: res }
+  const verdict = r.verdict || r.state || (r.ok === false ? 'fail' : (r.ok === true ? (r.clean === false ? 'degraded' : 'pass') : null))
+  let defects: any[] = []
+  for (const k of ['top_defects', 'offenders', 'defects', 'failures', 'errors']) {
+    if (Array.isArray(r[k])) { defects = r[k]; break }
+  }
+  const limit = (t: any, n: number) => String(t == null ? '' : t).slice(0, n)
+  const top = defects.slice(0, 5).map((d: any, i: number) => {
+    if (!d || typeof d !== 'object') return { id: 'D' + String(i + 1), code: limit(d, 80) }
+    return {
+      id: d.id || ('D' + String(i + 1)),
+      code: limit(d.code || d.kind || d.class || d.error || 'issue', 60),
+      severity: d.severity || null,
+      object: d.object || d.a || d.name || null,
+      measured: d.measured || (d.volume_mm3 !== undefined ? { volume_mm3: d.volume_mm3 } : (d.depth_mm !== undefined ? { depth_mm: d.depth_mm } : null)),
+      fix_hint: d.fix_hint || d.repair || null,
+    }
+  })
+  const next = (Array.isArray(r.next) ? r.next : (Array.isArray(r.repairs) ? r.repairs : []))
+    .slice(0, 3).map((x: any) => (typeof x === 'string' ? { op: limit(x, 120) } : { op: limit(x.op || x.name || 'next', 80), args: x.args || null, why: limit(x.why || '', 120) }))
+  const env: any = {
+    contract: 'receipt.v2', op: op, verdict: verdict,
+    summary: limit(r.summary || r.note || r.error || r.hint || '', 160),
+    top_defects: top,
+    next: next,
+    images: planImagePaths(r).slice(0, 2),
+    provenance: { ms: (typeof r.ms === 'number' ? r.ms : null) },
+  }
+  const counts = r.counts || (r.totals ? r.totals : null)
+  if (counts && typeof counts === 'object') env.counts = counts
+  if (r.detail && typeof r.detail === 'object') env.detail = { path: r.detail.path || null, bytes: r.detail.bytes || null, id: r.detail.id || null }
+  // 信封硬预算：超过 2k 就只保留最有用的三块（verdict / top3 / next2）
+  try {
+    if (JSON.stringify(env).length > 2000) {
+      env.top_defects = top.slice(0, 3)
+      env.next = next.slice(0, 2)
+      delete env.counts
+      if (env.detail && env.detail.bytes && env.detail.bytes > 0) { /* keep path only */ } else delete env.detail
+    }
+  } catch (e) { /* ignore */ }
+  return env
+}
+
 function renderOne(_args: unknown, value: any): any[] {
   const blocks: any[] = [{ type: 'text', text: String((value && value.text) || '') }]
   if (value && value.image) blocks.push({ type: 'image', attachment: value.image })
@@ -712,6 +1040,167 @@ function renderStructured(_args: unknown, value: any): any[] {
   if (value && value.image) blocks.push({ type: 'image', attachment: value.image })
   if (value && Array.isArray(value.images)) for (const im of value.images) blocks.push({ type: 'image', attachment: im })
   return blocks
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * v2.6.1（工具卡片）：presentCall / presentResult —— **只管给人看的卡片**，模型侧回执
+ * （render 的输出）一个字节都不动。宿主（dsh-TUI / Web）没有这两个方法时显示的是
+ * `Blender_rt_do({"code":"import bpy\n…"})` 这种整段 JSON 参数 + 原始回执（含单行 JSON 信封）。
+ *   - 调用卡片：标题写成「Blender <动作> · <要点>」；带代码的调用把代码放进卡片正文。
+ *   - 结果卡片：去掉 renderStructured 的单行 JSON 信封（那是给模型 JSON.parse 的），
+ *     人读摘要放最前（TUI 折叠态只显示前 3 行），代码附在后面，图片块原样透传。
+ * 纯函数、只依赖 args / result（宿主回放会话日志时也会调）；任何异常都回 undefined ⇒ 宿主退回通用卡片。
+ * ──────────────────────────────────────────────────────────────────────────── */
+const CARD_DETAIL_MAX = 48
+/** 卡片正文里代码的上限（头 + 尾，中间省略）：几千行脚本不该把卡片撑爆 */
+const CARD_CODE_HEAD = 3000
+const CARD_CODE_TAIL = 1000
+
+/** 压成一行并截断（卡片标题只放一行） */
+function cardClip(v: any, max = CARD_DETAIL_MAX): string {
+  const one = String(v == null ? '' : v).replace(/\s+/g, ' ').trim()
+  return one.length > max ? one.slice(0, max - 1) + '…' : one
+}
+/** 代码 → 「首个有意义的行（+N 行）」；全是注释/空行时回空串 */
+function cardCodeHeadline(code: any): string {
+  const lines = String(code == null ? '' : code).split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean)
+  const first = lines.find((l) => !l.startsWith('#'))
+  if (!first) return ''
+  return cardClip(first) + (lines.length > 1 ? '（+' + String(lines.length - 1) + ' 行）' : '')
+}
+/** 路径 → 文件名（Windows / POSIX 分隔符都认） */
+function cardBaseName(p: any): string {
+  const parts = String(p == null ? '' : p).split(/[\\/]/)
+  return parts[parts.length - 1] || ''
+}
+/** rt_cmd 的 params：对象列前 3 个键，字符串截一行 */
+function cardParams(p: any): string {
+  if (p && typeof p === 'object' && !Array.isArray(p)) {
+    const keys = Object.keys(p)
+    return keys.length ? '{' + keys.slice(0, 3).join(', ') + (keys.length > 3 ? ', …' : '') + '}' : ''
+  }
+  return typeof p === 'string' ? cardClip(p, 32) : ''
+}
+/** 「头 · 要点1 · 要点2」，空要点跳过 */
+function cardTitle(head: string, parts: any[]): string {
+  const tail = parts.map((x) => cardClip(x)).filter(Boolean)
+  return tail.length ? head + ' · ' + tail.join(' · ') : head
+}
+const cardSession = (a: any): string => (a.session ? '无头 ' + cardClip(a.session, 24) : '')
+const cardPython = (code: any): any => (typeof code === 'string' && code.trim() ? { label: 'Python', code: code } : null)
+
+interface CardSpec {
+  kind: string
+  title: (a: any) => string
+  /** 这次调用执行的代码（有就进卡片正文，结果卡片里附在摘要后面） */
+  code?: (a: any) => { label: string; code: string } | null
+}
+const CARD_SPECS: Record<string, CardSpec> = {
+  blender_rt_see: {
+    kind: 'read',
+    title: (a) => a.full
+      ? cardTitle('Blender 截窗口', ['区域 ' + String(a.area || 0)])
+      : cardTitle('Blender 看视口', [
+        a.from || a.look_at ? '自定义视角 ' + cardClip(a.from || '?', 20) + ' → ' + cardClip(a.look_at || '?', 20) : '',
+        a.shading, String(a.max_size || 560) + 'px', cardSession(a),
+      ]),
+  },
+  blender_rt_do: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 执行 Python', [a.code ? cardCodeHeadline(a.code) : cardBaseName(a.file), cardSession(a)]),
+    code: (a) => cardPython(a.code),
+  },
+  blender_rt_watch: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 连续观察', [
+      a.seconds ? String(a.seconds) + 's' : '', a.fps ? String(a.fps) + 'fps' : '', cardCodeHeadline(a.code), cardSession(a),
+    ]),
+    code: (a) => cardPython(a.code),
+  },
+  blender_rt_cmd: { kind: 'execute', title: (a) => cardTitle('Blender 命令', [a.name, cardParams(a.params)]) },
+  blender_rt_commands: { kind: 'search', title: () => 'Blender 命令清单' },
+  blender_rt_loop: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 内环', [a.op, a.target, a.iterations ? String(a.iterations) + ' 次' : '']),
+  },
+  blender_rt_perf: { kind: 'other', title: (a) => cardTitle('Blender 性能', [a.op]) },
+  blender_rt_opt: { kind: 'edit', title: (a) => cardTitle('Blender 精简', [a.op]) },
+  blender_rt_headless: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 无头', [
+      a.script_file ? cardBaseName(a.script_file) : cardCodeHeadline(a.script), cardBaseName(a.file), a.as_job ? '作业' : '',
+    ]),
+    code: (a) => cardPython(a.script),
+  },
+  blender_rt_plan: { kind: 'other', title: (a) => cardTitle('Blender 规划', [a.op, cardSession(a)]) },
+  blender_rt_worker: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 热会话', [a.op, a.name, cardCodeHeadline(a.code)]),
+    code: (a) => cardPython(a.code),
+  },
+  blender_rt_txn: { kind: 'other', title: (a) => cardTitle('Blender 事务', [a.op, a.label]) },
+  blender_rt_preset: { kind: 'other', title: (a) => cardTitle('Blender 配方', [a.op, a.name]) },
+  blender_rt_job: {
+    kind: 'execute',
+    title: (a) => cardTitle('Blender 作业', [a.op, a.id, a.script_file ? cardBaseName(a.script_file) : cardCodeHeadline(a.script)]),
+    code: (a) => cardPython(a.script),
+  },
+  blender_viewport: { kind: 'other', title: (a) => cardTitle('Blender 通道', [a.op || 'status']) },
+}
+
+/** 卡片正文里的代码段：一行标签 + 原样代码（过长时保留头尾） */
+function cardCodeSection(code: { label: string; code: string }): string {
+  const body = code.code.replace(/\s+$/, '')
+  const n = body.split(String.fromCharCode(10)).length
+  return '▸ ' + code.label + '（' + String(n) + ' 行）' + String.fromCharCode(10) + clipText(body, CARD_CODE_HEAD, CARD_CODE_TAIL)
+}
+/** renderStructured 的第 0 块：单行、能 parse 成普通对象的 JSON */
+function isEnvelopeBlock(b: any): boolean {
+  if (!b || b.type !== 'text' || typeof b.text !== 'string') return false
+  const s = b.text.trim()
+  if (!s.startsWith('{') || !s.endsWith('}') || s.indexOf(String.fromCharCode(10)) >= 0) return false
+  try {
+    const v = JSON.parse(s)
+    return !!v && typeof v === 'object' && !Array.isArray(v)
+  } catch (e) { return false }
+}
+
+/** vTool 用：按工具名给出 presentCall / presentResult（未登记的工具 / spec 自带的不覆盖） */
+function cardPresenters(spec: any): any {
+  const card = spec && CARD_SPECS[spec.name]
+  if (!card) return {}
+  const out: any = {}
+  if (!spec.presentCall) {
+    out.presentCall = (args: any) => {
+      try {
+        const a = args && typeof args === 'object' ? args : {}
+        const view: any = { card: 'generic', title: card.title(a), kind: card.kind }
+        const code = card.code ? card.code(a) : null
+        if (code) view.content = [{ type: 'text', text: cardCodeSection(code) }]
+        return view
+      } catch (e) { return undefined }
+    }
+  }
+  if (!spec.presentResult) {
+    out.presentResult = (args: any, result: any) => {
+      try {
+        if (!result || result.isError || !Array.isArray(result.content)) return undefined
+        const texts = result.content.filter((b: any) => b && b.type === 'text')
+        const human = texts.length > 1 && isEnvelopeBlock(texts[0]) ? texts.slice(1) : texts
+        const a = args && typeof args === 'object' ? args : {}
+        const code = card.code ? card.code(a) : null
+        // 没有信封、也没有代码 ⇒ 原始回执本来就是人读文本，交给宿主照常显示
+        if (human.length === texts.length && !code) return undefined
+        // 一个 text block：dsh-TUI 拼接多个 text block 时不加换行
+        const parts = human.map((b: any) => String(b.text || '').replace(/\s+$/, '')).filter(Boolean)
+        if (code) parts.push(cardCodeSection(code))
+        const content: any[] = parts.length ? [{ type: 'text', text: parts.join(String.fromCharCode(10, 10)) }] : []
+        for (const b of result.content) if (b && b.type !== 'text') content.push(b)
+        return { card: 'generic', content: content }
+      } catch (e) { return undefined }
+    }
+  }
+  return out
 }
 /**
  * v0.9.3（D1/F3）：客户端单次等待上限。超过它就**不干等**，转作业层并回 jobId（对齐 bash 的 promoted 语义）。
@@ -874,6 +1363,12 @@ function headlessHumanText(res: any, ctx: any): string {
     parts.push('⚠️ 路径体检（' + String(r.pathWarnings.length) + ' 条）：' + NLx
       + r.pathWarnings.map((w: any) => '  · ' + String(w.code) + ' · ' + String(w.evidence || w.value || '') + NLx + '    ' + String(w.hint || '')).join(NLx))
   }
+  if (Array.isArray(r.warnings) && r.warnings.length) {
+    parts.push('⚠️ warnings（' + String(r.warnings.length) + ' 条）：' + NLx
+      + r.warnings.map((w: any) => '  · ' + ((w && typeof w === 'object')
+          ? (String(w.code || '') + (w.hint ? (' — ' + String(w.hint)) : JSON.stringify(w)))
+          : String(w))).join(NLx))
+  }
   if (r.stdoutTruncated) parts.push('（stdout 已截断：全量见 logs 路径 / resultPath）')
   const so = String(r.stdoutTail !== undefined && r.stdoutTail !== null ? r.stdoutTail : (r.stdout || ''))
   if (so) parts.push((r.stdoutTruncated ? '--- stdout 尾（已截断）---' : '--- stdout ---') + NLx + (rj !== null && rj !== undefined ? clipText(so, 500, 800) : clipText(so, 1500, 2500)))
@@ -1002,6 +1497,10 @@ function registerSchemaDiagnostic(ctx: any): void {
 }
 
 export function apply(ctx: any, config: Config): void {
+  // v2.2.0：随包 skill 自动注册（可选能力；失败不影响工具面）。
+  // 放在 degraded 分支之前 —— 即使 schemastery 解析失败、工具降级，技能内容也仍然可用。
+  registerBundledSkill(ctx)
+
   // v1.0.1+S11（issue #10）：解析失败 ⇒ 降级但不消失（见 registerSchemaDiagnostic）。
   if (!z) { registerSchemaDiagnostic(ctx); return }
 
@@ -1009,6 +1508,9 @@ export function apply(ctx: any, config: Config): void {
   const cfgIn: any = (config && typeof config === 'object') ? config : {}
   const port = Number.isFinite(Number(cfgIn.port)) && Number(cfgIn.port) > 0 ? Number(cfgIn.port) : resolveHttpPort()
   const autoStart = cfgIn.autoStart === undefined ? true : !!cfgIn.autoStart
+
+  // v2.6.1：dsh-TUI 宿主半边（契约 v2.3 增补 §S6）。各块按接缝是否存在启用；Web / headless 上什么都不做。
+  if (cfgIn.tui !== false) registerTuiHost(ctx, { port: port, holder: HOLDER })
 
   void (async () => { if (autoStart && !paused) await ensureBackend(port) })()
 
@@ -1053,12 +1555,14 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_see',
-    description: '【看视口】约 55–160 ms 出一帧（比 CLI/MCP 快 20 倍）：改一步看一眼就用它。'
+    description: '【看视口】约 55–160 ms 出一帧：改一步看一眼就用它。GUI 不在或传 session 时自动走持久 worker 的 Workbench 离屏（无头也能同步看）。'
       + '给 from/look_at（可配 lens / ortho / ortho_scale / view_size / shading / overlays / view_mode）走**自定义视角**：自建矩阵离屏绘制，不建相机、不改 scene.camera、不动用户视口。'
       + 'full=true + area=N 走整窗口截图（要看 Blender UI 时用）。回执带 coverage_estimate 与 frame_looks_empty 自诊断；同画面默认不重复附图（省视觉 token），要重发传 force=true。'
       + '参数细节见 blender_rt_plan(op="catalog", args={tool:"rt_see"})。',
     parameters: {
       max_size: { type: 'integer', description: '最长边像素，默认 560（420 更快，900 更清晰）' },
+      session: { type: 'string', description: '无头 worker 会话名（不走 GUI）' },
+      auto: { type: 'boolean', description: 'GUI 不可用时自动降级到无头 see（默认 true）' },
       full: { type: 'boolean', description: '整窗口/区域截图（screenshot_area 路径）：看 Blender UI 或其他编辑器时用；默认 false = 3D 视口离屏帧' },
       area: { type: 'integer', description: 'full=true 时的区域序号，默认 0（第 1 个区域）' },
       from: { type: 'string', description: '【自定义视角】相机位置 "x,y,z"（世界坐标）。给 from + look_at 就走自定义视角出图：套用自建矩阵离屏绘制，完全不动物体、不动用户视口 —— 想"从另一侧看看"或做多角度校验时用它（约 100ms）' },
@@ -1083,6 +1587,20 @@ export function apply(ctx: any, config: Config): void {
       const area = Number((args && args.area) || 0)
       const frm = numTriple(args && args.from)
       const look = numTriple(args && args.look_at)
+      // P0：显式 session → 直接走无头 worker（不探 GUI）。
+      const wantSession = args && args.session ? String(args.session) : ''
+      if (wantSession) {
+        const spec: any = { from: frm || [7, -7, 5], look_at: look || [0, 0, 1],
+          lens: args.lens === undefined ? undefined : Number(args.lens),
+          ortho: args.ortho === undefined ? undefined : !!args.ortho,
+          ortho_scale: args.ortho_scale === undefined ? undefined : Number(args.ortho_scale),
+          shading: args.shading || undefined, width: size, height: Math.max(120, Math.round(size * 9 / 16)) }
+        const vs = String((args && args.view_size) || '')
+        const mm = vs.match(/^(\d+)\s*[x×]\s*(\d+)$/)
+        if (mm) { spec.width = Number(mm[1]); spec.height = Number(mm[2]) }
+        const fb = await seeViaWorker(ctx, port, spec, wantSession)
+        return fb || { text: '无头 see 失败：worker 会话 ' + wantSession + ' 不可用（先 blender_rt_worker op=start name=' + wantSession + '）' }
+      }
       if (frm || look) {
         const spec: any = {
           from: frm || [7, -7, 5],
@@ -1097,10 +1615,17 @@ export function apply(ctx: any, config: Config): void {
         const vs = String((args && args.view_size) || '')
         const mm = vs.match(/^(\d+)\s*[x×]\s*(\d+)$/)
         if (mm) { spec.width = Number(mm[1]); spec.height = Number(mm[2]) }
-        else { spec.width = Math.round(size * 16 / 9); spec.height = size }
+        else { spec.width = size; spec.height = Math.max(120, Math.round(size * 9 / 16)) }
         // v0.9.4（P0-1）：diagnostics 只在显式给出时透传（不传 = view.py 的默认：正常帧不跑、近空帧自动补跑）
         if (args && args.diagnostics !== undefined) spec.diagnostics = !!args.diagnostics
-        const fv = await fetchView(port, spec)
+        let fv: any
+        try { fv = await fetchView(port, spec) } catch (e) {
+          if (!(args && args.auto === false)) {
+            const fb = await seeViaWorker(ctx, port, spec, args && args.session)
+            if (fb) return fb
+          }
+          throw e
+        }
         // v0.9.4（P0-2）：同一视角签名 + 同一 hash ⇒ 不重复附图
         const dkey = 'view:' + JSON.stringify([spec.width, spec.height, spec.from, spec.look_at,
           spec.lens === undefined ? null : spec.lens, !!spec.ortho,
@@ -1132,7 +1657,14 @@ export function apply(ctx: any, config: Config): void {
         }
         return out2
       }
-      const f = await fetchFrame(port, size, full, area)
+      let f: any
+      try { f = await fetchFrame(port, size, full, area) } catch (e) {
+        if (!(args && args.auto === false)) {
+          const fb = await seeViaWorker(ctx, port, { from: [7, -7, 5], look_at: [0, 0, 1], width: size, height: Math.max(120, Math.round(size * 9 / 16)) }, args && args.session)
+          if (fb) return fb
+        }
+        throw e
+      }
       // v0.9.4（P0-2）：默认视口帧同样去重（键含 size / area，互不串味）
       const dd = frameDedupe(full ? ('area:' + String(area)) : ('viewport:' + String(size)), f.hash, !!(args && args.force))
       const out: any = { text: (full ? '区域截图（screenshot_area）· ' : '视口帧 ' + String(size) + 'px · ') + String(f.ms) + 'ms · ' + String(f.png.length) + 'B · hash ' + f.hash }
@@ -1149,18 +1681,26 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_do',
-    description: '实时驱动 Blender：在 Blender 的 Python 里执行一段代码（或直接跑一个 .py 文件），可选立刻回一帧视口（整步约 105ms/次，可在同一轮里连续做几十步）。'
+    description: '实时驱动 Blender：在持久内核 K 里执行 Python（或直接跑 .py 文件），可选立刻回一帧视口。只补 op 没有的局部编辑；有 plan op 先用 op。'
+      + 'GUI 可用时走 addon；传 session 时在持久无头 worker 里 exec+see（GUI 不可达自动降级，不是异步 job）；每步约 50–150 ms。'
       + HINT_KERNEL
-      + ' v0.7.0 起：① **异常也会回传 partial stdout / stderr / traceback**（不再只给一句 error，诊断信息不会丢）；'
-      + ' ② file 参数可直接执行工作区脚本（等价 K.run(path)，支持 WSL / Windows / 相对 .blend 三种路径）；'
-      + ' ③ 内置路径辅助 K.win_path / K.wsl_path / K.blend_path / K.out_dir（省掉手拼 UNC 与 chr(92)）；'
-      + ' ④ 返回的 ms 即**主线程占用**，>1 s 会提示改走 blender_rt_headless / blender_rt_worker。',
+      + ' 异常也会回传 partial stdout / stderr / traceback（诊断信息不丢）；'
+      + ' file 参数可直接执行工作区脚本（等价 K.run(path)，支持 WSL / Windows / 相对 .blend 三种路径）；'
+      + ' 内置路径辅助 K.win_path / K.wsl_path / K.blend_path / K.out_dir；'
+      + ' ④ 返回的 ms 即**主线程占用**，>1 s 会提示改走 blender_rt_headless / blender_rt_worker。'
+      + ' **P0 无头交互**：GUI 不在线或传 session 时，自动降级到持久无头会话（exec + Workbench see，同一 worker 热路径；不是 job/异步）。'
+      + '第一次会冷启动 worker，之后每步 ~50–150ms；session 名固定即复用同一个 Blender 会话。',
     parameters: {
       code: { type: 'string', description: 'Python 代码（在 Blender 主线程执行；预置 bpy/math/mathutils/Vector 与持久内核 K）。与 file 二选一' },
       file: { type: 'string', description: '要执行的 .py 文件路径（WSL / Windows / 相对当前 .blend 均可）—— 长脚本用这个，不必塞进入参' },
       see: { type: 'boolean', description: '是否同时回一帧视口（默认 true）' },
       max_size: { type: 'integer', description: '回帧最长边像素，默认 560' },
       force: { type: 'boolean', description: '回帧与上一帧 hash 完全相同时默认**不重复附图**；传 true 强制重发' },
+      session: { type: 'string', description: '无头交互会话名（复用同一 blender -b）' },
+      auto: { type: 'boolean', description: 'GUI 不可用时降级无头 session（默认 true）' },
+      preload: { type: 'string', description: '无头 session 预载模块（逗号分隔）' },
+      from: { type: 'string', description: '无头 see 相机位置 "x,y,z"' },
+      look_at: { type: 'string', description: '无头 see 看向点 "x,y,z"' },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
     isConcurrencySafe: () => false,
@@ -1170,11 +1710,34 @@ export function apply(ctx: any, config: Config): void {
       const code = String((args && args.code) || '')
       const file = (args && args.file) ? String(args.file) : null
       if (!code && !file) return { text: '需要 code 或 file 之一' }
+      const sessOpts = {
+        code: code, file: file, session: args && args.session, preload: args && args.preload,
+        see: !(args && args.see === false), max_size: args && args.max_size,
+        from: args && args.from, look_at: args && args.look_at, lens: args && args.lens,
+        ortho: args && args.ortho, ortho_scale: args && args.ortho_scale, view_size: args && args.view_size,
+      }
+      // P0：显式 session → 不探 GUI，直接持久无头会话（exec + see，同一 turn 内可连续调用）
+      if (args && args.session) {
+        const s = await doViaSession(ctx, port, sessOpts)
+        return s || { text: '无头交互会话失败：worker 不可用（先 blender_rt_worker op=start name=' + String(args.session) + '）' }
+      }
       const body: any = { code: code }
       if (file) body.file = file
-      const r = await backendPost(port, '/act', body, 180000)
+      let r: any = null
+      try { r = await backendPost(port, '/act', body, 180000) } catch (e) {
+        if (!(args && args.auto === false)) {
+          const s = await doViaSession(ctx, port, sessOpts)
+          if (s) return s
+        }
+        throw e
+      }
       const lt = leasedText(r)
       if (lt) return { text: lt }
+      // GUI 不在线时 /act 会回 ok:false + connect timeout —— 自动降级到持久无头会话
+      if (r && r.ok === false && !(args && args.auto === false)) {
+        const s = await doViaSession(ctx, port, sessOpts)
+        if (s) return s
+      }
       const parts: string[] = []
       parts.push(r && r.ok ? 'ACT ok · ' + String(r.ms) + 'ms' : 'ACT 失败 · ' + String((r && (r.error || r.raw)) || 'unknown'))
       if (r && Number(r.mainThreadMs) > 1000) parts.push('⚠️ 本次占用 Blender 主线程约 ' + String(r.mainThreadMs) + 'ms —— 超过 ~1s 的重活建议改走 blender_rt_headless / blender_rt_worker（不卡 GUI）')
@@ -1209,12 +1772,13 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_watch',
-    description: '实时观察一段时间窗：可选先跑一段 Python（例如起 bpy.app.timers 驱动 / 播放动画 / 让物体动起来），然后在 seconds 秒内按 fps 连续采样视口帧，内联返回均匀抽取的最多 6 帧 + 逐帧 hash（hash 相同=画面没变）。用于判断「它到底动没动、动得对不对」。',
+    description: '观察时间窗/帧序列：先跑 code，再采样最多 6 帧 + 逐帧 hash（判断动画/修改器有没有动）；gui 不可用时自动走无头 worker。',
     parameters: {
       code: { type: 'string', description: '可选：观察前先执行的 Python' },
       seconds: { type: 'number', description: '观察时长，默认 2 秒（0.2-20）' },
-      fps: { type: 'number', description: '采样率，默认 4（0.5-8）；注意每帧占用 Blender 主线程 ~55ms' },
+      fps: { type: 'number', description: '采样率，默认 4（0.5-8）' },
       max_size: { type: 'integer', description: '帧最长边像素，默认 420' },
+      session: { type: 'string', description: '无头 worker 会话（不给则 GUI 失败自动降级）' },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
     isConcurrencySafe: () => false,
@@ -1225,6 +1789,7 @@ export function apply(ctx: any, config: Config): void {
       const fps = Math.max(0.5, Math.min(8, Number((args && args.fps) || 4)))
       const size = Math.max(120, Math.min(1600, Number((args && args.max_size) || 420)))
       const parts: string[] = []
+      if (args && args.session) return await watchViaWorker(ctx, port, args, String(args.session))
       if (args && args.code) {
         const r = await backendPost(port, '/act', { code: String(args.code) }, 180000)
         const lt = leasedText(r)
@@ -1243,6 +1808,10 @@ export function apply(ctx: any, config: Config): void {
         }
         const wait = (i + 1) * interval - (Date.now() - t0)
         if (wait > 1) await sleep(wait)
+      }
+      if (shots.length && shots.every((s) => s.hash === 'ERR')) {
+        const fb = await watchViaWorker(ctx, port, args, undefined)
+        if (fb && fb.text) return fb
       }
       const hashes = shots.map((s) => s.hash)
       const distinct = Array.from(new Set(hashes)).length
@@ -1275,7 +1844,7 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_cmd',
-    description: '直连调用 Blender addon 的任意命令（34 个名字：19 常驻 + 15 集成门控），含 MCP 层不暴露的 get_world_state_snapshot / drain_human_activity / get_telemetry_consent / set_telemetry_consent / get_addon_info，以及资产类命令（PolyHaven / Sketchfab / Poly Pizza / Hyper3D / Hunyuan3D）。参数必须匹配 addon 真实签名：get_scene_info 无参、get_object_info 用 name（不是 object_name）、不要传 MCP 才有的 user_prompt。先用 blender_rt_commands 看清单与可用性。',
+    description: '直连调用 Blender addon 的任意命令（39 个名字：24 常驻 + 15 集成门控），含 get_world_state_snapshot / drain_human_activity / get_telemetry_consent / set_telemetry_consent / get_addon_info，以及资产类命令（PolyHaven / Sketchfab / Poly Pizza / Hyper3D / Hunyuan3D）。仅 GUI addon 在线时可用；纯无头请用 rt_worker / rt_headless。参数必须匹配 addon 真实签名：get_scene_info 无参、get_object_info 用 name（不是 object_name）。先用 blender_rt_commands 看清单与可用性。',
     parameters: {
       name: { type: 'string', required: true, description: 'addon 命令名，如 get_world_state_snapshot、search_polyhaven_assets' },
       params: { type: 'json', description: '参数对象（可选），如 {"asset_type":"hdris"}' },
@@ -1327,13 +1896,15 @@ export function apply(ctx: any, config: Config): void {
     name: 'blender_rt_loop',
     description: '【内环搜索】把"要试几十~几千组参数"的活从模型回合搬进 Blender 主线程（bpy.app.timers，160 tick/s，迭代/时间双上限 + 急停）：你只写目标与区间，机器去搜。'
       + '**任务形状对上了就用**：对齐 / 拟合 / 反推尺寸 / 参数扫描 —— 判据能写成一个数（轮廓 IoU、包围盒尺寸误差、剖面差，或你自写的 score），候选几十~几千组。只试 ≤5 组 → 用 rt_do 自己循环更省事。'
-      + '**只在 GUI 会话有效**：无头（blender -b）下 timers 不触发，别在 headless / job 里用它。'
+      + '**GUI 走 timers（160 tick/s）；无头请传 target="session"**（走 worker 的 dsh_loop_sync 阻塞循环，不依赖 timers；需 worker 已 start 且 preload 带 runner，工具会自动起）。'
       + 'setup 只跑一次，step/measure 共享 ns（预置 bpy/K/random/np/i/frac/penalize/anneal/record）；measure 必须给 ns["score"]（参数写 ns["params"]）；现成目标函数 K.dsh_measure = {silhouette_iou, aabb_err, profile_err}。'
       + '节奏：op=start → status → board（候选表）→ export（best 落可复现脚本，setup 里定义 apply(p) 才会自动重放）。'
       + '**内环只优化你写的目标函数：收敛后必须换另一条通路复核 + rt_see 看一眼**（防 Goodhart）；跑完场景停在最后一次迭代的参数上，不是 best。'
       + 'spec 字段、ns 契约与可照抄模板见 blender_rt_plan(op="catalog", args={tool:"rt_loop"})。',
     parameters: {
       op: { type: 'string', required: true, description: 'start | status | stop | board | export | help | bench' },
+      target: { type: 'string', description: 'gui（默认，timers）| session（无头 worker 同步阻塞，推荐 headless 主路径）' },
+      session: { type: 'string', description: 'target=session 时的 worker 实例名（默认 dsh-loop）' },
       spec: { type: 'json', description: 'op=start 的规格：{setup, step, measure, iterations, budget_ms, interval, measure_every, minimize, top_k, group_key, redraw_every}' },
       history: { type: 'integer', description: 'op=status 返回的指标尾迹长度，默认 8' },
       board: { type: 'integer', description: 'op=status 时同时返回前 N 个候选（默认 0=不返回）' },
@@ -1351,6 +1922,30 @@ export function apply(ctx: any, config: Config): void {
     async execute(args: any) {
       if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）。' + BACKEND_HINT }
       const op = String((args && args.op) || 'status')
+      const target = String((args && args.target) || 'gui')
+      if (target === 'session') {
+        const nm = String((args && args.session) || 'dsh-loop')
+        const st: any = await backendPost(port, '/worker', { op: 'start', name: nm, preload: 'runner', engine: 'workbench', warmup: true, isolated: true }, 120000)
+        if (!st || st.ok !== true) return { text: 'LOOP session 启动失败 · ' + String((st && (st.error || st.raw)) || 'unknown') }
+        const specJ = JSON.stringify(JSON.stringify((args && args.spec) || {}))
+        const code = op === 'start'
+          ? 'import json as _json\n_s = _json.loads(' + specJ + ')\n_r = K.dsh_loop_api["sync"](_s)\nprint("HEADLESS " + (_r if isinstance(_r, str) else _json.dumps(_r, ensure_ascii=False)))'
+          : op === 'status'
+            ? 'print("HEADLESS " + K.dsh_loop_api["status"](' + String(Number((args && args.history) || 8)) + ', ' + String(Number((args && args.board) || 0)) + '))'
+            : op === 'board'
+              ? 'print("HEADLESS " + K.dsh_loop_api["board"](' + String(Number((args && args.limit) || 10)) + ', ' + (args && args.groups === false ? 'False' : 'True') + '))'
+              : op === 'export'
+                ? 'print("HEADLESS " + K.dsh_loop_api["export"](' + JSON.stringify(args && args.path ? String(args.path) : null) + ', ' + String(Number((args && args.top) || 1)) + ', ' + (args && args.include_variants ? 'True' : 'False') + ', ' + JSON.stringify(String((args && args.note) || '')) + '))'
+                : op === 'stop'
+                  ? 'print("HEADLESS " + K.dsh_loop_api["stop"]())'
+                  : op === 'bench'
+                    ? 'print("HEADLESS " + K.dsh_loop_api["bench"](' + String(Number((args && args.iterations) || 5000)) + '))'
+                    : 'print("HEADLESS " + K.dsh_loop_api["help"]())'
+        const r: any = await backendPost(port, '/worker', { op: 'exec', name: nm, code: code, isolated: true }, 300000)
+        const rr = (r && r.result) || {}
+        if (!r || r.ok !== true) return { text: 'LOOP session 失败 · ' + String((r && (r.error || rr.error)) || 'unknown') + (rr.traceback ? String.fromCharCode(10) + String(rr.traceback).slice(-1500) : '') }
+        return { text: 'LOOP ' + op + ' (session=' + nm + ') ok · ' + JSON.stringify(rr.result || rr).slice(0, 6000) }
+      }
       const payload: any = {
         op: op,
         spec: (args && args.spec) || {},
@@ -1419,47 +2014,57 @@ export function apply(ctx: any, config: Config): void {
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_headless',
-    description: '【无头 Blender · 第一路径】独立进程跑脚本（blender.exe -b）：不占 GUI 通道、不动你在看的场景。'
+    description: '【无头 Blender · 备用】独立进程跑脚本（blender -b）：GUI 不可用/批处理/长活用；不占 GUI、不动场景。'
       + (IS_WIN ? '⚠ 给 Windows 路径（D:\\x\\y.py）；' : '⚠ cwd 在 UNC 下，WSL 路径要带开头 /；')
       + 'script_file 自动给 __file__ + sys.path。'
       + '批量几何 / 校验 / 渲染 / 不需要"人在回路看视口"的活都先走这里；"看一眼"用 rt_do/rt_see。'
-      + 'print("HEADLESS " + json.dumps(obj)) 回传（**必须单行 JSON**）。'
-      + '默认 --factory-startup；默认注入 EEVEE + 光追前导（engine="cycles"|"keep"|"none" 可改）。'
-      + '**>100 s 或长渲染：直接 as_job=true**（用 rt_job op=wait/collect 收；超时 ≠ 失败）；'
-      + '否则等待窗口（默认 100 s）到点会回 {kind:"promoted", jobId} —— 结果照样收得回。'
-      + '参数细节（19 个：shots 多视角 / preload / env / out_json / 路径语义 / 超时语义）见 blender_rt_plan(op="catalog", args={tool:"rt_headless"})。',
+      + 'print("HEADLESS " + json.dumps(obj)) 回传（单行 JSON）。'
+      + '默认 factory-startup + EEVEE 前导（engine="cycles"|"keep"|"none" 可改）。'
+      + '**>100 s 或长渲染：as_job=true**（rt_job 收）；等待窗口到点回 promoted jobId，结果仍可收。'
+      + 'attach_images 可回图；shots 多视角；preload 后直调 K.dsh_*_api。'
+      + '参数细节见 catalog(tool:rt_headless)。',
     parameters: {
-      script: { type: 'string', description: 'Python 源码（已注入持久内核 K + bpy/math/mathutils/Vector）' },
+      script: { type: 'string', description: 'Python 源码（注入 K + bpy/math/mathutils/Vector）' },
       script_file: { type: 'string', description: '直接跑一个 .py 文件（Windows/WSL 路径都行）；比 script= 省事' },
       file: { type: 'string', description: '要打开的 .blend（回执带 inputFile{size,mtime,md5}）；传 .py 会自动当脚本' },
       outdir: { type: 'string', description: '产物目录（WSL 路径也收）；跑完列出新文件，并追加到脚本 sys.argv' },
       as_job: { type: 'boolean', description: 'true = 立刻后台化成作业（预期 >100 s 的活推荐直接用）' },
       wait_s: { type: 'number', description: 'as_job 之后最多再等几秒，到点回 jobId' },
       timeout_ms: { type: 'integer', description: '子进程上限，默认 180000，上限 1800000（到点 SIGKILL）' },
-      engine: { type: 'string', description: 'eevee（默认）| cycles | keep | none（纯 numpy/图像任务用 none 省 1–1.5 s）' },
+      engine: { type: 'string', description: 'eevee（默认）| cycles | keep | none（省 1–1.5 s）' },
       preload: { type: 'string', description: '预载 runtime 模块（逗号分隔，如 "audit,qc,qc_render"）→ K.dsh_*_api' },
-      shots: { type: 'json', description: '多视角一体化出图 [{name, from, look_at, lens, res, samples}]' },
+      shots: { type: 'json', description: '多视角出图 [{name,from,look_at,lens,res,samples}]' },
       out_json: { type: 'string', description: '结构化结果落盘路径（>4KB 也会自动落 results/）' },
       env: { type: 'json', description: '子进程环境变量 {KEY:"VALUE"}' },
       args: { type: 'string', description: '追加到 -- 之后的命令行参数（脚本里读 sys.argv / K.args）' },
       workdir: { type: 'string', description: '脚本内 chdir + sys.path 首位' },
-      factory_startup: { type: 'boolean', description: '默认 true；false = 用用户启动文件与偏好（配合 use_user_config）' },
-      use_user_config: { type: 'boolean', description: '透传 BLENDER_USER_CONFIG/SCRIPTS 给无头进程（默认 false）' },
+      factory_startup: { type: 'boolean', description: '默认 true；false = 用用户启动文件与偏好' },
+      use_user_config: { type: 'boolean', description: '透传 BLENDER_USER_CONFIG/SCRIPTS 给无头进程' },
       bootstrap: { type: 'boolean', description: '默认 true = 注入持久内核 K' },
-      gpu: { type: 'string', description: '仅 cycles：auto | true（必须有 GPU 否则 ok=false）| false' },
-      include_noise: { type: 'boolean', description: '产物清单是否含 __pycache__/*.blend1 等噪音（默认 false）' },
+      gpu: { type: 'string', description: '仅 cycles：auto | true（必须 GPU）| false' },
+      include_noise: { type: 'boolean', description: '产物清单含 __pycache__/*.blend1' },
+      attach_images: { type: 'json', description: 'shots 附图：true=3 张，"sheet"=拼图' },
+      hard_exit: { type: 'boolean', description: 'done 后 os._exit(0) 跳过退出拆解；默认 true 规避 5.2.3 退出 AV，false=旧行为（atexit/handlers 照常）' },
     },
     output: { schema: ANY_SCHEMA, render: renderStructured },
     isConcurrencySafe: () => false,
     timeoutMs: T.headless,
     async execute(args: any) {
       if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）；无头通道由后端进程代管，先 blender_viewport op=start' }
+      // F-09：工具端必须自己拦 ALIAS / 空串 —— 旧写法 `(args && args.file) || undefined` 在 body 组装前
+      // 就把 falsy 剥成 undefined，引擎侧守卫对工具路径永不触发；参数名误写（blend= 等）静默丢参数＝空场景 ok=true。
+      const aliasKeys = detectFileAlias(args)
+      if (aliasKeys.length) return { text: 'blender_rt_headless 没有参数 ' + aliasKeys.join(', ')
+        + '；打开 .blend 请用 file=。（收到的键：' + Object.keys(args || {}).join(', ') + '）' }
+      const rawFile = args ? args.file : undefined
+      if (typeof rawFile === 'string' && !rawFile.trim()) return { text: 'file= 传了空字符串 —— 本次不会打开任何 .blend'
+        + '（脚本会拿到出厂空场景）；要么给真实 .blend 路径，要么就不要传 file=' }
       const runId = newRunId()
       const asJob = !!(args && args.as_job)
       const waitS = (args && args.wait_s !== undefined && args.wait_s !== null && args.wait_s !== '') ? Number(args.wait_s) : null
       const body: any = {
         script: String((args && args.script) || ''),
-        file: (args && args.file) || undefined,
+        file: (rawFile === undefined || rawFile === null) ? undefined : rawFile,
         outdir: (args && args.outdir) || undefined,
         timeoutMs: (args && args.timeout_ms) ? Number(args.timeout_ms) : undefined,
         factoryStartup: !(args && args.factory_startup === false),
@@ -1475,6 +2080,7 @@ export function apply(ctx: any, config: Config): void {
         env: (args && args.env && typeof args.env === 'object') ? args.env : undefined,
         outJson: (args && args.out_json) || undefined,
         shots: (args && args.shots) || undefined,
+        hardExit: (args && typeof args.hard_exit === 'boolean') ? args.hard_exit : undefined,
         runId: runId,                       // v0.9.3（D1）：客户端生成 → 窗口到点时立刻有可用句柄
       }
       if (args && args.args) body.args = splitArgs(args.args)
@@ -1525,35 +2131,44 @@ export function apply(ctx: any, config: Config): void {
       // v0.8.9 边界提示：本次走了流式回执（>15 s，心跳 N 条）
       const beats = Number((res && res.__heartbeats) || 0)
       if (beats > 0) out.text += String.fromCharCode(10) + '（本次耗时 > 15 s，后端走了流式回执：' + String(beats) + ' 条心跳后收到结果）'
+      // P0：shots 附图（默认不附；attach_images=true → 最多 3 张；"sheet" → 只附拼图）
+      if (args && args.attach_images) {
+        const rows = (out.envelope && out.envelope.shots && out.envelope.shots.rows) || []
+        const paths = rows.map((x: any) => x && x.path).filter(Boolean)
+        const wantSheet = String(args.attach_images) === 'sheet'
+        const sheet = (out.envelope && out.envelope.shots && out.envelope.shots.jsonl) ? null : null
+        const picked = wantSheet ? [] : paths.filter((p: string) => !/sheet|montage/i.test(p)).slice(0, 3)
+        const att = await attachPaths(ctx, picked, 'headless-shot', wantSheet ? 1 : 3)
+        if (att.images.length) out.images = att.images
+        if (att.failed.length) out.text += String.fromCharCode(10) + '⚠ 附图失败：' + att.failed.slice(0, 2).join(' · ')
+        if (!att.images.length) out.text += String.fromCharCode(10) + '（attach_images 已开，但没有可附的图或读取失败；用 read_image(path) 看 shots 路径）'
+      }
       return out
     },
   })), '@dsh-external/dsh-blender-plugin: rt-headless')
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_plan',
-    description: '[v' + PLUGIN_VERSION + '] 【判定 / 验收 / 导出 / 造型】28 个 family · 186 个 op 都在这一个工具里。'
+    description: '[v' + PLUGIN_VERSION + '] 【判定 / 验收 / 导出 / 造型】34 个 family · 228 个 op；有 op 不许自写等价几何/验收。'
       + '**不确定用哪个就先问目录：op="catalog"**（本地直出，不占 Blender 往返；含"什么时候用 / 别用 / 最小骨架"）；'
       + '单族展开 op="catalog", args={family:"audit"}；算子细节用各 family 自己的 <family>_help。'
-      + '常用速查：audit_scene|audit_mesh（网格体检）· audit_gate（出厂门：连通+包络）· audit_interference|audit_overlap（干涉/重叠，可跨 .blend）· '
-      + 'qc_render_views（对照图/多视角/逐部件配色；长活 asJob=true）· qc_compare（IoU/剖面差）· '
-      + 'sculpt_scan→sculpt_setup→sculpt_apply（程序化雕刻：numpy 位移笔刷，无头可跑）· fix_repair（修复闭环：合并重复点/消零面积面/删孤立点）· '
-      + 'uv_smart_project|uv_unwrap|uv_pack（贴图与交付）· print_report（薄壁+悬垂，回执带 resolution_mm）· sweep_analyze→sweep_build（管路/线缆）· '
-      + 'deliver_export|deliver_verify（OBJ/MTL + md5 清单）· motion_joints|motion_measure|motion_export_urdf（机构）· '
-      + 'generator_save|generator_run（重复件：配方即形状；**save 用 code=**，run 的参数走嵌套 **args=**）· '
-      + 'gui_frame|gui_shading（真 UI 上下文才做得到的事）· '
-      + 'material_build|material_apply|material_bake（程序化材质；bake 把节点烘成贴图供交付）· render_lock|render_status（渲染队列）· '
-      + 'render_state|render_wait（渲染中撞到卡住/超时时先看这个）。'
-      + '契约层（假设/区间/三态判定/destructive_guard/证据账本）判据见 docs/假设驱动建模-cookbook.md。'
-      + '写 op 过写租约；只读 op（catalog / audit_* / print_* / qc_* …）豁免；目录自带加载版本自证'
-      + '（怀疑旧版：op="catalog", args={verify:true}）。'
-      + 'op 名拼错回 did_you_mean（带骨架）；参数名写错回"不认识的参数"；plan op 误发 rt_cmd 会被当场纠正。',
+      + '常用：audit_* · qc_render_views|qc_compare · sculpt_* · fix_* · uv_* · print_report · sweep_* · '
+      + 'deliver_* · motion_* · generator_save|run（save 用 **code=**）· material_* · render_lock|render_status · render_state|render_wait · '
+      + 'asm_*（装配扫描/manifest/merge/gate）· blockout_* · img_digest|probe|measure|calib · '
+      + 'gate_preflight|checkpoint|deliver · '
+      + 'visualreport_report · shapesolve_solve · surface_loft|sweep|patch|validate。'
+      + '契约层判据见 docs/假设驱动建模-cookbook.md；写 op 过租约，只读 op 豁免。'
+      + '传 session="auto" 或无头 worker 名时按 family 自动起 worker 同步执行（不依赖 GUI）；首次约 2 s，之后复用。'
+      + 'op 名拼错回 did_you_mean（带骨架）；参数名写错回"不认识的参数"。',
 
     parameters: {
       op: { type: 'string', required: true, description: '契约 op 或 plan_<op>（见工具描述；op=help / plan_help 出速查）' },
       args: { type: 'json', description: 'op 的参数对象，例如 {"cid":"joint","err":184,"tolerance":220,"identifiable":["dy"]}' },
       path: { type: 'string', description: 'op=report 时的输出路径（Markdown）；省略则只回文本' },
+      attach_images: { type: 'boolean', description: '产物图附图回模型（≤2 张；img_digest/qc_compare 默认开）' },
+      session: { type: 'string', description: '无头 worker 会话；"auto"=自动起' },
     },
-    output: { schema: ANY_SCHEMA, render: renderOne },
+    output: { schema: ANY_SCHEMA, render: renderStructured },
     isConcurrencySafe: () => false,
     timeoutMs: T.plan,
     async execute(argsIn: any) {
@@ -1565,32 +2180,44 @@ export function apply(ctx: any, config: Config): void {
         return { text: 'PLAN ' + op + ' 失败 · args 不是合法 JSON 对象：' + String(argsIn.args).slice(0, 200) }
       }
       if (op === 'report' && argsIn && argsIn.path) payload.path = String(argsIn.path)
+      const sessRaw = (argsIn && argsIn.session) ? String(argsIn.session) : ''
+      if (sessRaw) {
+        const pr = await planViaWorker(ctx, port, op, payload, sessRaw === 'auto' ? undefined : sessRaw)
+        if (!pr || pr.ok !== true) {
+          return { text: 'PLAN ' + op + ' 无头执行失败 · ' + String((pr && pr.error) || 'unknown')
+            + (pr && pr.hint ? String.fromCharCode(10) + String(pr.hint) : '')
+            + String.fromCharCode(10) + '提示：先 blender_rt_worker(op="start", name="…", preload="…")，或传 session="auto"' }
+        }
+        return await finishPlanResponse(ctx, op, pr.res, argsIn)
+      }
       const r = await backendPost(port, '/plan', { op: op, args: payload }, 300000)
       const lt = leasedText(r)
       if (lt) return { text: lt }
       if (!r || r.ok !== true) return { text: 'PLAN ' + op + ' 失败 · ' + String((r && (r.error || r.raw)) || 'unknown') }
-      const res = r.result
-      const txt = typeof res === 'string' ? res : JSON.stringify(res, null, 1)
-      // v0.9.1（93-A3）：plan 通道的结构化结果过去被 4000 字符砍掉（量测表/探针输出常超）→ 提到 12KB，
-      // 并明确告诉调用方"结果被截了、原量在引擎侧"（引擎对 >4KB 的结果会自动落盘到 results/）。
-      const CAP = 12000
-      return { text: 'PLAN ' + op + ' ok · ' + String(txt.length) + ' chars\n' + (txt.length > CAP ? txt.slice(0, CAP) + String.fromCharCode(10) + '…[已截断，共 ' + String(txt.length) + ' 字符；结构化全量见后端 results/ 目录或用 headless(outJson=…) 落盘]' : txt) }
+      return await finishPlanResponse(ctx, op, r.result, argsIn)
     },
   })), '@dsh-external/dsh-blender-plugin: rt-plan')
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_worker',
-    description: '【热无头会话】常驻 blender -b 进程：start 拉起 / exec 跑代码片段（复用**同一个 Blender 会话与持久内核 K**）/ status / stop / restart / list。'
-      + '**何时用（量化）**：同一脚本要跑 >=3 次，或单次 >10 s 且要反复迭代 —— 每次冷启动 1.1–1.5 s + EEVEE 着色器编译最多 ~16 s，worker 只付一次。'
-      + '反之（一次性脚本 / 要 GUI 上下文 / 要多进程并行）继续用 headless。串行、无窗口：依赖 GUI 的 bpy.ops 可能失败；同一实例共享场景与 K。'
-      + '参数细节见 blender_rt_plan(op="catalog", args={tool:"rt_worker"})。',
+    description: '【交互式无头热会话】常驻 blender -b 进程：start 拉起 / exec 跑代码 / see 离屏出一帧（Workbench）/ watch 逐帧采样 / reset 清场景 / status / stop / restart / list。'
+      + 'start 可带 preload（把 imgtools/assembly/blockout/visualreport/shapesolve 等模块注入 K）与 warmup；see 在无 GUI 时就是 AI 的视口，每步 50–100 ms。'
+      + '同一 session 的场景与 K 跨调用保留；空闲 TTL 默认 15 min（DSH_WORKER_TTL_MS 可调）。'
+      + '串行、无窗口：依赖 GUI 的 bpy.ops 可能失败；参数细节见 blender_rt_plan(op="catalog", args={tool:"rt_worker"})。',
     parameters: {
-      op: { type: 'string', required: true, description: 'start | exec | status | stop | restart | list' },
+      op: { type: 'string', required: true, description: 'start | exec | see | reset | status | stop | restart | list' },
       name: { type: 'string', description: '实例名（默认 default）；起多个热会话做批量小活，脏了用 restart 换新会话' },
       code: { type: 'string', description: 'op=exec 的 Python 源码（预置 K/bpy/math/mathutils/Vector）' },
       timeout_ms: { type: 'integer', description: 'op=exec 的响应超时，默认 120000；长代码调大' },
+      preload: { type: 'string', description: 'op=start 时预载模块（逗号分隔，如 "audit,qc,runner"）；preload 失败 start 直接报错' },
+      warmup: { type: 'boolean', description: 'op=start 预热渲染器（默认 true）' },
+      from: { type: 'string', description: 'op=see 相机位置 "x,y,z"' },
+      look_at: { type: 'string', description: 'op=see 看向点 "x,y,z"' },
+      lens: { type: 'number', description: 'op=see 焦距 mm' },
+      ortho: { type: 'boolean', description: 'op=see 正交投影' },
+      view_size: { type: 'string', description: 'op=see 分辨率 "宽x高"' },
       gpu: { type: 'string', description: 'op=start 的 GPU 语义（仅 cycles）：auto / true / false' },
-      engine: { type: 'string', description: 'op=start 的渲染引擎：eevee（默认）/ cycles / keep' },
+      engine: { type: 'string', description: 'op=start 的渲染引擎：eevee（默认）/ cycles / workbench / keep' },
       purge_prefix: { type: 'string', description: 'op=exec 前清掉的模块前缀（逗号分隔）—— 改了用户模块必须清，否则 import 命中旧代码' },
     },
     output: { schema: ANY_SCHEMA, render: renderOne },
@@ -1599,13 +2226,29 @@ export function apply(ctx: any, config: Config): void {
     async execute(args: any) {
       if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）。' + BACKEND_HINT }
       const op = String((args && args.op) || 'status')
-      const body: any = { op: op }
+      const body: any = { op: op, isolated: true }
       if (args && args.code !== undefined) body.code = String(args.code)
       if (args && args.timeout_ms) body.timeoutMs = Number(args.timeout_ms)
       if (args && args.gpu) body.gpu = String(args.gpu)
       if (args && args.engine) body.engine = String(args.engine)
+      if (args && args.preload) body.preload = String(args.preload)
+      if (args && args.warmup !== undefined) body.warmup = !!args.warmup
       if (args && args.purge_prefix) body.purgePrefix = String(args.purge_prefix)
       if (args && args.name) body.name = String(args.name)
+      if (op === 'see') {
+        const vs = String((args && args.view_size) || '560x315')
+        const mm = vs.match(/^(\d+)\s*[x×]\s*(\d+)$/)
+        body.spec = {
+          from: numTriple(args && args.from) || [7, -7, 5],
+          look_at: numTriple(args && args.look_at) || [0, 0, 1],
+          lens: args && args.lens !== undefined ? Number(args.lens) : undefined,
+          ortho: args && args.ortho !== undefined ? !!args.ortho : undefined,
+          ortho_scale: args && args.ortho_scale !== undefined ? Number(args.ortho_scale) : undefined,
+          shading: (args && args.shading) || undefined,
+          width: mm ? Number(mm[1]) : 560,
+          height: mm ? Number(mm[2]) : 315,
+        }
+      }
       const budget = 60000 + Number(body.timeoutMs || 120000)
       const r = await backendPost(port, '/worker', body, budget)
       const lt = leasedText(r)
@@ -1621,6 +2264,20 @@ export function apply(ctx: any, config: Config): void {
         return { text: bits.join(String.fromCharCode(10)) }
       }
       const res = (r && r.result) || {}
+      if (op === 'see') {
+        if (res.ok === false) return { text: 'WORKER see 失败 · ' + String(res.error || 'unknown') + (res.traceback ? String.fromCharCode(10) + String(res.traceback).slice(-1200) : '') }
+        let data: Uint8Array | null = null
+        if (res.png_b64) { try { data = Buffer.from(String(res.png_b64), 'base64') } catch (e) { data = null } }
+        if (!data && res.path) data = readLocalPng(res.path)
+        const att = data ? await toAttachment(ctx, data, 'worker-see-' + String(Date.now()) + '.png') : { why: '没有 png_b64/path' }
+        const text = 'WORKER see ok · ' + String(res.ms) + 'ms · ' + String(res.width) + 'x' + String(res.height)
+          + ' · ' + String(res.bytes || 0) + 'B · ' + String(res.mode || 'workbench')
+          + (res.coverage_estimate === null || res.coverage_estimate === undefined ? '' : (' · 覆盖 ' + (Number(res.coverage_estimate) * 100).toFixed(2) + '%'))
+        return att.ref ? { text: text, image: att.ref } : { text: text + String.fromCharCode(10) + '⚠ 图片未回传：' + String(att.why || '未知原因') }
+      }
+      if (op === 'reset') {
+        return { text: 'WORKER reset ' + (res.ok ? 'ok' : '失败') + ' · objects=' + String(res.objects) + (res.error ? (' · ' + String(res.error)) : '') }
+      }
       if (op === 'exec') {
         const parts: string[] = []
         parts.push((res.ok ? 'WORKER exec ok' : 'WORKER exec 失败') + ' · ' + String(res.ms) + 'ms')
@@ -1696,74 +2353,6 @@ export function apply(ctx: any, config: Config): void {
     },
   })), '@dsh-external/dsh-blender-plugin: rt-txn')
 
-  /**
-   * v1.2：**请用户点选**（阻塞式）。
-   * 面板只在 Blender 通道可用时出现在 DSH 右侧栏（见契约 §7.3）；用户点完由
-   * `POST /host/pick/answer` 结束请求，本工具轮询 `/host/pick/result` 取回对象名。
-   */
-  ctx.effect(() => ctx.tools.register(vTool({
-    name: 'blender_rt_pick',
-    description: '【请用户点选】让**用户**在右侧栏视口面板点一个物体，你拿到确切对象名。'
-      + '用在"用户说的那个"你从描述确定不了时 —— 比在几千个对象里猜名字快。'
-      + '**阻塞**：点完（或点空处=表示没有）即返回；超时/取消给原因。'
-      + '前提：面板只在通道可用时出现，用户没开着会等到超时 —— 先说明再调用。',
-    parameters: {
-      prompt: { type: 'string', description: '给用户看的一句话（≤200 字）；省略用默认句' },
-      timeout_s: { type: 'integer', description: '等多久（秒），默认 120，夹 [5,600]' },
-      multi: { type: 'boolean', description: 'v2.1 多选：连续点多个物体累积、点「完成」才返回（返回名字数组；默认单选）' },
-    },
-    output: { schema: ANY_SCHEMA, render: renderOne },
-    isConcurrencySafe: () => false,
-    timeoutMs: T.pick,
-    async execute(args: any) {
-      if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）' }
-      const reqBody: any = {}
-      if (args && args.prompt) reqBody.prompt = String(args.prompt)
-      if (args && args.timeout_s) reqBody.timeout_s = Number(args.timeout_s)
-      if (args && args.multi) reqBody.multi = true
-      const wantMulti = !!(args && args.multi)
-      const timeoutS = Math.max(5, Math.min(600, Number((args && args.timeout_s) || 120)))
-      const rq = await backendPost(port, '/host/pick/request', reqBody, 20000)
-      if (!rq || rq.ok !== true || !rq.request || !rq.request.requestId) {
-        return { text: 'PICK 发起失败 · ' + String((rq && (rq.error || rq.raw)) || 'unknown') + String.fromCharCode(10) + '（若为 404：后端版本旧，未装载 /host 路由）' }
-      }
-      const requestId = String(rq.request.requestId)
-      const deadline = Date.now() + (timeoutS + 10) * 1000
-      const cancel = async (reason: string) => {
-        try { await backendPost(port, '/host/pick/cancel', { requestId: requestId, reason: reason }, 8000) } catch (e) { /* 尽力而为 */ }
-      }
-      let lastState = ''
-      while (Date.now() < deadline) {
-        if (execSignal() && execSignal()!.aborted) { await cancel('aborted'); return { text: 'PICK 已取消（宿主打断）；请求已作废。' } }
-        await new Promise((r) => setTimeout(r, 400))
-        const r = await backendJson(port, '/host/pick/result?requestId=' + encodeURIComponent(requestId), 20000)
-        const st = String((r && r.state) || '')
-        lastState = st
-        if (st === 'answered') {
-          // v2.1 §8.2 多选：把**全部**已选返回（单选时 objects 恰好是 [object] 或 []）
-          const objs = Array.isArray(r && r.objects) ? r.objects.filter((z: any) => z && z.name) : []
-          if (wantMulti && objs.length) {
-            const names = objs.map((z: any) => String(z.name))
-            return { text: 'PICK ok · 用户多选了 ' + String(names.length) + ' 个对象：'
-              + String.fromCharCode(10) + names.map((n: string) => '  - ' + n).join(String.fromCharCode(10))
-              + String.fromCharCode(10) + '这些是用户点选的确切对象，直接用这些名字（bpy.data.objects["..."]），不要再去猜别的名字。' }
-          }
-          const o = (r && r.object) || null
-          if (o && o.name) {
-            return { text: 'PICK ok · 用户点了：' + String(o.name) + '（' + String(o.type || '?') + ' · ' + String(o.detail || '') + '）'
-              + String.fromCharCode(10) + '位置：' + JSON.stringify(o.location || null)
-              + String.fromCharCode(10) + '这是用户点选的确切对象，直接用这个名字（bpy.data.objects["' + String(o.name) + '"]），不要再去猜别的名字。' }
-          }
-          return { text: 'PICK ok · 用户点了**空处** —— 表示他没有选中任何物体。别替他挑一个：问一下他想指什么，或让他再点一次。' }
-        }
-        if (st === 'cancelled') return { text: 'PICK 已取消（用户或系统取消）。别自己猜对象；问一下他想指什么。' }
-        if (st === 'expired') return { text: 'PICK 超时（' + String(timeoutS) + ' s 内用户没点）。可能他没看到面板，或右侧栏面板没打开（面板只在 Blender 通道可用时出现）。问一句再决定是否重试。' }
-        if (st === 'unknown') return { text: 'PICK 请求已不可查（unknown）—— 后端可能重启过。重新调用一次即可。' }
-      }
-      await cancel('tool-timeout')
-      return { text: 'PICK 本地等待超时（' + String(timeoutS) + ' s，最后状态 ' + String(lastState || 'pending') + '）；请求已作废。' }
-    },
-  })), '@dsh-external/dsh-blender-plugin: rt-pick')
 
   ctx.effect(() => ctx.tools.register(vTool({
     name: 'blender_rt_preset',
@@ -1854,6 +2443,14 @@ export function apply(ctx: any, config: Config): void {
     async execute(args: any) {
       if (!(await ensureBackend(port))) return { text: '后端不可用（127.0.0.1:' + String(port) + '）' }
       const op = String((args && args.op) || 'list')
+      // F-09 一致性：op=start/run 的 file= 与 rt_headless 同一套拦截（引擎 job 路径已有 validateFileOpt 兜底）
+      if (op === 'start' || op === 'run') {
+        const aliasKeys = detectFileAlias(args)
+        if (aliasKeys.length) return { text: 'blender_rt_job 没有参数 ' + aliasKeys.join(', ')
+          + '；打开 .blend 请用 file=。（收到的键：' + Object.keys(args || {}).join(', ') + '）' }
+        if (args && typeof args.file === 'string' && !args.file.trim()) return { text: 'file= 传了空字符串 —— 本次不会打开任何 .blend'
+          + '（脚本会拿到出厂空场景）；要么给真实 .blend 路径，要么就不要传 file=' }
+      }
       const body: any = { op: op }
       if (args && args.id) body.id = String(args.id)
       if (args && args.script !== undefined) body.script = String(args.script)
@@ -1906,6 +2503,14 @@ export function apply(ctx: any, config: Config): void {
         return { text: t, envelope: { kind: 'job', mode: 'job-kill', id: j.id || null, status: j.status || null, ok: true,
           alreadyFinished: !!j.alreadyFinished, note: j.note || null, fromLedger: !!j.fromLedger } }
       }
+      if (j.recovered) {
+        return { text: 'JOB ' + op + ' · ' + String(j.id || '') + ' · status=' + String(j.status)
+            + String.fromCharCode(10) + '（已完成 · 磁盘产物对账 recovered from ' + String(j.recoveredFrom || '?') + '）'
+            + String.fromCharCode(10) + String(j.hint || ''),
+          envelope: { kind: 'job', mode: 'job-' + op, id: j.id || null, status: j.status || null, ok: true,
+            recovered: true, recoveredFrom: j.recoveredFrom || null, recoveredEvidence: j.recoveredEvidence || null,
+            resultJson: j.resultJson || null, resultPath: j.resultPath || null, stdoutTail: clipText(j.stdoutTail, 1000, 1000) } }
+      }
       if (j.status === 'stale' || j.fromLedger) {
         return { text: 'JOB ' + op + ' · ' + String(j.id || '') + ' · status=' + String(j.status)
             + String.fromCharCode(10) + '（磁盘台账记录）' + String(j.staleReason || '') + String.fromCharCode(10) + String(j.hint || ''),
@@ -1914,7 +2519,10 @@ export function apply(ctx: any, config: Config): void {
             resultJson: j.resultJson || null, resultPath: j.resultPath || null, stdoutTail: clipText(j.stdoutTail, 1000, 1000) } }
       }
       if (op === 'collect' && j.status === 'running') {
-        ctx2.notes.push('任务仍在跑（不是失败）：stage=' + safeStringify(j.stage || j.stageName) + ' · 最近输出 ' + String(Math.round(Number(j.idleMs || 0) / 1000)) + 's 前')
+        ctx2.notes.push('任务仍在跑（不是失败）：stage=' + safeStringify(j.stage || j.stageName)
+          + (j.progress ? (' · progress=' + safeStringify(j.progress)) : '')
+          + (j.heartbeat ? (' · 心跳 ' + String(Math.round(Number((Date.now() - j.heartbeat.at) || 0) / 1000)) + 's 前') : '')
+          + ' · 最近输出 ' + String(Math.round(Number(j.idleMs || 0) / 1000)) + 's 前')
         const out1 = promotedReceipt(j, String(j.id), 'op=collect：任务还在跑')
         out1.envelope.mode = 'collect-running'
         out1.envelope.notes = ctx2.notes
@@ -1945,6 +2553,7 @@ export function apply(ctx: any, config: Config): void {
       holder: { type: 'string', description: 'lease/release 的持有者名（默认本插件进程 pid 标识）' },
       ttl_ms: { type: 'integer', description: 'lease 有效期毫秒，默认 600000；写操作会自动续期' },
       force: { type: 'boolean', description: 'lease 时抢占别人的租约（默认 false，被占用返回 409）' },
+      scope: { type: 'string', description: '【lease】写作用域（第二维）：collection:COL_Lights 或 prefix:LGT- ，逗号分隔；声明式，会出现在 who/lease/409 回执里（装配层用 K.route_collections() 真正归位）' },
       wait_ms: { type: 'integer', description: '【launch】等 addon 端口打开的上限，默认 90000' },
       file: { type: 'string', description: '【launch】启动时要打开的 .blend（WSL/Windows 路径都收）' },
       exe: { type: 'string', description: '【launch】显式指定 blender.exe（覆盖配置探测）' },
@@ -1997,6 +2606,7 @@ export function apply(ctx: any, config: Config): void {
             return [
               '租约：' + (lz.active ? ('持有者 ' + String(lz.holder) + '（剩余 ' + String(Math.round(Number(lz.expiresInMs || 0) / 1000)) + 's，续期 ' + String(lz.renewals || 0) + ' 次）') : '空闲（谁都能写）'),
               '本会话 holder：' + HOLDER + (lz.active && lz.holder === HOLDER ? '（就是本会话）' : ''),
+              '写作用域：' + (lz.scope ? JSON.stringify(lz.scope) : '未声明（= 不限制）'),
               '通道：calls=' + String(m.calls || 0) + ' errors=' + String(m.errors || 0) + ' timeouts=' + String(m.timeouts || 0) + ' inflight=' + String(m.inflight || 0) + ' lastCmd=' + String(m.lastCmd || '-'),
               '统计：' + JSON.stringify((w && w.stats) || {}),
             ].join('\n')
@@ -2004,6 +2614,7 @@ export function apply(ctx: any, config: Config): void {
           const body: any = { holder: String((args && args.holder) || HOLDER) }
           if (args && args.ttl_ms) body.ttlMs = Number(args.ttl_ms)
           if (op === 'lease' && args && args.force) body.force = true
+          if (op === 'lease' && args && args.scope) body.scope = String(args.scope)
           const r: any = await backendPost(port, op === 'lease' ? '/lease' : '/release', body, 20000)
           if (op === 'lease' && r && r.error === 'leased') {
             return '租约被占用：holder=' + String(r.holder) + '，剩余 ' + String(Math.round(Number(r.expiresInMs || 0) / 1000)) + 's\n'
@@ -2061,6 +2672,7 @@ export function apply(ctx: any, config: Config): void {
           const lines: string[] = []
           lines.push('诊断：' + String((d && d.kind) || (diag && diag.kind) || (d && d.ok ? 'ok' : 'unknown')))
           lines.push('宿主 API：' + HOST_API)                      // v0.9.2（R2）：DSH 升级后一眼看出插件挂的是哪份 dsh-tools
+          lines.push(tuiHostSummary())                             // v2.6.1：dsh-TUI 宿主半边接上了哪些接缝
           lines.push('插件：v' + PLUGIN_VERSION + ' @ ' + HERE)
           lines.push('schemastery：' + (schemaResolve.via
             ? ('已解析（' + schemaResolve.via + '）')
@@ -2121,6 +2733,130 @@ export function apply(ctx: any, config: Config): void {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * v2.2.0 · 捆绑技能（bundled skill）：skill 随插件走，装插件即有
+ *
+ * 背景：skill 原先在独立仓库（dsh-skill-blender-modeling），插件用户大多**不读
+ * GitHub 主页**、也不会再单独去下载/软链它 —— 于是"插件管通道、skill 管流程"
+ * 只对作者成立。v2.2.0 起把 skill 内容放进本包的 skills/blender-modeling/，
+ * 并在宿主**有 skills 服务时**注册一个 bundled provider：
+ *   - rank = 600（与 @deepseek-ai/dsh-skill 的 BUNDLED_SKILL_RANK 同值）；
+ *     DSH 规则是 rank 小者优先 ⇒ 用户自己装在 ~/.dsh/skills（400）的副本仍然覆盖包内副本，
+ *     不想用包内版本的用户不会被"强制更新"。
+ *   - 源码里不 import @deepseek-ai/dsh-skill：那是宿主的包（本插件不依赖它、也不要求安装），
+ *     这里只依赖 `ctx.skills.registerProvider` 这一条稳定接口 + 纯文本 frontmatter 解析。
+ *   - 注册失败/文件缺失只告警，**绝不影响 16 个工具**（技能是附加能力）。
+ * ──────────────────────────────────────────────────────────────────────────── */
+const BUNDLED_SKILL_PROVIDER = 'dsh-blender-plugin'
+const BUNDLED_SKILL_RANK = 600
+const BUNDLED_SKILL_DIR = fileURLToPath(new URL('../skills/blender-modeling/', import.meta.url))
+let bundledSkillCache: { name: string; description: string; content: string } | null | undefined
+let bundledSkillWarned = false
+
+/** 解析 SKILL.md 的 YAML frontmatter（只取本插件需要的 name/description；不引 yaml 依赖）。 */
+function parseSkillFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw)
+  if (!m) return { meta: {}, body: raw }
+  const meta: Record<string, string> = {}
+  let key = ''
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line)
+    if (kv) {
+      key = kv[1]
+      let v = kv[2].trim()
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+      meta[key] = v
+      continue
+    }
+    // YAML 折叠/多行 continuation：缩进行并进上一个 key
+    if (key && /^\s+\S/.test(line)) meta[key] = (meta[key] ? meta[key] + ' ' : '') + line.trim()
+  }
+  return { meta, body: raw.slice(m[0].length) }
+}
+
+function readBundledSkill(): { name: string; description: string; content: string } | null {
+  if (bundledSkillCache !== undefined) return bundledSkillCache
+  try {
+    const raw = readFileSync(path.join(BUNDLED_SKILL_DIR, 'SKILL.md'), 'utf8')
+    const { meta, body } = parseSkillFrontmatter(raw)
+    const name = String(meta.name || '').trim()
+    const description = String(meta.description || '').trim()
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || !description) {
+      bundledSkillCache = null
+      return null
+    }
+    bundledSkillCache = { name, description, content: body }
+    return bundledSkillCache
+  } catch (e) {
+    bundledSkillCache = null
+    return null
+  }
+}
+
+function createBundledSkillProvider(): any | null {
+  const skill = readBundledSkill()
+  if (!skill) return null
+  const skillFile = path.join(BUNDLED_SKILL_DIR, 'SKILL.md')
+  const resourceBase = { kind: 'directory', path: BUNDLED_SKILL_DIR.split(path.sep).join('/') }
+  const candidate = {
+    name: skill.name,
+    description: skill.description,
+    invocation: { modelInvocable: true, userInvocable: true },
+    source: 'bundled',
+    provider: BUNDLED_SKILL_PROVIDER,
+    rank: BUNDLED_SKILL_RANK,
+    resourceBase,
+    path: skillFile,
+    locator: skillFile,
+  }
+  return {
+    name: BUNDLED_SKILL_PROVIDER,
+    // ⚠ 必须是 Promise（async）：宿主 registry 的 waitWithAbort 在调用方带 signal 时会对返回值
+    // 直接 `promise.then(...)`（dsh-skill/lib 每一条模型侧 lookup 都带 signal）——
+    // 同步返回会抛 `promise.then is not a function`，provider 被静默 skip，skill 实际加载不了。
+    list: async () => [candidate],
+    get: async () => ({
+      name: skill.name,
+      description: skill.description,
+      invocation: { modelInvocable: true, userInvocable: true },
+      source: 'bundled',
+      provider: BUNDLED_SKILL_PROVIDER,
+      resourceBase,
+      path: skillFile,
+      content: skill.content,
+    }),
+  }
+}
+
+/**
+ * 把随包 skill 注册进宿主的 skills 注册表（可选能力，失败只告警）。
+ * 用 ctx.inject(['skills'], cb) 延迟到服务可用时再注册：宿主若没有 skill 服务，
+ * 这个子 fiber 一直待命即可，**不会**让插件本身起不来。
+ */
+function registerBundledSkill(ctx: any): void {
+  const provider = createBundledSkillProvider()
+  if (provider === null) {
+    if (!bundledSkillWarned) {
+      bundledSkillWarned = true
+      try { ctx?.logger?.warn?.('bundled skill 未注册：skills/blender-modeling/SKILL.md 缺失或 frontmatter 不合法（不影响工具面）') } catch (e) {}
+    }
+    return
+  }
+  const mount = (c: any) => {
+    try {
+      c.skills.registerProvider(() => provider)
+    } catch (e: any) {
+      try { ctx?.logger?.warn?.('bundled skill 注册失败：' + String((e && e.message) || e) + '（不影响工具面）') } catch (e2) {}
+    }
+  }
+  try {
+    if (typeof ctx?.inject === 'function') ctx.inject(['skills'], (c: any) => mount(c))
+    else if (ctx?.skills && typeof ctx.skills.registerProvider === 'function') mount(ctx)
+  } catch (e: any) {
+    try { ctx?.logger?.warn?.('bundled skill 挂载失败：' + String((e && e.message) || e) + '（不影响工具面）') } catch (e2) {}
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
  * v0.9.4：**测试接缝**。tests/lossless_guard.mjs 直接 import 本模块，就能拿到
  *   ① 真实回执构造器（receiptEnvelope / headlessReceipt / promotedReceipt）
  *   ② 出口消毒器（losslessSanitize）
@@ -2138,4 +2874,16 @@ export const __internals = {
   HEADLESS_WAIT_MS: HEADLESS_WAIT_MS,
   PLUGIN_VERSION: PLUGIN_VERSION,
   schemaResolve: schemaResolve,   // v1.0.1+S11（issue #10）：schemastery 走了哪条通道 / 失败原因
+  // v2.2.0：随包 skill 的测试接缝（tests/skill_bundle_selftest.mjs 直接断言）
+  bundledSkill: {
+    dir: BUNDLED_SKILL_DIR,
+    provider: BUNDLED_SKILL_PROVIDER,
+    rank: BUNDLED_SKILL_RANK,
+    read: readBundledSkill,
+    createProvider: createBundledSkillProvider,
+    register: registerBundledSkill,
+    parseFrontmatter: parseSkillFrontmatter,
+  },
+  // v2.6.1：工具卡片 presenter（tests/tool_cards_selftest.mjs 直接断言）
+  cards: { specs: CARD_SPECS, presenters: cardPresenters },
 }

@@ -28,7 +28,7 @@
 
 ## 第三方依赖 / Blender 侧 addon
 
-- Blender 侧需要一个**第三方 addon**（`DSH Blender Bridge`，旧名 `MCP for Blender`；或兼容 category-action 协议的实现）。
+- Blender 侧需要本仓附带的 addon（`DSH Blender Bridge` v1.8+）；旧 `MCP for Blender` / category-action 实现自 v2.3 起不再支持。
   它的代码**不在本仓库**，安装前请自行评估其来源与版本。
 - 发布包由 `npm pack` 生成，只含 `package.json` 的 `files` 白名单内容；
   构建依赖来自 DSH checkout，运行期依赖由宿主注入（`peerDependencies`）。

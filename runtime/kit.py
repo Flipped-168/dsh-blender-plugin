@@ -351,11 +351,52 @@ def selftest():
     return j({"ok": bool(ok), "version": KIT_VERSION, "evidence": ev})
 
 
+# ────────────────────────────── 批量 update ──────────────────────────────
+class BatchUpdates:
+    """多步数据写入 + 单次 `view_layer.update()` 的显式批次工具（v2.6.1 性能）。
+
+    用法：
+        batch = _KIT.BatchUpdates()
+        batch.flush()                    # 可选：起始基线
+        for ob in objs: ...              # 只写数据，不 update
+        batch.flush()                    # 需要读 evaluated 数据前再刷
+
+    纪律：任何 `evaluated_get()/to_mesh()/BVH/bake/render` 之前必须 flush；
+    合并 update 会减少 `depsgraph_update_post` 的触发次数（活动追踪等依赖该事件
+    的代码要复核粒度是否仍够）。
+    """
+
+    def __init__(self, view_layer=None):
+        import bpy
+        self.vl = view_layer or bpy.context.view_layer
+        self.stages = 0
+        self.updates = 0
+
+    def stage(self, fn, *args, **kwargs):
+        """执行一个写入阶段（只改数据，不 update）。"""
+        result = fn(*args, **kwargs)
+        self.stages += 1
+        return result
+
+    def flush(self):
+        """把当前批次写入推给依赖图（读 evaluated 数据前调用）。"""
+        self.vl.update()
+        self.updates += 1
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.flush()
+        return False
+
+
 # 注册：KERNEL_BOOTSTRAP 会执行本文件 ⇒ K.dsh_kit 在任何注入路径里都存在
 _K = _kernel()
 _K.dsh_kit = types.SimpleNamespace(
     version=KIT_VERSION, j=j, err=err, receipt=receipt, units=units, mm=mm, api=api,
     Api=Api, register=register, flatten=flatten, dispatch_table=dispatch_table,
     objects=objects, world_tris=world_tris, bvh=bvh, iou=iou,
-    pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree,
+    pairwise_clearance=pairwise_clearance, selftest=selftest, kernel=_kernel, wrap_dispatch=wrap_dispatch, resolve_refs=resolve_refs, kapi=kapi, install_kernel=install_kernel, comp_tree=comp_tree, BatchUpdates=BatchUpdates,
 )

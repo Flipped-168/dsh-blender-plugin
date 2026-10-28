@@ -2,7 +2,7 @@
 /**
  * tests/discoverability_selftest.mjs —— v0.9.6（D1）：工具可发现性
  *
- * 动机（实测，见 CHANGELOG v0.9.6 / docs/上游整合评估-*.md）：
+ * 动机（实测，见 CHANGELOG v0.9.6）：
  *   10 天 8,116 次真实调用里 plan 通道只占 1.6%（剔掉自检后），sculpt/fix/uv/print/sweep 五族真实使用 0 次；
  *   111 条失败里 68% 是超时，真正的"选错通道/参数"只有 3 条。
  *   ⇒ 瓶颈是"不知道有"，不是"报错"。于是：描述压成索引 + op="catalog" 目录 + 错误即纠正。
@@ -57,8 +57,8 @@ ok('catalog 覆盖 >= 26 个 family 且含关键家族',
 ok('catalog 覆盖 >= 100 个 op', cat.ops_count >= 100, cat.ops_count)
 // 体量门：**按家族摊**（每个 family 一个"什么时候用/ops/最小骨架/别用"块），避免"加一族就得改常数"
 const perFamily = cat.text.length / cat.families.length
-ok('catalog 默认是短文本（3k–9600 字符，且每个 family <= 360 字符）',
-  cat.text.length >= 3000 && cat.text.length <= 9600 && perFamily <= 360,
+ok('catalog 默认是短文本（3k–按 family 数缩放的上限，且每个 family <= 360 字符）',
+  cat.text.length >= 3000 && cat.text.length <= Math.max(9600, cat.families.length * 320) && perFamily <= 360,
   cat.text.length + ' / family=' + perFamily.toFixed(1))
 ok('catalog 默认不带结构化明细（要 full:true 才给）', !cat.detail && !cat.tools)
 ok('catalog 文本含"什么时候用"与"别用"判据', cat.text.indexOf('别用') > 0, true)
@@ -170,8 +170,15 @@ function schemaChars(name) {
   const i = srcTs.indexOf("name: '" + name + "'")
   const d0 = srcTs.indexOf('description:', i)
   const p0 = srcTs.indexOf('parameters: {', d0)
-  const p1 = srcTs.indexOf('\n    },', p0)
-  const seg = srcTs.slice(d0, p1)
+  // End of the tool's own schema: the next top-level member after `parameters`.
+  // The old `\n    },` endpoint can fall beyond the placeholder declaration and
+  // swallow unrelated apply() code, so unrelated additions (a service name, a
+  // comment) silently spend the tool-description budget.
+  const ends = ['\n    output:', '\n    isConcurrencySafe:', '\n    timeoutMs:', '\n    async execute(', '\n    execute(']
+    .map((marker) => srcTs.indexOf(marker, p0))
+    .filter((at) => at > p0)
+  const p1 = ends.length > 0 ? Math.min(...ends) : srcTs.indexOf('\n    },', p0)
+  const seg = p1 > d0 ? srcTs.slice(d0, p1) : srcTs.slice(d0)
   return (seg.match(/'((?:[^'\\]|\\.)*)'/g) || []).join('').length
 }
 // v1.2 修：与 tests/capability_lock.mjs **同一口径** —— 同一个 tool 名会在"降级占位"分支里
@@ -182,9 +189,10 @@ const TOOL_NAMES = [...new Set((srcTs.match(/name: '(blender_rt_[a-z_]+|blender_
 const rows = TOOL_NAMES.map((n) => [n, schemaChars(n)])
 const total = rows.reduce((a, b) => a + b[1], 0)
 const worst = rows.slice().sort((a, b) => b[1] - a[1])[0]
-// v1.2：新增第 16 个工具 `blender_rt_pick`（用户明确要求"模型请用户点选"）。**合计门保持 12000 不动**
-// —— 新工具压到 217 字符，去重后总预算 11949 仍在门内。逐工具 <1600 的硬门同样未动。
-ok('16 个工具 schema 合计 <= 12000 字符（v0.9.4 基线 17,147；v1.2 加工具后仍守 12000）', total <= 12000, String(total))
+// v2.3：视口面板与 `blender_rt_pick` 已删除（原生选中取代）→ **降到 15 个工具**；
+// 合计门保持 12000 不动（v1.2 时曾靠把 pick 压到 217 字符才守住）。
+ok('15 个工具 schema 合计 <= 12000 字符（v0.9.4 基线 17,147；v2.3 删 pick 后更宽裕）', total <= 12000, String(total))
+ok('blender_rt_pick 已删除（v2.3 视口面板移除，原生选中取代）', !TOOL_NAMES.includes('blender_rt_pick'), TOOL_NAMES.length)
 ok('单工具 schema 都 < 1600 字符（v0.9.4 最大 4,020）', worst[1] < 1600, worst[0] + '=' + String(worst[1]))
 ok('rt_headless 已压到 < 1600 字符（原 4,020）', (rows.find((b) => b[0] === 'blender_rt_headless') || [0, 1e9])[1] < 1600)
 ok('重工具都在 catalog 里有细节条目', ['rt_headless', 'rt_job', 'rt_worker', 'rt_see', 'rt_loop', 'viewport'].every((k) => catalogPayload({ tool: k }).ok === true))

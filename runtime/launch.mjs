@@ -73,13 +73,11 @@ async function tryLaunchAgent(opts, addonPort, steps, base) {
 
 
 /**
- * addon 自动探测的**名字提示**（旧名与新名都要命中）：
- *   · 旧 addon 回退（改名前的版本）：`MCP for Blender`（模块 `blender_mcp`、标识前缀 `blendermcp_*`）
- *   · 新名：`DSH Blender Bridge`（模块 `dsh_blender_bridge`、标识前缀 `dshbb_*`）
- * 只按 "mcp" 匹配的话，addon 改名后（`dsh_blender_bridge.py`）启动器的自动探测就扫不到 ⇒ 通道起不来。
+ * addon 自动探测的**名字提示**：只认本仓 `DSH Blender Bridge`（模块 `dsh_blender_bridge`、前缀 `dshbb_*`）。
+ * v2.3 起不再扫描/兼容旧 `MCP for Blender`（模块 `blender_mcp`）。
  * LAUNCH_BOOT_PY 里由 JSON.stringify 内联成**同一个**列表，`addonNameHit()` 是它的 JS 同口径镜像（测试用）。
  */
-export const ADDON_NAME_HINTS = ['mcp', 'blender_bridge', 'dshbb', 'dsh_blender_bridge'];
+export const ADDON_NAME_HINTS = ['blender_bridge', 'dshbb', 'dsh_blender_bridge'];
 
 /** 与 LAUNCH_BOOT_PY 里 `_name_hit()` 同口径的 JS 判定（小写子串命中）——测试用 */
 export function addonNameHit(name) {
@@ -92,7 +90,7 @@ export const LAUNCH_BOOT_PY = [
   '"""DSH launch boot (v0.9.4): enable the Blender addon and start its socket server (GUI only)."""',
   'import importlib.util, json, os, sys',
   '',
-  '# ---- DSH addon 名字提示：旧名/新名都命中（addon_utils 扫描与目录扫描共用）----',
+  '# ---- DSH addon 名字提示：只认 dsh_blender_bridge / dshbb_*（旧 MCP for Blender 不再支持）----',
   '_HINTS = ' + JSON.stringify(ADDON_NAME_HINTS),
   'def _name_hit(name):',
   '    n = (name or "").lower()',
@@ -130,11 +128,7 @@ export const LAUNCH_BOOT_PY = [
   '',
   '',
   'def _server_cls():',
-  '    # 双名探测：先新名 dshbb_server，再回退旧名 blendermcp_server（旧 addon 回退，改名前的版本）',
-  '    t = getattr(bpy.types, "dshbb_server", None)',
-  '    if t is None:',
-  '        t = getattr(bpy.types, "blendermcp_server", None)',
-  '    return t',
+  '    return getattr(bpy.types, "dshbb_server", None)',
   '',
   '',
   'def _server_running():',

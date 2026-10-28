@@ -432,6 +432,53 @@ def _json_key(e):
     return _j(e.get("params"))
 
 
+def dsh_loop_sync(spec=None, progress_path=None, stop_path=None, heartbeat_ms=500,
+                  history=8, board=0, **kw):
+    """无头同步内环（v1.1.0）：不依赖 bpy.app.timers，阻塞跑完再返回。
+
+    为什么需要：bpy.app.timers 在 blender -b 下不触发（runner selftest 一直手动 drive tick），
+    而 GUI-only 的 loop 在 headless 主路径上不可用。这里复用 dsh_loop_start + _tick，
+    **不复制评估逻辑**；每 heartbeat_ms 把 _status_dict 写进 progress_path，供另一会话观察；
+    出现 stop_path 时置 st["stop"]，下一次 tick 正常收工（单线程不能中断正在执行的 step）。
+    """
+    import os
+    st0 = _state()
+    if st0.get("running"):
+        return _j({"ok": False, "err": "loop already running", "status": _status_dict(st0)})
+    started = dsh_loop_start(spec, **kw)
+    try:
+        sd = json.loads(started) if isinstance(started, str) else started
+    except Exception:
+        sd = {}
+    if not isinstance(sd, dict) or not sd.get("ok"):
+        return started
+    last_hb = 0.0
+    while True:
+        st = _state()
+        if not st.get("running"):
+            break
+        if stop_path and os.path.exists(str(stop_path)):
+            st["stop"] = True
+        fn = st.get("timer")
+        if fn is None:
+            break
+        fn()
+        now = time.perf_counter()
+        if progress_path and (now - last_hb) * 1000.0 >= float(heartbeat_ms or 500):
+            last_hb = now
+            try:
+                with open(str(progress_path), "w", encoding="utf-8") as fh:
+                    fh.write(_j(_status_dict(st, int(history))))
+            except Exception:
+                pass
+    out = _status_dict(_state(), int(history))
+    if int(board or 0) > 0:
+        out["board"] = _board_payload(_state(), int(board))
+    out["ok"] = not bool(out.get("error"))
+    out["sync"] = True
+    return _j(out)
+
+
 def dsh_loop_help():
     return _j({
         "runner_version": RUNNER_VERSION,
@@ -442,7 +489,7 @@ def dsh_loop_help():
                     "anneal(v_start, v_end, frac, power) -> 退火步长（用 ns[frac]）",
                     "record(params, score, metrics, violations) -> 手动登记候选进候选表",
                     "ns[i] / ns[frac] -> 当前迭代号 / 进度（step 里可读，用于自适应步长）"],
-        "ops": "status(history, board) / stop / board(limit, groups) / export(path, top, include_variants) / bench(iterations)",
+        "ops": "status(history, board) / stop / board(limit, groups) / export(path, top, include_variants) / bench(iterations) / sync(spec, progress_path, stop_path, heartbeat_ms)",
         "multi_objective": "score = penalize({ex,ey,ez}, violations=[max(0,rot-0.9)], weights={ex:1,ey:1,ez:2}, lam=50)",
         "batch": "参数里带 obj 维度 + group_key=\"obj\" → 每组各留 top_k 个最优",
         "safety": "iteration/budget 双上限 + op=stop 急停 + 出错自动停；step 内不要做文件 I/O",
@@ -514,7 +561,7 @@ if _K is not None:
         "dispatch": _KIT.wrap_dispatch(None, {"selftest": dsh_loop_selftest}),"version": RUNNER_VERSION, "start": dsh_loop_start, "status": dsh_loop_status,
                        "stop": dsh_loop_stop, "board": dsh_loop_board, "export": dsh_loop_export,
                        "help": dsh_loop_help, "bench": dsh_loop_bench,
-        "selftest": dsh_loop_selftest})
+        "sync": dsh_loop_sync, "selftest": dsh_loop_selftest})
 
 # ---- v0.9.1（93-B1/B2）：API 可调用化（换成 dict 子类实例，返回已解析对象）----
 # 背景：K.dsh_x_api 原来是普通 dict → 进程内 api(args) 报 TypeError: 'dict' object is not callable；

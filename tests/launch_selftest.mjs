@@ -7,7 +7,7 @@
  *   spawn exe → 轮询端口 → already 幂等 → dryRun → 失败路径（exe 不存在/端口始终不开）
  * 全程**不碰用户真正开着的那个 Blender**（独立后端 + 独立端口 + 独立工作目录 + 假 exe）。
  *
- * 另钉 v2.0.0 改名兼容：addon 名字提示要**旧名/新名都命中**（`blender_mcp` 与 `dsh_blender_bridge`），
+ * v2.3：只支持本仓 addon —— 名字提示只命中 `dsh_blender_bridge`/`dshbb_*`，**旧 MCP for Blender 不再匹配**。
  * 否则 addon 改名后启动器的自动探测扫不到 ⇒ 通道起不来。
  *
  * 用法：node tests/launch_selftest.mjs
@@ -76,12 +76,13 @@ fs.chmodSync(MOCK, 0o755)
 console.log('== 启动器集成自检 ==')
 
 // ⓪ v2.0.0 改名兼容：addon 名字提示必须**旧名与新名都命中**（addon 改名后自动探测不能瞎）
-ok('名字提示含旧名标记 "mcp" 与新名标记 "blender_bridge"/"dshbb"',
-  ['mcp', 'blender_bridge', 'dshbb'].every((k) => ADDON_NAME_HINTS.indexOf(k) >= 0), JSON.stringify(ADDON_NAME_HINTS))
-ok('候选名 "dsh_blender_bridge" 命中（新名）', addonNameHit('dsh_blender_bridge') === true)
-ok('候选名 "blender_mcp" 命中（旧 addon 回退）', addonNameHit('blender_mcp') === true)
-ok('候选名 "dshbb_server" 命中（新标识前缀）', addonNameHit('dshbb_server') === true)
-ok('候选名 "blendermcp_server" 命中（旧标识前缀）', addonNameHit('blendermcp_server') === true)
+ok('名字提示只含本仓标记 "blender_bridge"/"dshbb"（v2.3 删除旧名兼容）',
+  ['blender_bridge', 'dshbb'].every((k) => ADDON_NAME_HINTS.indexOf(k) >= 0) && ADDON_NAME_HINTS.indexOf('mcp') < 0,
+  JSON.stringify(ADDON_NAME_HINTS))
+ok('候选名 "dsh_blender_bridge" 命中', addonNameHit('dsh_blender_bridge') === true)
+ok('候选名 "dshbb_server" 命中（标识前缀）', addonNameHit('dshbb_server') === true)
+ok('旧 addon 名 "blender_mcp" 不命中（v2.3 已删除支持）', addonNameHit('blender_mcp') === false)
+ok('旧标识前缀 "blendermcp_server" 不命中', addonNameHit('blendermcp_server') === false)
 ok('无关名 "polyhaven" 不命中（负对照）', addonNameHit('polyhaven') === false)
 
 console.log('假 blender：' + MOCK)
@@ -152,12 +153,12 @@ const BOOT = bootSrc.length > 0 ? bootSrc : LAUNCH_BOOT_PY
 if (bootSrc.length === 0) {
   console.log('  · 注：落盘 boot 脚本读不到（跨命名空间），下面改用 LAUNCH_BOOT_PY（= 写盘的那份源码）')
 }
-ok('boot 脚本用名字提示筛 addon（含旧名标记 mcp 与新名标记 blender_bridge/dshbb）',
+ok('boot 脚本用名字提示筛 addon（只含本仓标记）',
   BOOT.indexOf('_name_hit') >= 0 && ADDON_NAME_HINTS.every((k) => BOOT.indexOf('"' + k + '"') >= 0),
   JSON.stringify(ADDON_NAME_HINTS))
-ok('boot 脚本 server 类双名探测：dshbb_server 在前、blendermcp_server 回退在后',
-  BOOT.indexOf('dshbb_server') >= 0 && BOOT.indexOf('blendermcp_server') > BOOT.indexOf('dshbb_server'))
-ok('boot 脚本不再用裸 "mcp" 子串匹配（改名后会瞎）',
+ok('boot 脚本不再探测旧 addon 的 blendermcp_server',
+  BOOT.indexOf('dshbb_server') >= 0 && BOOT.indexOf('blendermcp_server') < 0)
+ok('boot 脚本不再用裸 "mcp" 子串匹配',
   BOOT.indexOf('"mcp" in') < 0 && BOOT.indexOf("'mcp' in") < 0)
 // 用 python3 跑**那份 Python 里**的 _name_hit（不是重写一遍），证明旧名/新名都命中、无关名不命中
 let hintOut = null
@@ -174,8 +175,8 @@ try {
   hintOut = execFileSync('python3', ['-c', py], { encoding: 'utf8' }).trim()
 } catch (e) { hintOut = null }
 if (hintOut === null) console.log('  · SKIP 用 python3 跑 boot 脚本的 _name_hit（python3 不可用）')
-else ok('boot 脚本的 _name_hit：新名/旧名/两个前缀都命中，无关名不命中',
-  hintOut === 'True True True True False', hintOut)
+else ok('boot 脚本的 _name_hit：本仓名/前缀命中，旧 addon 名与无关名不命中',
+  hintOut === 'True False True False False', hintOut)
 
 // ③ 假 blender 收到了 --python <boot>（启动参数连接得上）
 let mockArgs = ''

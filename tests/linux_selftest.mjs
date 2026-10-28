@@ -19,7 +19,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -35,7 +35,9 @@ function eq(label, got, want) {
     'got=' + JSON.stringify(got) + ' want=' + JSON.stringify(want));
 }
 
-const cfg = await import(path.join(ROOT, 'runtime/config.mjs'));
+// ESM loader 只认 file: / data: / node: —— Windows 上 path.join() 给的裸 `C:\…` 会被当成协议名，
+// 抛 ERR_UNSUPPORTED_ESM_URL_SCHEME（issue #32：npm test 到这里断链，其后 13 个用例静默跳过）。
+const cfg = await import(pathToFileURL(path.join(ROOT, 'runtime/config.mjs')).href);
 
 const IS_WIN = cfg.IS_WIN;
 const IS_MAC = cfg.IS_MAC;

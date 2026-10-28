@@ -1,24 +1,19 @@
 #!/usr/bin/env node
 /**
- * 客户端 bundle 自检 —— 「用户重启 DSH 后插件会不会崩」的安全网。
+ * 客户端 bundle 自检 —— 「用户重启 DSH 后插件会不会崩」的安全网（v2.3 精简版）。
  *
- * 为什么需要它：宿主集成能力里唯一**只有在浏览器里才会炸**的一环就是 `lib/client.js`。
- * 它是手写的 `window.__ModuleLoader__.load({id, factory})` 文件（契约 §2.2），
- * 由 `src/client/index.js` + `scripts/build-client.mjs` 产出。三类常见事故本测试全部拦住：
- *   ① 注册的 `id` 写错 → DSH 起不来 / 加载器认不出这个 bundle；
- *   ② `factory(require)` 没返回带 `apply`/`inject` 的对象 → 插件加载即崩；
- *   ③ bundle 里混进 `import`/`export` 顶层语法或 Node 内置模块 → 浏览器解析/运行时报错。
+ * v2.3 起 DSH 侧**视口面板**与 `blender_rt_pick` 已删除（原生选中取代），客户端半边只剩两块：
+ *   ① `@` 提及源（`GET /host/scene-items`）；
+ *   ② Blender 原生选中 → 草稿的无头桥（`conversation.input.dock` + `/host/selection/*`）。
+ * 本测试保证：
+ *   - bundle 仍是合法的 `window.__ModuleLoader__.load({id, factory})`，id = 包名；
+ *   - factory 返回 `{apply, inject}`；`inject` 含 `slots`；
+ *   - 没有顶层 `import`/`export`/`await`、没有 Node 内置模块；
+ *   - **面板相关旧入口不再存在**（`conversation.view` / `/host/view` / `/host/pick` 字面量）；
+ *   - `__selftest` 暴露的纯函数语义（@ codec、选中文本、插入路径）逐条成立。
  *
- * 设计纪律（照 `docs/宿主集成-接口契约.md` §2.2，不改契约字段）：
- *   - **不引入依赖**：只用 `node:fs` / `node:path` / `node:vm`。
- *   - **只在假 `window.__ModuleLoader__` 下执行**：不联网、不碰真 DSH、不写任何文件。
- *   - **不调用 `apply(ctx)`**：那需要真 cordis 上下文，且若实现里有 `while(true)`/`setInterval`
- *     会把本测试挂死（vm 的 timeout 只作用于 `runInContext`，管不住从宿主直接调用的函数）。
- *     本测试要证的是「能装进去、装进去不崩」，不是「跑起来行为对」。
- *   - **lib/client.js 不存在 → SKIP 且 exit 0**（客户端半边由 client-ui 并行产出，可能晚于本测试）。
- *
- * 用法：node tests/client_bundle_selftest.mjs
- * 退出码：0 = 通过或 SKIP；1 = 有断言失败（附可读原因）
+ * 纪律：零依赖（node:fs/path/vm）、只在假 loader 下执行、不联网、不写文件、不调 apply。
+ * 用法：node tests/client_bundle_selftest.mjs；退出码 0 = 通过/SKIP，1 = 有失败。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,18 +24,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const BUNDLE = path.join(ROOT, 'lib', 'client.js');
 const PKG_PATH = path.join(ROOT, 'package.json');
-
-/** 契约 §2.2：注册 id 必须等于包名 */
 const EXPECTED_ID = '@dsh-external/dsh-blender-plugin';
 
-// ── 0) bundle 还没产出 → SKIP（不算失败）────────────────────────────────────
 if (!fs.existsSync(BUNDLE)) {
   console.log('SKIP: lib/client.js 尚未生成');
-  console.log('  说明：客户端半边由 src/client/index.js + scripts/build-client.mjs 产出（契约 §2）。');
-  console.log('  产出后重跑：node tests/client_bundle_selftest.mjs');
   process.exit(0);
 }
-
 const src = fs.readFileSync(BUNDLE, 'utf8');
 const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
 
@@ -48,38 +37,16 @@ let pass = 0;
 let fail = 0;
 let skip = 0;
 const fails = [];
-const skips = [];
 const infos = [];
 function ok(name, cond, extra) {
-  if (cond) pass++;
-  else { fail++; fails.push({ clause: name, detail: extra === undefined ? null : extra }); }
+  if (cond) { pass++; return; }
+  fail++;
+  fails.push({ clause: name, detail: extra === undefined ? null : extra });
 }
-function doSkip(name, why) { skip++; skips.push({ clause: name, why: String(why) }); }
-function info(msg) { infos.push(msg); }
-/**
- * 值断言：接受**内联字面量**或**指向该字面量的命名常量**两种写法。
- * 契约只冻结"值"，没要求内联；命名常量（`var TAB_KIND = "blender-viewport"; … kind: TAB_KIND`）是更好的写法。
- * ⚠ 实测踩到过：按内联字面量断言会把这种写法**误判成缺失**（v1.2 首次回归就红了 3 条，全是假红）。
- */
-function literalOrConst(code, prefix, value) {
-  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const v = esc(value);
-  if (new RegExp(prefix + "\\s*['\"]" + v + "['\"]").test(code)) return { ok: true, how: '内联字面量' };
-  const ids = [...code.matchAll(new RegExp("(?:var|let|const)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*['\"]" + v + "['\"]", 'g'))].map((m) => m[1]);
-  for (const id of ids) {
-    if (new RegExp(prefix + "\\s*" + id + "\\b").test(code)) return { ok: true, how: '命名常量 ' + id + ' = ' + JSON.stringify(value) };
-  }
-  return { ok: false, how: '既没有内联 `' + prefix + ' "' + value + '"`，也没有指向该值的命名常量'
-    + (ids.length ? '（找到常量 ' + ids.join('/') + '，但没被用在 `' + prefix + '` 上）' : '') };
-}
+function doSkip(name, why) { skip++; infos.push('SKIP ' + name + ' — ' + String(why)); }
+function info(msg) { infos.push(String(msg)); }
 
-// ── ① 静态粗筛：顶层 import/export、顶层 await、Node 内置模块 ────────────────
-/**
- * 单遍字符扫描，把源码切成两个视图（比正则更少误伤，尤其是 `http://` 里的 `//`）：
- *   - `code`     ：注释已挖空，字符串**保留** → 用于看 `require('fs')` 这类字面量
- *   - `codeNoStr`：注释 + 字符串内容都挖空 → 用于看 `import`/`export`/Node 全局
- * 模板字面量整体挖空（`${}` 里的代码会被一起挖掉，属于可接受的粗筛代价）。
- */
+/** 单遍字符扫描：code=注释挖空/字符串保留；codeNoStr=字符串内容也挖空。 */
 function tokenizeViews(s) {
   let code = '';
   let codeNoStr = '';
@@ -88,17 +55,19 @@ function tokenizeViews(s) {
   while (i < n) {
     const c = s[i];
     const c2 = s[i + 1];
-    if (c === '/' && c2 === '/') {                       // 行注释
+    if (c === '/' && c2 === '/') {
       while (i < n && s[i] !== '\n') { code += ' '; codeNoStr += ' '; i++; }
       continue;
     }
-    if (c === '/' && c2 === '*') {                       // 块注释
+    if (c === '/' && c2 === '*') {
       code += ' '; codeNoStr += ' '; i += 2;
-      while (i < n && !(s[i] === '*' && s[i + 1] === '/')) { code += s[i] === '\n' ? '\n' : ' '; codeNoStr += s[i] === '\n' ? '\n' : ' '; i++; }
+      while (i < n && !(s[i] === '*' && s[i + 1] === '/')) {
+        code += s[i] === '\n' ? '\n' : ' '; codeNoStr += s[i] === '\n' ? '\n' : ' '; i++;
+      }
       if (i < n) { code += ' '; codeNoStr += ' '; i += 2; }
       continue;
     }
-    if (c === "'" || c === '"' || c === '`') {           // 字符串 / 模板
+    if (c === "'" || c === '"' || c === '`') {
       const quote = c;
       code += c; codeNoStr += c; i++;
       while (i < n) {
@@ -106,7 +75,6 @@ function tokenizeViews(s) {
         if (ch === '\\') { code += s.slice(i, i + 2); codeNoStr += '  '; i += 2; continue; }
         if (ch === quote) { code += ch; codeNoStr += ch; i++; break; }
         if (quote === '`' && ch === '$' && s[i + 1] === '{') {
-          // 模板里的 ${…}：整体挖空（含嵌套花括号的朴素配对）
           let depth = 1; let j = i + 2;
           while (j < n && depth > 0) { if (s[j] === '{') depth++; else if (s[j] === '}') depth--; j++; }
           code += ' '.repeat(j - i); codeNoStr += ' '.repeat(j - i); i = j; continue;
@@ -119,192 +87,84 @@ function tokenizeViews(s) {
   }
   return { code, codeNoStr };
 }
-
-const NODE_BUILTINS = new Set([
-  'assert', 'async_hooks', 'buffer', 'child_process', 'cluster', 'console', 'constants', 'crypto',
-  'dgram', 'diagnostics_channel', 'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https',
-  'inspector', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'punycode', 'querystring',
-  'readline', 'repl', 'stream', 'string_decoder', 'timers', 'tls', 'trace_events', 'tty', 'url',
-  'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
-]);
-
 const { code, codeNoStr } = tokenizeViews(src);
 
-const ieMatches = [...codeNoStr.matchAll(/^[ \t]*(import|export)\b/gm)].map((m) => m[0].trim());
-ok('bundle 无顶层 `import`/`export` 语法（契约 §2.2）', ieMatches.length === 0, ieMatches.slice(0, 5));
-
-const awaitMatches = [...codeNoStr.matchAll(/^[ \t]*await\b/gm)].map((m) => m[0].trim());
-ok('bundle 无顶层 `await`（契约 §2.2）', awaitMatches.length === 0, awaitMatches.slice(0, 5));
-
-const nodeGlobals = [...codeNoStr.matchAll(/(^|[^\w$.])(__dirname|__filename|Buffer|process)\b/g)].map((m) => m[2]);
-ok('bundle 不引用 Node 全局（__dirname/__filename/Buffer/process）', nodeGlobals.length === 0,
-  [...new Set(nodeGlobals)].slice(0, 6));
-
-const builtinReqs = [];
-for (const m of code.matchAll(/require\s*\(\s*(['"])([^'"]+)\1\s*\)/g)) {
-  const spec = m[2];
-  if (spec.startsWith('node:') || NODE_BUILTINS.has(spec) || NODE_BUILTINS.has(spec.split('/')[0])) builtinReqs.push(spec);
-}
-ok('bundle 不 require Node 内置模块（契约 §2.2）', builtinReqs.length === 0, [...new Set(builtinReqs)].slice(0, 6));
-
-// 只看字符串字面量里的裸说明符：`require("react")` 是允许的（baseline 提供）
-const reqSpecs = [...new Set([...code.matchAll(/require\s*\(\s*(['"])([^'"]+)\1\s*\)/g)].map((m) => m[2]))];
-info('bundle 内 require 的说明符：' + (reqSpecs.length ? JSON.stringify(reqSpecs) : '（无）'));
-
-// ── ② 在假 window.__ModuleLoader__ 下执行 bundle ────────────────────────────
-const loadCalls = [];
-const loader = {
-  load(entry) { loadCalls.push(entry); return entry; },
-  // 少数加载器实现会先探 get/has；给个无副作用的兜底，不改变断言口径
-  get() { return undefined; },
-  has() { return false; },
-};
-
-/** 极简 DOM 桩：只为「factory 执行期误碰 DOM」这类写法不炸，不模拟任何真实行为。 */
-function stubEl() {
-  return { style: {}, dataset: {}, children: [], appendChild() {}, append() {}, removeChild() {}, remove() {},
-    setAttribute() {}, removeAttribute() {}, addEventListener() {}, removeEventListener() {},
-    querySelector() { return null; }, querySelectorAll() { return []; }, getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; } };
-}
-function memStorage() {
-  const m = new Map();
-  return { getItem: (k) => (m.has(String(k)) ? m.get(String(k)) : null), setItem: (k, v) => m.set(String(k), String(v)),
-    removeItem: (k) => m.delete(String(k)), clear: () => m.clear(), key: (i) => [...m.keys()][i] ?? null,
-    get length() { return m.size; } };
+// ── ② 注册形状 ────────────────────────────────────────────────────────────────
+ok('加载器：window.__ModuleLoader__.load(...) 存在', src.includes('__ModuleLoader__.load('));
+ok('注册 id = 包名（契约 §2.2）', new RegExp("id:\\s*['\"]" + EXPECTED_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "['\"]").test(code));
+ok('factory 是函数且返回 module.exports', /factory:\s*\(require\)\s*=>/.test(code) && code.includes('return module.exports'));
+ok('无顶层 import / export', !/^\s*(import|export)\b/m.test(codeNoStr), (codeNoStr.match(/^\s*(import|export)\b/gm) || []).slice(0, 3));
+ok('无顶层 await（契约 §2.2）', !/^[ \t]*await\b/m.test(codeNoStr), (codeNoStr.match(/^[ \t]*await\b/gm) || []).slice(0, 3));
+for (const mod of ['fs', 'path', 'vm', 'child_process', 'http', 'https', 'net']) {
+  ok('不 require Node 内置 ' + mod, !new RegExp("require\\(\\s*['\"]" + mod + "['\"]").test(code));
 }
 
-const sandbox = {
-  console,
-  // 定时器一律"登记但不执行"：本测试不允许 bundle 留下任何会跑的异步任务
-  setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
-  queueMicrotask: () => {},
-  URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
-  fetch: () => Promise.reject(new Error('client_bundle_selftest 不发起网络请求')),
-  localStorage: memStorage(), sessionStorage: memStorage(),
-  document: { createElement: stubEl, createElementNS: stubEl, createTextNode: () => ({}),
-    body: stubEl(), head: stubEl(), documentElement: stubEl(), addEventListener() {}, removeEventListener() {},
-    querySelector() { return null; }, querySelectorAll() { return []; } },
-  navigator: { userAgent: 'client_bundle_selftest', platform: 'node' },
-};
-for (const g of ['Blob', 'File', 'FormData', 'Headers', 'Request', 'Response', 'Event', 'CustomEvent', 'MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
-  if (globalThis[g] !== undefined) sandbox[g] = globalThis[g];
-}
-sandbox.requestAnimationFrame = () => 0;
-sandbox.cancelAnimationFrame = () => {};
-sandbox.getComputedStyle = () => ({ getPropertyValue: () => '' });
-sandbox.MutationObserver = class { observe() {} disconnect() {} };
-sandbox.ResizeObserver = class { observe() {} disconnect() {} };
-sandbox.IntersectionObserver = class { observe() {} disconnect() {} };
-sandbox.window = sandbox;      // 浏览器里 window === 全局
-sandbox.self = sandbox;
-sandbox.__ModuleLoader__ = loader;
-
-let execErr = null;
-try {
-  const ctx = vm.createContext(sandbox);
-  vm.runInContext(src, ctx, { filename: 'lib/client.js', timeout: 10000 });
-} catch (e) {
-  execErr = e;
-}
-ok('bundle 在假 window.__ModuleLoader__ 下可执行（无语法/运行期错误）', execErr === null,
-  execErr ? String(execErr && execErr.message ? execErr.message : execErr).slice(0, 300) : null);
-
-ok('bundle 调用了 window.__ModuleLoader__.load（契约 §2.2）', loadCalls.length >= 1,
-  'load 调用次数 = ' + loadCalls.length);
-
-// ── ③ 注册 id 与 factory 返回契约 ───────────────────────────────────────────
-const entry = loadCalls.find((e) => e && e.id === EXPECTED_ID) || loadCalls[0] || null;
-ok('load 的实参是对象', entry !== null && typeof entry === 'object',
-  entry === null ? '没有捕获到任何 load 调用' : typeof entry);
-
-ok('注册 id === ' + EXPECTED_ID, !!entry && entry.id === EXPECTED_ID,
-  entry ? JSON.stringify(entry.id) : null);
-
-if (pkg.name && pkg.name !== EXPECTED_ID) {
-  info('⚠ package.json 的 name（' + pkg.name + '）与契约 §2.2 的注册 id 不一致 —— 报给 Lead 确认');
-}
-
-ok('entry.factory 是函数（契约 §2.2）', !!entry && typeof entry.factory === 'function',
-  entry ? typeof entry.factory : null);
-
-/** factory 内允许 require baseline（如 react）；给一个"什么都能点"的桩，Node 内置模块直接抛。 */
-function stubModule(spec) {
-  const target = function () { return target; };
-  return new Proxy(target, {
-    get(_t, k) {
-      if (typeof k === 'symbol') return k === Symbol.toPrimitive ? (() => '[stub:' + spec + ']') : undefined;
-      if (k === 'then') return undefined;                 // 别被 await 当成 thenable
-      if (k === '__esModule') return true;
-      return stubModule(spec);
-    },
-    apply() { return stubModule(spec); },
-    construct() { return {}; },
-    has() { return true; },
-  });
-}
-const requiredByFactory = [];
-function fakeRequire(spec) {
-  const s = String(spec);
-  requiredByFactory.push(s);
-  if (s.startsWith('node:') || NODE_BUILTINS.has(s) || NODE_BUILTINS.has(s.split('/')[0])) {
-    throw new Error('factory 里 require 了 Node 内置模块: ' + s);
-  }
-  return stubModule(s);
-}
-
+// 执行 bundle 取 exports（假 loader + 假 React；不调 apply）
 let mod = null;
-let factoryErr = null;
-if (entry && typeof entry.factory === 'function') {
-  try { mod = entry.factory(fakeRequire); }
-  catch (e) { factoryErr = e; }
+let loadError = null;
+const fakeReact = {
+  createElement: () => null,
+  useEffect: () => undefined,
+  useRef: (v) => ({ current: v }),
+  useState: (v) => [typeof v === 'function' ? v() : v, () => undefined],
+};
+const sandbox = {
+  window: {
+    __ModuleLoader__: { load: (def) => { mod = def; } },
+    fetch: () => Promise.resolve({ ok: false, status: 0, json: () => Promise.resolve(null) }),
+    setTimeout: () => 0,
+    clearTimeout: () => undefined,
+    localStorage: { getItem: () => null, setItem: () => undefined },
+  },
+  console,
+  Promise,
+  JSON,
+  Math,
+  Date,
+};
+try {
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { timeout: 10000 });
+} catch (e) {
+  loadError = e;
 }
-ok('factory(require) 可执行且不抛（契约 §2.2）', factoryErr === null,
-  factoryErr ? String(factoryErr && factoryErr.message ? factoryErr.message : factoryErr).slice(0, 300) : null);
-
-ok('factory(require) 返回对象（契约 §2.2）', mod !== null && typeof mod === 'object',
-  mod === null ? '返回 null/undefined' : typeof mod);
-
-ok('返回对象含 apply 函数（契约 §2.2）', !!mod && typeof mod.apply === 'function',
-  mod ? typeof mod.apply : null);
-
-const injectOk = !!mod && Array.isArray(mod.inject) && mod.inject.every((x) => typeof x === 'string');
-ok('返回对象含 inject 字符串数组（契约 §2.2）', injectOk,
-  mod ? (Array.isArray(mod.inject) ? JSON.stringify(mod.inject) : typeof mod.inject) : null);
-
-if (injectOk) {
-  info('exports.inject = ' + JSON.stringify(mod.inject));
-  if (mod.inject.length === 0) info('⚠ inject 为空数组 —— 面板插件通常要 inject 槽位服务（如 @deepseek-ai/dsh-client-ui-slots），请核对 dsh.client.inject 与 exports.inject');
+ok('bundle 在假 loader 下可执行（不抛）', !loadError, loadError && String(loadError.message || loadError));
+let exportsObj = null;
+try {
+  exportsObj = mod && typeof mod.factory === 'function' ? mod.factory((name) => (name === 'react' ? fakeReact : undefined)) : null;
+} catch (e) {
+  ok('factory 调用不抛', false, String(e && e.message || e));
+}
+ok('factory 返回 {apply, inject}', !!exportsObj && typeof exportsObj.apply === 'function' && Array.isArray(exportsObj.inject),
+  exportsObj ? { apply: typeof exportsObj.apply, inject: exportsObj.inject } : null);
+if (exportsObj && Array.isArray(exportsObj.inject)) {
+  ok('exports.inject 含 slots（原生选中桥要注册 dock）', exportsObj.inject.includes('slots'), exportsObj.inject);
+  if (exportsObj.inject.length === 0) info('⚠ inject 为空数组 —— 通常说明 dsh.client.inject 与 exports.inject 不一致');
 }
 
-// ── ④ 纯函数语义（契约 §2.3 轮询 / §2.4 消息文本 / §2.5 codec）───────────────
-/**
- * client-ui 把纯函数挂在 `exports.__selftest` 上**专供离线断言**（DSH 只读 `apply`/`inject`，
- * 未知导出无副作用）。契约**没有**要求暴露它 ⇒ 缺失只记 INFO，不算失败；一旦存在就逐条按契约断言。
- *
- * §2.5 的口径按 Lead 2026-10-16 裁决的**超集**实现：
- *   ref 带前缀（`object:` / `material:` / `collection:`），**codec 负责拆前缀**取裸名。
- */
-const st = mod && mod.__selftest && typeof mod.__selftest === 'object' ? mod.__selftest : null;
+// ── ③ v2.3 结构：面板已删，选中桥在 ─────────────────────────────────────────
+ok('注册了 conversation.input.dock（无头桥）', code.includes('conversation.input.dock') && code.includes('blender-selection-bridge'));
+ok('不再注册 conversation.view（视口面板已删除）', !code.includes('conversation.view'));
+ok('不再引用 /host/view 或 /host/pick（面板/点选已删除）', !code.includes('/host/view') && !code.includes('/host/pick'));
+ok('不再有 makePanelBody / makeSidebarPane', !code.includes('makePanelBody') && !code.includes('makeSidebarPane'));
+ok('仍有 /host/selection/latest 与 /host/selection/consume', code.includes('/host/selection/latest') && code.includes('/host/selection/consume'));
+ok('仍有 @ 提及源（/host/scene-items）', code.includes('/host/scene-items') && code.includes('registerSource'));
+
+// ── ④ 纯函数语义 ────────────────────────────────────────────────────────────
+const st = exportsObj && exportsObj.__selftest && typeof exportsObj.__selftest === 'object' ? exportsObj.__selftest : null;
 if (!st) {
-  info('未暴露 __selftest ⇒ §2.3 轮询间隔 / §2.4 消息文本 / §2.5 codec 的纯函数语义未覆盖（契约未要求暴露，故不算失败）');
+  ok('__selftest 存在（纯函数离线断言入口）', false, null);
 } else {
-  ok('§2.3 轮询间隔：常规 1500ms / 帧陈旧 600ms',
-    st.POLL_IDLE_MS === 1500 && st.POLL_STALE_MS === 600, { idle: st.POLL_IDLE_MS, stale: st.POLL_STALE_MS });
-  ok('§2.2 默认后端是 http://127.0.0.1:9877', st.DEFAULT_BACKEND === 'http://127.0.0.1:9877', st.DEFAULT_BACKEND);
+  ok('默认后端 = http://127.0.0.1:9877', st.DEFAULT_BACKEND === 'http://127.0.0.1:9877', st.DEFAULT_BACKEND);
 
-  const wantSel = 'Blender 视口点击：Cube（MESH 8v/6f）。用户说"这个/这些"时指它们；对象名在 bpy.data.objects 里可直接用。';
-  ok('§2.4 有选中 → 逐字文本', typeof st.messageText === 'function' && st.messageText({ name: 'Cube', detail: 'MESH 8v/6f' }) === wantSel,
-    typeof st.messageText === 'function' ? st.messageText({ name: 'Cube', detail: 'MESH 8v/6f' }) : typeof st.messageText);
-  ok('§2.4 无选中 → 逐字文本', typeof st.messageText === 'function' && st.messageText(null) === '附上当前 Blender 视口截图。',
-    typeof st.messageText === 'function' ? st.messageText(null) : typeof st.messageText);
-
+  // @ codec（对象/材质/集合 三类 ref）
   const cb = st.blenderCodec && typeof st.blenderCodec.clipboardText === 'function' ? st.blenderCodec.clipboardText : null;
   const ser = st.blenderCodec && typeof st.blenderCodec.serialize === 'function' ? st.blenderCodec.serialize : null;
-  ok('§2.5 codec.clipboardText 是函数', !!cb, st.blenderCodec ? typeof st.blenderCodec.clipboardText : typeof st.blenderCodec);
-  ok('§2.5 codec.serialize 是函数', !!ser, st.blenderCodec ? typeof st.blenderCodec.serialize : typeof st.blenderCodec);
+  ok('@ codec.clipboardText 是函数', !!cb, typeof cb);
+  ok('@ codec.serialize 是函数', !!ser, typeof ser);
   if (cb) {
     for (const [ref, want] of [['object:Cube', '@Cube'], ['material:Mat', '@Mat'], ['collection:Col', '@Col'], ['Cube', '@Cube']]) {
-      ok('§2.5 clipboardText(' + JSON.stringify(ref) + ') === ' + JSON.stringify(want), cb(ref) === want, cb(ref));
+      ok('clipboardText(' + JSON.stringify(ref) + ') === ' + JSON.stringify(want), cb(ref) === want, cb(ref));
     }
   }
   if (ser) {
@@ -314,105 +174,110 @@ if (!st) {
       ['Cube', '<blender-object>Cube</blender-object>']]) {
       let got = null; let err = null;
       try { got = await ser(ref); } catch (e) { err = e; }
-      ok('§2.5 serialize(' + JSON.stringify(ref) + ') === ' + JSON.stringify(want), got === want,
-        err ? '抛了：' + String(err.message) : got);
+      ok('serialize(' + JSON.stringify(ref) + ') === ' + JSON.stringify(want), err === null && got === want, err ? String(err.message || err) : got);
     }
   }
-  if (typeof st.onPickItem === 'function') {
-    const ins = st.onPickItem({ candidate: { value: 'object:Cube', name: 'Cube' } });
-    const i = (ins && ins.insert) || {};
-    ok('§2.5 onPick → insert{source:"blender", ref:"object:Cube", label:"Cube", clipboardText:"@Cube", appearance:"file"}',
-      i.source === 'blender' && i.ref === 'object:Cube' && i.label === 'Cube' && i.clipboardText === '@Cube' && i.appearance === 'file', i);
+  const onPick = typeof st.onPickItem === 'function' ? st.onPickItem : null;
+  if (onPick) {
+    const ins = onPick({ candidate: { name: 'Cube', value: 'object:Cube' } });
+    ok('@ onPick 返回 ReferenceInsert（source=blender / clipboardText=@Cube）',
+      !!ins && !!ins.insert && ins.insert.source === 'blender' && ins.insert.clipboardText === '@Cube', ins && ins.insert);
   } else {
-    info('未暴露 onPickItem ⇒ §2.5 的 ReferenceInsert 形状未覆盖');
+    ok('@ onPickItem 是函数', false, typeof st.onPickItem);
   }
-  // §2.5 候选数据源失败必须**不抛**（返回 []），否则会污染输入框。
-  // 本测试的 fetch 桩一律 reject，正好验这条纪律。
-  if (typeof st.sceneItemCandidates === 'function') {
-    let got = null; let err = null;
-    try { got = await st.sceneItemCandidates({ query: 'cu' }); } catch (e) { err = e; }
-    ok('§2.5 候选数据源失败时不抛、返回 []', err === null && Array.isArray(got) && got.length === 0,
-      err ? '抛了：' + String(err.message) : JSON.stringify(got));
-  }
-}
-info('factory 内 require：' + (requiredByFactory.length ? JSON.stringify([...new Set(requiredByFactory)]) : '（无）'));
-info('bundle 大小：' + src.length + ' B（' + path.relative(ROOT, BUNDLE) + '）');
 
-// ── ⑤ v1.2（契约 §7）：右侧栏门控 + 阻塞式点选请求 —— 只断言静态可断言的部分 ──
-/**
- * 口径：只断言**契约 §7.3 / §7.4 冻结的字面量**（路径、`kind`、`key`、轮询间隔、guide 条目），
- * **不碰运行时行为** —— `useTabInfo()` 的真实返回、`dispose()` 是否真把窗口移除、`ready:false` 时
- * `openTab` 是否真 throw，这些是契约 §7.8 登记过的**未证实项**，静态测试证明不了。
- *
- * 时序：client-ui 的 v1.2 门控是并行交付的 ⇒ bundle 里还没有 `/host/ready` 时**整块 SKIP**（不算失败）。
- * 容忍度说明：契约没有冻结常量**名字**，所以"轮询 2000 ms"优先读 `__selftest` 暴露的常量，
- * 退回"源码里 `*POLL* = 2000`"或"`/host/ready` 附近 400 字符内有 2000`"两种等价证据。
- */
-if (!/\/host\/ready/.test(code)) {
-  doSkip('§7.3/§7.4 v1.2 静态断言', 'bundle 里没有 `/host/ready` ⇒ 客户端半边尚未实现 v1.2（契约 §7 冻结后照它写）');
-} else {
-  // ① 就绪轮询间隔 2000 ms（§7.3.1）
-  const readyKey = st ? Object.keys(st).find((k) => /ready/i.test(k) && /(poll|ms|interval|tick)/i.test(k)) : null;
-  let pollOk = false;
-  let pollHow = '';
-  if (readyKey && typeof st[readyKey] === 'number') {
-    pollOk = st[readyKey] === 2000; pollHow = '__selftest.' + readyKey + ' = ' + st[readyKey];
-  } else {
-    const named = [...code.matchAll(/([A-Za-z_$][\w$]*)\s*=\s*2000\b/g)].map((m) => m[1]).filter((n) => /ready|poll/i.test(n));
-    if (named.length) { pollOk = true; pollHow = '源码常量 ' + JSON.stringify([...new Set(named)]) + ' = 2000'; }
-    else if ([...code.matchAll(/\/host\/ready/g)].some((m) => code.slice(Math.max(0, m.index - 400), m.index + 400).includes('2000'))) {
-      pollOk = true; pollHow = '`/host/ready` 附近 400 字符内出现 2000';
-    }
-  }
-  ok('§7.3 就绪轮询间隔 = 2000 ms', pollOk,
-    pollHow || '既没有 `*ready*POLL* = 2000` 的常量，也没有 `/host/ready` 附近的 2000；建议命名常量（如 READY_POLL_MS = 2000）并挂到 __selftest');
-  if (pollHow) info('§7.3 轮询间隔判定依据：' + pollHow);
-
-  // ② 右侧栏座位 + 门控（§7.3.2 / §7.3.3 / §7.3.5）
-  ok('§7.3 调用了 ctx.sidebarRightTabs.register(...)', /sidebarRightTabs\s*\.\s*register\s*\(/.test(code));
+  // v2.3 选中桥：文本与插入路径
+  ok('选中轮询间隔 = 100 ms', st.SELECTION_POLL_MS === 100, st.SELECTION_POLL_MS);
+  ok('草稿名单上限 = 24', st.SELECTION_DRAFT_NAME_LIMIT === 24, st.SELECTION_DRAFT_NAME_LIMIT);
+  const selPayload = { selection: { count: 2, names: ['GEO-blade', 'GEO-guard'], truncated: false, active: 'GEO-blade', mode: 'OBJECT' } };
+  const selText = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(selPayload) : null;
+  ok('对象选中文本含名单/活动对象/模式/对象名可直接用',
+    typeof selText === 'string' && selText.includes('GEO-blade、GEO-guard')
+    && selText.includes('活动对象：GEO-blade') && selText.includes('模式：OBJECT') && selText.includes('bpy.data.objects'), selText);
+  ok('空选中 → null', typeof st.selectionMessageText === 'function' && st.selectionMessageText({ selection: { names: [] } }) === null,
+    typeof st.selectionMessageText === 'function' ? st.selectionMessageText({ selection: { names: [] } }) : null);
+  ok('截断信息如实带出（共 3 件，只列前 2 件）',
+    typeof st.selectionMessageText === 'function'
+    && /共 3 件，只列前 2 件/.test(st.selectionMessageText({ selection: { count: 3, names: ['a', 'b'], truncated: true } }) || ''),
+    typeof st.selectionMessageText === 'function' ? st.selectionMessageText({ selection: { count: 3, names: ['a', 'b'], truncated: true } }) : null);
   {
-    const k = literalOrConst(code, 'kind\\s*:', 'blender-viewport');
-    ok('§7.3 kind === "blender-viewport"', k.ok, k.how);
-    if (k.ok) info('§7.3 kind 判定依据：' + k.how);
-    const key = literalOrConst(code, 'key\\s*:', '@dsh-external/dsh-blender-plugin');
-    ok('§7.3 面板 body 座位 key = 包名（sidebar.right.pane.tab）',
-      /['"]sidebar\.right\.pane\.tab['"]/.test(code) && key.ok,
-      { hasPaneSlot: /['"]sidebar\.right\.pane\.tab['"]/.test(code), key: key.how });
-    if (key.ok) info('§7.3 座位 key 判定依据：' + key.how);
-    const ot = literalOrConst(code, 'openTab\\s*\\(', 'blender-viewport');
-    ok('§7.3 ready 变 true 时自动开一次 openTab("blender-viewport")', ot.ok, ot.how);
+    const many = { selection: { kind: 'objects', count: 30, names: Array.from({ length: 30 }, (_, i) => 'p' + i), truncated: false } };
+    const text = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(many) : '';
+    ok('30 件 → 只列 24 个 + 共 30 件摘要', /共 30 件，只列前 24 件/.test(text), text);
+    const coll = { selection: { kind: 'collection', collection: 'COL-armor', count: 500, names: ['p1', 'p2', 'p3'], truncated: true } };
+    const collText = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(coll) : '';
+    ok('集合 payload → 集合名 + 件数 + 成员入口',
+      collText.includes('Blender 集合：COL-armor（500 件') && collText.includes("bpy.data.collections['COL-armor'].objects"), collText);
+    const withColls = { selection: { count: 5, names: ['a', 'b', 'c', 'd', 'e'], collections: [{ name: 'COL-a', count: 3 }, { name: 'COL-b', count: 2 }] } };
+    const collsText = typeof st.selectionMessageText === 'function' ? st.selectionMessageText(withColls) : '';
+    ok('对象名单带"涉及集合"摘要', /涉及集合：COL-a\(3\)、COL-b\(2\)/.test(collsText), collsText);
   }
-  ok('§7.3 guide 条目（id "viewport" + 「Blender 视口」）',
-    /guide\s*:\s*\[/.test(code) && /['"]viewport['"]/.test(code) && /Blender 视口/.test(code));
-  ok('§7.3 旧宿主降级：仍保留 conversation.view 座位（§2.3）', /['"]conversation\.view['"]/.test(code));
+  // v2.4：编辑模式 / 骨骼子元素
+  if (typeof st.selectionMessageText === 'function' && typeof st.subSelectionText === 'function') {
+    const meshSub = { selection: { kind: 'objects', count: 1, names: ['Cube'], sub: {
+      type: 'MESH', object: 'Cube', mode: 'EDIT_MESH',
+      select_mode: { vertex: true, edge: false, face: false },
+      counts: { vertices: 3, edges: 0, faces: 0 },
+      indices: { vertices: [0, 1, 2], edges: [], faces: [] }, truncated: false } } };
+    const meshText = st.selectionMessageText(meshSub);
+    ok('子元素：网格编辑模式 → 草稿含计数 + 顶点索引',
+      /编辑模式（网格）「Cube」：已选 3 顶点/.test(meshText) && /顶点索引：0,1,2/.test(meshText)
+      && /BMesh/.test(meshText), meshText);
 
-  // ③ 点选请求的路径字面量（§7.4）
-  //    ⚠ `/host/pick/result` 是**模型侧**轮询用的（§7.5），面板不需要引用它 —— 故不断言它。
-  for (const p of ['/host/pick/request', '/host/pick/answer', '/host/pick/cancel']) {
-    ok('§7.4 引用了 ' + p, code.includes(p));
-  }
-  // 附加：点选请求的轮询间隔（§7.4「同 §7.3 的 2000 ms tick，或面板自身 tick」）
-  if (st && typeof st.PICK_POLL_MS === 'number') {
-    ok('附加 §7.4 点选轮询间隔 = 2000 ms', st.PICK_POLL_MS === 2000, st.PICK_POLL_MS);
+    const armSub = { selection: { kind: 'objects', count: 1, names: ['Rig'], sub: {
+      type: 'ARMATURE', object: 'Rig', mode: 'POSE',
+      counts: { bones: 2 }, bones: ['BoneA', 'BoneB'], truncated: false } } };
+    const armText = st.selectionMessageText(armSub);
+    ok('子元素：骨架姿态模式 → 草稿含骨骼名',
+      /骨架.*「Rig」.*姿势模式.*已选 2 根/.test(armText) && /BoneA、BoneB/.test(armText), armText);
+
+    const curveSub = { selection: { kind: 'objects', count: 1, names: ['Curve'], sub: {
+      type: 'CURVE', object: 'Curve', mode: 'EDIT_CURVE', counts: { points: 2 },
+      points: [[0, 1], [0, 3]], truncated: false } } };
+    const curveText = st.selectionMessageText(curveSub);
+    ok('子元素：曲线控制点 → 草稿含 (spline:point)',
+      /曲线\/曲面控制点「Curve」/.test(curveText) && /0:1、0:3/.test(curveText), curveText);
+
+    ok('空 sub 不影响普通对象文本', st.subSelectionText({ sub: null }) === null);
+  } else {
+    ok('__selftest 暴露 subSelectionText', false, typeof st.subSelectionText);
+    ok('__selftest 暴露 SUB_DRAFT_INDEX_LIMIT', false, st.SUB_DRAFT_INDEX_LIMIT);
   }
 
-  // ④ 未证实项：只记 INFO，不判定（契约 §7.8）
-  if (/useTabInfo/.test(code)) info('§7.3 面板用了 useTabInfo() —— 其真实返回 `{sidebar,panel,tab}` **未证实**（契约 §7.8）');
-  else info('未在 bundle 里看到 useTabInfo —— §7.3.6 说面板 body 用它读 `{sidebar,panel,tab}`，请核对');
-  if (/dispose\s*\(/.test(code)) info('§7.3 门控用了 dispose() —— "注销后窗口真消失" **未证实**（契约 §7.8）');
+  if (typeof st.applySelectionToDraft === 'function') {
+    let inserted = null;
+    const fakeActions = { captureInsertion: () => ({ rev: 1 }), insertText: (text) => { inserted = text; return true; } };
+    const rActions = await st.applySelectionToDraft({ sessionId: 's1', inputActions: fakeActions }, selPayload);
+    ok('inputActions 路径：insertText 收到逐字文本', rActions.ok === true && rActions.how === 'actions' && inserted === selText, { r: rActions, inserted });
+    let drafted = null;
+    const emptyFallback = { state: { getSnapshot: () => ({ draft: '' }) }, setDraft: (t) => { drafted = t; } };
+    const rFallback = await st.applySelectionToDraft({ sessionId: 's1', fallbackInput: emptyFallback }, selPayload);
+    ok('备用通道：草稿为空 → setDraft 写入', rFallback.ok === true && rFallback.how === 'fallback' && drafted === selText, rFallback);
+    drafted = null;
+    const busyFallback = { state: { getSnapshot: () => ({ draft: '用户已经写的内容' }) }, setDraft: (t) => { drafted = t; } };
+    const rBusy = await st.applySelectionToDraft({ sessionId: 's1', fallbackInput: busyFallback }, selPayload);
+    ok('备用通道：草稿非空 → 拒绝覆盖', rBusy.ok === false && drafted === null && /已有内容/.test(String(rBusy.reason)), rBusy);
+    const rNone = await st.applySelectionToDraft({ sessionId: 's1' }, selPayload);
+    ok('无写入通道 → 明确失败（不静默吞掉）', rNone.ok === false && /inputActions/.test(String(rNone.reason)), rNone);
+  } else {
+    ok('__selftest 暴露 applySelectionToDraft', false, typeof st.applySelectionToDraft);
+  }
+
+  // @ 候选源：失败静默返回 []
+  if (typeof st.sceneItemCandidates === 'function') {
+    const empty = await st.sceneItemCandidates({ query: 'cu' }).catch(() => 'THREW');
+    ok('scene items 失败时返回 []（不抛）', Array.isArray(empty) && empty.length === 0, empty);
+  } else {
+    ok('__selftest 暴露 sceneItemCandidates', false, typeof st.sceneItemCandidates);
+  }
 }
 
-// ── 汇总 ───────────────────────────────────────────────────────────────────
-console.log('客户端 bundle 自检：' + pass + ' 通过 / ' + fail + ' 失败' + (skip ? ' / ' + skip + ' 跳过' : '') +
-  (fail ? '' : '  ✅') + '   （' + path.relative(ROOT, BUNDLE) + '）');
-for (const m of infos) console.log('  · ' + m);
-if (skips.length) {
-  console.log('  跳过（不算失败）：');
-  for (const s of skips) console.log('  - ' + s.clause + '：' + s.why);
+// ── ⑤ 汇总 ───────────────────────────────────────────────────────────────────
+for (const s of infos) console.log('  · ' + s);
+if (fail > 0) {
+  console.log('\n失败项：');
+  for (const f of fails) console.log('  x ' + f.clause + (f.detail === undefined || f.detail === null ? '' : ' — ' + JSON.stringify(f.detail)));
 }
-if (fail) {
-  console.log('  失败项：');
-  for (const f of fails) console.log('  x ' + f.clause + (f.detail !== null ? ' — ' + JSON.stringify(f.detail).slice(0, 400) : ''));
-  console.log('  含义：这一条红了 ⇒ 用户重启 DSH 后这个插件加载会崩（或加载器认不出），必须先修再发版。');
-}
-process.exit(fail ? 1 : 0);
+console.log('\n客户端 bundle 自检：' + pass + ' 通过 / ' + fail + ' 失败' + (skip ? (' / ' + skip + ' SKIP') : '')
+  + (fail === 0 ? '  ✅' : '  ❌') + '   （lib/client.js）');
+process.exit(fail === 0 ? 0 : 1);

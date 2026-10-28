@@ -4,7 +4,7 @@
  *
  * 干什么：把本包的 lib/index.js 挂到一个假 cordis ctx 上，用**指定版本**的
  *         @deepseek-ai/dsh-tools 走一遍 defineTool（参数/输出 schema 规范化 + 校验），
- *         断言 15 个工具全部注册、0 报错、15 个静态 timeoutMs 都在，
+ *         断言 15 个工具全部注册、0 报错、15 个静态 timeoutMs 都在、15 个工具卡片 presenter 都还在，
  *         并把每个工具投影后的参数 JSON Schema 写成基线 JSON（可 diff）。
  *
  * 为什么需要：工具是用 defineTool 声明的，而 defineTool 来自宿主的 @deepseek-ai/dsh-tools。
@@ -31,6 +31,7 @@ const arg = (name, dflt) => {
   const i = argv.indexOf(name)
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt
 }
+// v2.3 删了 blender_rt_pick：16 → 15
 const EXPECTED_TOOLS = 15
 const EXPECTED_TIMEOUTS = 15
 const HOST_CANDIDATES = [
@@ -90,6 +91,12 @@ if (toolsDir) {
 // 只拷 index.mjs 会让 staging 树缺 runtime/，载入即 ERR_MODULE_NOT_FOUND —— 探针必须按包根布局铺开。
 const pluginRoot = resolve(dirname(pluginLib), '..')
 cpSync(pluginLib, join(root, 'plugin', 'index.mjs'))
+// lib/index.js 可能还有同目录的运行时兄弟模块（v2.2 起 `./tui-panel.js`）。
+// 只拷 index 会让 staging 缺文件、在 import 期就 ERR_MODULE_NOT_FOUND。
+for (const name of readdirSync(dirname(pluginLib))) {
+  if (!name.endsWith('.js') || name === 'index.js') continue
+  cpSync(join(dirname(pluginLib), name), join(root, 'plugin', name))
+}
 cpSync(join(pluginRoot, 'runtime'), join(root, 'runtime'), { recursive: true })
 if (existsSync(join(pluginRoot, 'dsh-blender.config.json'))) {
   cpSync(join(pluginRoot, 'dsh-blender.config.json'), join(root, 'dsh-blender.config.json'))
@@ -119,6 +126,8 @@ const summary = regs.map((t) => ({
   hasRender: typeof (t.output && t.output.render) === 'function',
   hasExecute: typeof t.execute === 'function',
   timeoutMs: t.timeoutMs === undefined ? null : t.timeoutMs,
+  hasPresentCall: typeof t.presentCall === 'function',
+  hasPresentResult: typeof t.presentResult === 'function',
 }))
 console.log(JSON.stringify({ dshToolsVersion: ver, count: regs.length, errors, summary }))
 process.exit(0)
@@ -138,11 +147,15 @@ const jsonOut = arg('--json', '')
 if (jsonOut) writeFileSync(resolve(jsonOut), JSON.stringify(parsed, null, 1) + '\n')
 
 const withTimeout = parsed.summary.filter((t) => typeof t.timeoutMs === 'number')
+// v2.6.1：工具卡片 presenter 要经得起宿主的 defineTool（它不认的字段会被丢掉）
+const withCards = parsed.summary.filter((t) => t.hasPresentCall && t.hasPresentResult)
 const ok = parsed.count === EXPECTED_TOOLS && parsed.errors.length === 0 && withTimeout.length === EXPECTED_TIMEOUTS
+  && withCards.length === EXPECTED_TOOLS
 console.log('dsh-tools 版本 : ' + parsed.dshToolsVersion)
 console.log('注册工具数     : ' + parsed.count + '（期望 ' + EXPECTED_TOOLS + '）')
 console.log('声明 timeoutMs : ' + withTimeout.length + '（期望 ' + EXPECTED_TIMEOUTS + '）'
   + (withTimeout.length ? ' · ' + withTimeout.map((t) => t.name.replace('blender_', '') + '=' + t.timeoutMs).join(' ') : ''))
+console.log('工具卡片       : ' + withCards.length + '（期望 ' + EXPECTED_TOOLS + '；presentCall + presentResult）')
 console.log('注册期错误     : ' + (parsed.errors.length ? JSON.stringify(parsed.errors) : '无'))
 console.log('版本前缀       : ' + (parsed.summary[0] ? parsed.summary[0].descriptionPrefix : '(无工具)'))
 console.log(jsonOut ? '基线已写入     : ' + jsonOut : '')

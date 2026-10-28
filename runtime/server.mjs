@@ -9,25 +9,15 @@
  *   POST /cmd            body: {"name":"命令名","params":{...}} → 直连透传任意 addon 命令
  *   POST /loop           body: {"op":"start|status|stop|bench","spec":{...}} → Blender 侧内环（runner.py）
  *   POST /view           body: {from, look_at, lens, ortho, ...} → 自定义视角出图（view.py，不动场景）
- *   ── 宿主集成（用户侧能力，契约 docs/宿主集成-接口契约.md §1；不进 /plan 的 op 目录）──
- *   GET  /host/view/latest   最近一次视口捕获的**状态**（只读 store，不碰 Blender）
- *   GET  /host/view.png      该帧 PNG（?seq=；陈旧 seq → 409 stale_seq）
- *   POST /host/view/capture  抓当前 GUI 视口一帧（唯一会驱动 Blender 取帧的 /host 路由；只读）
- *   POST /host/view/pick     点击反投影 → 对象（先校验 file/scene 错配 → *_mismatch）
- *   GET  /host/scene-items   `@` 提及数据源（objects/materials/collections）
- *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 HTTP loopback 或精确 dsh-app://app 回显）
- *   ── v1.2（契约 §7.1/§7.2）──
- *   GET  /host/ready         就绪门控（**零 I/O、零 bpy 往返**，面板每 2 s 轮询）
- *   POST /host/pick/request  发起点选请求（模型侧；全局至多一个 pending）
- *   GET  /host/pick/request  面板取当前 pending（过期先判过期）
- *   POST /host/pick/answer   应答（复用 §1.5 的 pick 逻辑；错配不结束请求）
- *   POST /host/pick/cancel   取消（幂等）
- *   GET  /host/pick/result   结果轮询（`expired` 惰性判定）
- *   ── v2.1（契约 v2.1 增补 §8.2/§8.3）──
- *   POST /host/pick/remove   多选：从累积里移除一件（保持 pending）
+ *   ── 宿主集成（用户侧能力；不进 /plan 的 op 目录）──
+ *   GET  /host/scene-items   `@` 提及数据源（objects / materials / collections）
  *   GET  /host/jobs          headless 作业列表（**只读台账，零 Blender 往返**）
  *   GET  /host/jobs/log      某作业的 stdout/stderr 尾部（**只读**）
- *   （多选语义：`request{multi:true}` → `answer` 命中累积、仍 pending；`answer{done:true}` 收单）
+ *   ── v2.3（契约 v2.3 增补 §S1–§S3：Blender 原生选中 → DSH）──
+ *   POST /host/selection         addon 推当前选中（N 面板「发送选中到 DSH」）
+ *   GET  /host/selection/latest  客户端轮询未消费的选中（**零 Blender 往返**）
+ *   POST /host/selection/consume 标记已插入草稿（seq）
+ *   （所有 /host/* 带 CORS 头；Access-Control-Allow-Origin 只对 HTTP loopback 或精确 dsh-app://app 回显）
  *   POST /headless       body: {script, file, outdir, args, timeoutMs} → 无头 Blender 独立进程跑脚本
  *   GET  /who            JSON：租约持有者 + 通道指标（多会话共存时先看它）
  *   POST /lease          body: {holder, ttlMs, force?, renewOnly?} → 拿写权限租约
@@ -44,10 +34,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createEngine, engineProvenance, PLAN_READ_ONLY_OPS } from './engine.mjs';
 import { CFG, describeConfig } from './config.mjs';
-// S12（宿主集成）：视口状态存储（面板轮询只读它，绝不因此碰 Blender）
-import { viewStore, clampItemsLimit, clampUnit } from './viewstore.mjs';
-// S13（宿主集成 v1.2 · §7.2）：点选请求状态机（全局至多一个 pending）
-import { pickRequestStore } from './pickrequest.mjs';
+// v2.3（Blender 原生选中 → DSH）：addon 推来的选中事件（纯内存；轮询方零 Blender 往返）
+import { createSelectionStore } from './selectionstore.mjs';
 
 const argv = process.argv.slice(2);
 const portArg = argv.indexOf('--port');
@@ -55,7 +43,9 @@ const PORT = Number(portArg >= 0 ? argv[portArg + 1] : (process.env.VIEWPORT_POR
 const HOST = '127.0.0.1';
 
 const engine = createEngine();
-const stats = { frames: 0, acts: 0, cmds: 0, loops: 0, views: 0, headless: 0, plan: 0, worker: 0, txn: 0, preset: 0, job: 0, lastPlanMs: null, lastViewMs: null, lastHeadlessMs: null, lastFrameMs: null, lastActMs: null, lastError: null, startedAt: Date.now() };
+// v2.3：Blender 原生选中事件（N 面板「发送选中到 DSH」→ 这里 → 客户端插入草稿）
+const selectionStore = createSelectionStore();
+const stats = { frames: 0, acts: 0, cmds: 0, loops: 0, views: 0, headless: 0, plan: 0, worker: 0, txn: 0, preset: 0, job: 0, selections: 0, lastSelectionMs: null, lastPlanMs: null, lastViewMs: null, lastHeadlessMs: null, lastFrameMs: null, lastActMs: null, lastError: null, startedAt: Date.now() };
 
 /**
  * v0.9.4（P2-1）：各路由最近 20 次耗时的 p50/p95 —— **只观测，不自动重启**。
@@ -89,13 +79,39 @@ function rttView() {
  * 语义：不持有租约时不拦（单机单 agent 完全无感）；一旦有人显式拿到租约，别人的写操作会被 409 挡住。
  * 过期即自动失效（TTL，默认 10 min，每次写操作自动续期）。
  */
-const LEASE = { holder: null, token: null, acquiredAt: null, expiresAt: null, ttlMs: CFG.leaseTtlMs, renewals: 0 };
+const LEASE = { holder: null, token: null, acquiredAt: null, expiresAt: null, ttlMs: CFG.leaseTtlMs, renewals: 0,
+               // v2.6（本轮反馈 #7）：写作用域的**第二维** —— 不只有"谁在写"，还有"写到哪"。
+               scope: null };
 /**
  * v0.9.4：租约持有者**是否还活着**（实测踩到：DSH 会话崩了/被关掉之后，它的租约在内存里
  * 继续生效到 TTL（默认 1 h），把别的会话的写通道整段挡死 —— 而那个会话早就不存在了）。
  * holder 约定是 `plugin-pid-<pid>`（插件前端 HOLDER，见 src/index.ts），后端与它同机 → 能直接探活。
  * 返回 true/false；**查不出来返回 null**（按"活着"处理，绝不误抢别人的租约）。
  */
+/**
+ * v2.6（本轮反馈 #7）：把写作用域声明规范化成 [{kind:'collection'|'prefix', value}]。
+ *
+ * 现场：子代理只有单一集合的写权限，于是灯（LGT-*）被迫塞进资产集合，装配时再逐个人工搬 ——
+ * 「写作用域」只按集合一刀切，和「对象名前缀」这个真正的归属信号脱节。
+ * 这里允许两种维度同时声明：
+ *   collection:COL_Lights   或裸 COL_Lights        → 集合维度
+ *   prefix:LGT-             或裸 LGT-* / LGT-      → 对象名前缀维度
+ * 语义是**声明式**（advisory）：不拦写入，但会出现在 /who、/lease 与 409 回执里，
+ * 让"谁该写哪"在协议层可见；强制归属由装配层的 K.route_collections() 一次归位。
+ */
+function normalizeScope(scope) {
+  const raw = Array.isArray(scope) ? scope : String(scope == null ? '' : scope).split(',');
+  const out = [];
+  for (const item of raw) {
+    const s0 = String(item || '').trim();
+    if (!s0) continue;
+    if (/^collection:/i.test(s0)) { out.push({ kind: 'collection', value: s0.slice(11).trim() }); continue; }
+    if (/^prefix:/i.test(s0)) { out.push({ kind: 'prefix', value: s0.slice(7).trim() }); continue; }
+    if (s0.endsWith('*') || s0.includes('-')) { out.push({ kind: 'prefix', value: s0.replace(/\*$/, '') }); continue; }
+    out.push({ kind: 'collection', value: s0 });
+  }
+  return out.length ? out : null;
+}
 function holderAlive(holder) {
   const m = /^plugin-pid-(\d+)$/.exec(String(holder || ''));
   if (!m) return null;
@@ -115,6 +131,7 @@ function leaseView() {
     since: LEASE.acquiredAt,
     renewals: LEASE.renewals,
     holderAlive: active ? holderAlive(LEASE.holder) : null,   // null = 无法判断 / 非本机约定命名
+    scope: active ? LEASE.scope : null,                       // v2.6：写作用域（collection / prefix 两维）
     staleReclaimed: stats.staleLeasesReclaimed || 0,
   };
 }
@@ -128,7 +145,7 @@ function releaseStaleLease(why) {
   stats.lastLeaseNote = '已回收死会话的写租约（holder=' + dead + '，' + String(why || '') + '）';
   return dead;
 }
-function leaseAcquire(holder, ttlMs, force) {
+function leaseAcquire(holder, ttlMs, force, scope) {
   const now = Date.now();
   const h = String(holder || 'anonymous');
   const v = leaseView();
@@ -144,12 +161,13 @@ function leaseAcquire(holder, ttlMs, force) {
   }
   LEASE.holder = h;
   if (ttlMs) LEASE.ttlMs = Math.max(5000, Math.min(86400000, Number(ttlMs) || LEASE.ttlMs));
+  if (scope !== undefined) LEASE.scope = normalizeScope(scope);   // v2.6：声明式写作用域（省略则保留）
   LEASE.expiresAt = now + LEASE.ttlMs;
   return { granted: true, lease: leaseView() };
 }
 /** 只读 op：即便别人持有租约也放行（否则连"看看现状"都会被挡） */
 const READ_ONLY_OPS = { '/perf': ['status', 'help'], '/loop': ['status', 'board', 'help'], '/opt': ['opt_analyze', 'analyze', 'help'],
-  '/plan': PLAN_READ_ONLY_OPS,'/worker': ['status', 'list'],
+  '/plan': PLAN_READ_ONLY_OPS,'/worker': ['status', 'list', 'see', 'ping'],
   '/txn': ['list', 'marks', 'help', 'edit_status'],
   '/preset': ['list', 'get', 'help'],
   // v0.9.3（D6）：wait 只是"阻塞读"，kill 只作用于作业自己的子进程（不碰 live 场景）——
@@ -168,7 +186,7 @@ function leaseGate(payload) {
   const reclaimed = releaseStaleLease('写请求到达时按 plugin-pid-<pid> 探活发现进程不存在');
   const v = leaseView();
   if (v.active && v.holder !== h && !force) {
-    return { ok: false, error: 'leased', holder: v.holder, expiresInMs: v.expiresInMs, holderAlive: v.holderAlive,
+    return { ok: false, error: 'leased', holder: v.holder, expiresInMs: v.expiresInMs, holderAlive: v.holderAlive, holderScope: v.scope || null,
       hint: '另一个会话正在驱动这个 Blender。要么等它（剩余 ' + Math.round(v.expiresInMs / 1000) + 's），要么 body 加 force:true 抢占，或 blender_viewport op=lease force=true' };
   }
   // 放行时顺手续期：holder 匹配或无人持有时自动接管
@@ -215,7 +233,7 @@ function readBody(req, limit = 1 << 22) {
   });
 }
 
-// ── 宿主集成（/host/*，契约 docs/宿主集成-接口契约.md §1）────────────────────────
+// ── 宿主集成（/host/*，契约 docs/宿主集成-接口契约-v2.3增补.md §S1–§S3）────────────
 // 这是**用户侧**能力（人点视口 → 进自己的消息），不是模型工具：不进 /plan 的 op 目录、
 // 不加模型工具（capability.lock 的 family/op/工具名一动不动）。三条纪律：
 //   ① 所有 /host/* 响应（含错误）都带 CORS 头，但 `Access-Control-Allow-Origin`
@@ -243,47 +261,48 @@ function hostJson(res, code, obj, origin) {
                                     hostCorsHeaders(origin)));
   res.end(JSON.stringify(obj));
 }
-function hostPng(res, buf, origin) {
-  res.writeHead(200, Object.assign({ 'content-type': 'image/png', 'cache-control': 'no-store' },
-                                   hostCorsHeaders(origin)));
-  res.end(buf);
-}
 function hostErrText(e) { return String((e && e.message) || e); }
+/** `@` 提及的 limit：夹到 [1,1000]，默认 200（旧 viewstore 口径，路由还在用）。 */
+function clampItemsLimit(v, dflt = 200) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(1, Math.min(1000, Math.round(n)));
+}
 function hostNormEmpty(v) { return (v === '' || v == null) ? null : v; }
 
 /**
- * §1.5 的点击反投影**唯一实现**（v1.2 抽出）。
- *
- * 为什么必须抽出来：契约 §7.2 要求 `POST /host/pick/answer` 用"与 §1.5 **完全相同**的 pick 逻辑
- * （含 file/scene 错配拒绝）"。两份拷贝迟早会漂移 —— 尤其"错配绝不降级投到当前场景"这条纪律。
- * 返回 `{status, body}`，由调用方决定 HTTP 语义（§1.5 直接回，§7.2 再叠加请求状态机）。
+ * v2.6.1：`GET /host/state` 的响应体（纯内存，零 Blender 往返；任何一块取不到都给保守默认值，不抛）。
+ * 「AI 已暂停」只能在 addon 拒掉一条命令之后才知道（后端不为它轮询 Blender），成功一次就清空。
  */
-async function hostPickCore(payload) {
-  const p = payload || {};
-  const v = viewStore.viewFor(p.seq);
-  if (!v) return { status: 200, body: { ok: false, error: 'unknown_seq' } };
-  let out;
+function hostStateView() {
+  const now = Date.now();
+  const age = (t) => (t ? now - t : null);
+  let m = {};
+  try { m = engine.metrics() || {}; } catch (e) { m = {}; }
+  let render = { busy: false, ageMs: null, scene: null };
   try {
-    out = await engine.hostPick({
-      x: clampUnit(p.x, 0.5), y: clampUnit(p.y, 0.5),
-      width: v.width, height: v.height,
-      view_matrix: v.view_matrix, window_matrix: v.window_matrix,
-      file: v.file, scene: v.scene,
-    });
-  } catch (e) {                                   // Blender 不可达 / 通道失败 → 502
-    return { status: 502, body: { ok: false, error: hostErrText(e) } };
-  }
-  if (!out || out.ok === false) {
-    const err = String((out && out.error) || 'pick_failed');
-    if (err === 'file_mismatch' || err === 'scene_mismatch') {
-      // 契约 §1.5：错配是**正常回执**（HTTP 200），但绝不降级为"投到当前场景"
-      return { status: 200, body: { ok: false, error: err,
-                                    expected: hostNormEmpty(out.expected), current: hostNormEmpty(out.current) } };
-    }
-    if (err === 'unknown_seq') return { status: 200, body: { ok: false, error: 'unknown_seq' } };
-    return { status: 502, body: { ok: false, error: err } };
-  }
-  return { status: 200, body: { ok: true, object: (out.object === undefined ? null : out.object) } };
+    const g = engine.renderFlag();
+    if (g && g.present) render = { busy: !g.stale, ageMs: g.ageMs, scene: (g.info && g.info.scene) || null };
+  } catch (e) { /* 读不到标记 = 不在渲染 */ }
+  let running = 0;
+  try { running = (engine.job.list() || []).filter((j) => j && j.status === 'running').length; } catch (e) { running = 0; }
+  return {
+    ok: true,
+    channel: {
+      lastOkAgeMs: age(m.lastOkAt),
+      lastCmd: m.lastCmd || null,
+      lastCmdAgeMs: age(m.lastCmdAt),
+      inflight: Number(m.inflight) || 0,
+      lastError: m.lastError ? String(m.lastError).slice(0, 200) : null,
+      lastErrorAgeMs: age(m.lastErrorAt),
+      diagnosis: (m.lastDiagnosis && m.lastDiagnosis.kind) ? String(m.lastDiagnosis.kind) : null,
+      aiPaused: !!m.aiPausedAt,
+    },
+    lease: leaseView(),
+    render: render,
+    jobs: { running: running },
+    backend: { pid: process.pid, uptimeMs: now - stats.startedAt },
+  };
 }
 
 async function handleHost(req, res, url, p) {
@@ -293,53 +312,6 @@ async function handleHost(req, res, url, p) {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, hostCorsHeaders(origin));
     res.end();
-    return;
-  }
-
-  // §1.2 状态（**只读 store，绝不碰 Blender**）
-  // `since` 按契约可省（默认 0）；这里**非阻塞**接受它（返回当前状态）—— 契约没有定义阻塞语义，
-  // 客户端照 §2.3 每 1500 ms（stale 时 600 ms）轮询即可，长轮询留给以后有明确需求时再加。
-  if (req.method === 'GET' && p === '/host/view/latest') {
-    hostJson(res, 200, viewStore.latest(), origin);
-    return;
-  }
-
-  // §1.3 取图（同样只读 store）
-  if (req.method === 'GET' && p === '/host/view.png') {
-    const r = viewStore.pngFor(url.searchParams.get('seq'));
-    if (r.status !== 200) { hostJson(res, r.status, r.body, origin); return; }
-    hostPng(res, r.png, origin);
-    return;
-  }
-
-  // §1.4 捕获：/host/* 里**唯一**驱动 Blender 取帧的一条（离屏只读；不碰租约）
-  if (req.method === 'POST' && p === '/host/view/capture') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const t0 = Date.now();
-    const out = await viewStore.captureThrough(engine, { maxSize: payload.max_size, auto: !!payload.auto });
-    if (!out.ok) {
-      stats.hostCaptureFails = (stats.hostCaptureFails || 0) + 1;
-      stats.lastError = out.error;
-      hostJson(res, 502, { ok: false, error: out.error }, origin);
-      return;
-    }
-    stats.hostCaptures = (stats.hostCaptures || 0) + 1;
-    stats.lastHostCaptureMs = Date.now() - t0;
-    hostJson(res, 200, viewStore.latest(), origin);
-    return;
-  }
-
-  // §1.5 点击反投影
-  if (req.method === 'POST' && p === '/host/view/pick') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const r = await hostPickCore(payload);
-    if (r.status === 200 && r.body.ok) stats.hostPicks = (stats.hostPicks || 0) + 1;
-    else if (!r.body.ok) stats.lastError = String(r.body.error || '');
-    hostJson(res, r.status, r.body, origin);
     return;
   }
 
@@ -356,99 +328,6 @@ async function handleHost(req, res, url, p) {
     }
     hostJson(res, 200, { ok: true, objects: out.objects || [], materials: out.materials || [],
                          collections: out.collections || [] }, origin);
-    return;
-  }
-
-  // ── v1.2（契约 §7.1 / §7.2）──────────────────────────────────────────────
-
-  // §7.1 就绪端点：面板每 2 s 轮询它做门控 ⇒ **必须便宜**。
-  // 全同步、零 I/O、零 Blender 往返（engine.hostReady 只读常驻 socket 的存活态与握手缓存）。
-  if (req.method === 'GET' && p === '/host/ready') {
-    hostJson(res, 200, engine.hostReady(), origin);
-    return;
-  }
-
-  // §7.2 发起点选请求（模型侧用）
-  if (req.method === 'POST' && p === '/host/pick/request') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const reqObj = pickRequestStore.create({ prompt: payload.prompt, timeout_s: payload.timeout_s, multi: payload.multi === true });
-    stats.pickRequests = (stats.pickRequests || 0) + 1;
-    hostJson(res, 200, { ok: true, request: reqObj }, origin);
-    return;
-  }
-
-  // §7.2 面板取当前 pending（过期则先判过期再回 null）
-  if (req.method === 'GET' && p === '/host/pick/request') {
-    hostJson(res, 200, { ok: true, request: pickRequestStore.current() }, origin);
-    return;
-  }
-
-  // §7.2 应答：**复用与 §1.5 完全相同的 pick 逻辑**（同一个 hostPickCore）
-  if (req.method === 'POST' && p === '/host/pick/answer') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const requestId = payload.requestId;
-    const pre = pickRequestStore.stateOf(requestId);
-    if (!pre.known || pre.state !== 'pending') {
-      // requestId 不存在/已结束：不动任何状态，回"当前态或 unknown"
-      hostJson(res, 200, { ok: false, state: pre.state, error: 'no_such_request' }, origin);
-      return;
-    }
-    // §8.2 多选：显式收单（`done:true`）是**唯一**能结束多选请求的路径（不做反投影）
-    if (payload.done === true) {
-      hostJson(res, 200, pickRequestStore.answer(requestId, null, { done: true }), origin);
-      return;
-    }
-    const r = await hostPickCore(payload);
-    if (r.status === 200 && r.body.ok) {
-      // 单选：命中**或点空处**（object:null）→ answered（空处 = "用户明确表示没有"）
-      // 多选：命中 → 累积、**仍 pending**；落空 → ok:false + error:"empty"，**不结束**
-      const a = pickRequestStore.answer(requestId, r.body.object);
-      if (!a.ok) {
-        hostJson(res, 200, { ok: false, state: a.state, error: a.error, objects: a.objects || [] }, origin);
-        return;
-      }
-      stats.hostPicks = (stats.hostPicks || 0) + 1;
-      hostJson(res, 200, a, origin);     // 单选 = {ok,state:'answered',object}；多选 = {ok,state:'pending',added,objects}
-      return;
-    }
-    // 失败（错配 / 未知 seq / 通道挂了）→ **请求不结束**，让用户刷新后重试。
-    // ⚠ pick 期间请求可能已被取消/被新请求取代/过期 ⇒ 回**实际态**，绝不硬写 pending。
-    const now = pickRequestStore.stateOf(requestId);
-    const body = { ok: false, state: now.state, error: String(r.body.error || 'pick_failed') };
-    if (r.body.expected !== undefined) body.expected = r.body.expected;
-    if (r.body.current !== undefined) body.current = r.body.current;
-    if (!r.body.ok && r.status === 200) stats.lastError = String(r.body.error || '');
-    hostJson(res, r.status === 200 ? 200 : r.status, body, origin);
-    return;
-  }
-
-  // §7.2 取消（幂等：已结束也回 200 + 实际态）
-  if (req.method === 'POST' && p === '/host/pick/cancel') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const c = pickRequestStore.cancel(payload.requestId, payload.reason);
-    hostJson(res, 200, c, origin);
-    return;
-  }
-
-  // §7.2 结果轮询（模型工具用；`expired` 惰性判定）
-  if (req.method === 'GET' && p === '/host/pick/result') {
-    hostJson(res, 200, pickRequestStore.result(url.searchParams.get('requestId')), origin);
-    return;
-  }
-
-  // §8.2 多选：从累积里移除一件（按对象名），**保持 pending**
-  if (req.method === 'POST' && p === '/host/pick/remove') {
-    const raw = await readBody(req);
-    let payload = {};
-    try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
-    const rm = pickRequestStore.remove(payload.requestId, payload.name);
-    hostJson(res, rm.ok ? 200 : 200, rm, origin);
     return;
   }
 
@@ -479,6 +358,44 @@ async function handleHost(req, res, url, p) {
                          stdout: (snap.stdoutTail === undefined ? null : snap.stdoutTail),
                          stderr: (snap.stderrTail === undefined ? null : snap.stderrTail),
                          job: trimJob(snap) }, origin);
+    return;
+  }
+
+  // v2.6.1（dsh-TUI 页脚状态字段，契约 v2.3 增补 §S6）：通道 / 租约 / 渲染 / 作业 / AI 暂停一次给全。
+  // **零 Blender 往返**：只读内存里的 engine.metrics()、租约表、render_guard 标记文件与作业台账。
+  if (req.method === 'GET' && p === '/host/state') {
+    hostJson(res, 200, hostStateView(), origin);
+    return;
+  }
+
+  // ── v2.3（Blender 原生选中 → DSH，契约 v2.3 增补 §S1–§S3）──────────────
+  // addon 的 N 面板「发送选中到 DSH」直接 POST 到这里；客户端半边轮询 latest 并插入草稿。
+  // 三条都**零 Blender 往返**：addon 主动推，轮询方只读内存。
+  if (req.method === 'POST' && p === '/host/selection') {
+    const raw = await readBody(req);
+    let payload = null;
+    try { payload = JSON.parse(raw); } catch (e) { payload = null; }
+    const t0 = Date.now();
+    const stored = selectionStore.put(payload);
+    if (!stored.ok) {
+      hostJson(res, 400, { ok: false, error: stored.error || 'invalid_payload' }, origin);
+      return;
+    }
+    stats.selections = (stats.selections || 0) + 1;
+    stats.lastSelectionMs = Date.now() - t0;
+    hostJson(res, 200, stored, origin);
+    return;
+  }
+  if (req.method === 'GET' && p === '/host/selection/latest') {
+    hostJson(res, 200, selectionStore.snapshot(), origin);
+    return;
+  }
+  if (req.method === 'POST' && p === '/host/selection/consume') {
+    const raw = await readBody(req);
+    let payload = null;
+    try { payload = JSON.parse(raw); } catch (e) { payload = null; }
+    const consumed = selectionStore.consume(payload && payload.seq, payload || {});
+    hostJson(res, consumed.ok ? 200 : 400, consumed, origin);
     return;
   }
 
@@ -712,16 +629,17 @@ const server = http.createServer(async (req, res) => {
         // 心跳：只有本来就持有租约时才续期 —— 不在空闲时抢占，避免多会话互相锁死
         const v = leaseView();
         if (v.active && v.holder === holder) {
-          const rr = leaseAcquire(holder, payload.ttlMs, false);
+          const rr = leaseAcquire(holder, payload.ttlMs, false, payload.scope);
           json(res, 200, { ok: true, lease: rr.lease, renewed: true });
         } else {
           json(res, 200, { ok: true, lease: v, renewed: false });
         }
         return;
       }
-      const r = leaseAcquire(holder, payload.ttlMs, !!payload.force);
+      const r = leaseAcquire(holder, payload.ttlMs, !!payload.force, payload.scope);
       if (r.denied) {
-        json(res, 409, { ok: false, error: 'leased', holder: r.holder, expiresInMs: r.expiresInMs,
+        const otherScope = leaseView().scope || null;
+        json(res, 409, { ok: false, error: 'leased', holder: r.holder, expiresInMs: r.expiresInMs, holderScope: otherScope,
           hint: '另一个会话持有写权限租约；force:true 可抢占，或等 ' + Math.round(r.expiresInMs / 1000) + 's 后重试' });
         return;
       }
@@ -788,10 +706,6 @@ const server = http.createServer(async (req, res) => {
           return { ok: false, ms: Date.now() - t0, error: stats.lastError, hint: (e && e.hint) || null, code: (e && e.code) || null };
         }
       });
-      // 契约 §3：/headless 计入"会改场景"（保守口径 —— 它跑的是独立 blender -b 进程，
-      // 严格说没动**当前**这个场景；但上游把无头执行也算进 SCENE_CHANGING_COMMANDS，
-      // 这里照契约执行：宁可让面板多刷一次，也不让用户对着过期画面点选）。
-      viewStore.noteSceneChange();
       return;
     }
     if (req.method === 'POST' && p === '/plan') {
@@ -821,7 +735,9 @@ const server = http.createServer(async (req, res) => {
       let payload = {};
       try { payload = JSON.parse(raw); } catch (e) { payload = {}; }
       const op = String(payload.op || 'status');
-      const gate = isReadOnly('/worker', op) ? null : leaseGate(payload);
+      // P0：worker 是**独立无头进程**，不碰 live GUI 场景 ⇒ 显式 isolated:true 时不占全局写租约，
+      // 否则多会话并行建模会互相 409（C 组调研的 P0 阻塞项）。同一 worker 仍由自身串行。
+      const gate = (payload.isolated || isReadOnly('/worker', op)) ? null : leaseGate(payload);
       if (gate) { json(res, 409, gate); return; }
       stats.worker = (stats.worker || 0) + 1;
       await streamJson(res, async () => {
@@ -837,6 +753,16 @@ const server = http.createServer(async (req, res) => {
             // v0.8.4：错误/回溯提到信封层，避免客户端只看到 unknown
             return { ok: !!r.ok, op: op, result: r, error: (r && r.error) ? String(r.error) : null,
                      traceback: (r && r.traceback) ? String(r.traceback) : null };
+          }
+          if (op === 'see') {
+            // P0 无头 see：临时相机 + Workbench 离屏；返回 png_b64 + coverage + ms
+            return { ok: true, op: op, result: await engine.worker.see(payload.spec || payload.see || {}, payload && payload.name) };
+          }
+          if (op === 'watch') {
+            return { ok: true, op: op, result: await engine.worker.watch(payload.spec || payload.watch || {}, payload && payload.name) };
+          }
+          if (op === 'reset') {
+            return { ok: true, op: op, result: await engine.worker.reset(payload && payload.name) };
           }
           return { ok: true, op: 'status', result: await engine.worker.status(payload && payload.name) };
         } catch (e) {
@@ -990,7 +916,7 @@ try {
   console.error('[blender-rt] 启动时未连上 addon（Blender 未运行或 addon 未监听 9876）：' + String((e && e.message) || e));
 }
 
-const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /who /frame.png /act /view /headless /plan /worker /txn /preset /lease /job /host/ready /host/view/latest /host/view.png /host/view/capture /host/view/pick /host/scene-items /host/pick/request /host/pick/answer /host/pick/cancel /host/pick/result /host/pick/remove /host/jobs /host/jobs/log)');
+const onListening = () => console.log('[blender-rt] http://' + HOST + ':' + String(PORT) + '/  (routes: /health /status /doctor /launch /who /lease /release /frame /frame.png /act /commands /cmd /loop /perf /opt /view /headless /plan /worker /txn /preset /job /host/scene-items /host/jobs /host/jobs/log /host/state /host/selection /host/selection/latest /host/selection/consume)');
 let reclaimTries = 0;   // 夺端口最多 2 次，防止两个实例互踢成死循环
 
 // S9：端口被占（EADDRINUSE）时给可执行结论 —— 现场遇到过"僵死后端占着 9877、WSL 里看不到 PID"。

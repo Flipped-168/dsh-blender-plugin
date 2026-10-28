@@ -47,10 +47,19 @@ def _kernel():
 
 
 def _tris(me):
-    n = 0
+    # v2.6.1（性能实测，太空电梯 137k 面）：逐面 len(p.vertices) 走 RNA 要 54–59 ms；
+    # 先把 loop_total 批量读进 list 再求和只要 14–15 ms（约 3.8×）。小网格保留原路径，避免固定开销。
+    n = len(me.polygons)
+    if n == 0:
+        return 0
+    if n >= 256:
+        buf = [0] * n
+        me.polygons.foreach_get("loop_total", buf)
+        return sum(max(0, x - 2) for x in buf)
+    total = 0
     for p in me.polygons:
-        n += max(0, len(p.vertices) - 2)
-    return n
+        total += max(0, len(p.vertices) - 2)
+    return total
 
 
 def _bounds(objs):
@@ -287,10 +296,20 @@ def _shell_normals(bm):
             else:
                 shells[i]['relation'] = shells[j]['relation'] = 'overlap-unconfirmed'
                 ambiguous.update((i, j))
-    for i in ambiguous:
+    # v2.6（本轮反馈 #5）：多壳但**各壳朝向可确证**时不再一律降级。
+    # 判据：这个壳自己闭合 + 绕向一致 + |体积|>eps，且（体积>0 或已确证嵌套）⇒ 朝向是确定的；
+    # 此时 AABB 互相相交（碎块簇 / 火球鳞瓣 / 布景道具这类合法多壳件）不构成「判不出来」。
+    def _self_confirmed(s):
+        if not s['closed'] or not s['winding_consistent'] or abs(s['signed_volume']) <= s['eps']:
+            return False
+        if s['signed_volume'] > 0:
+            return True
+        return bool(s['nested'])          # 反向壳只有确证嵌套（合法空腔）才算可确证
+    ambiguous_unresolved = [i for i in ambiguous if not _self_confirmed(shells[i])]
+    for i in ambiguous_unresolved:
         shells[i]['state'] = 'unknown'
     fails = [i for i, s in enumerate(shells)
-             if i not in ambiguous and not s['nested'] and s['closed'] and s['winding_consistent']
+             if i not in ambiguous_unresolved and not s['nested'] and s['closed'] and s['winding_consistent']
              and s['signed_volume'] < -s['eps']]
     if fails:
         for i in fails:
@@ -301,9 +320,9 @@ def _shell_normals(bm):
                                        % ", ".join("shell#%d(vol=%.6g, faces=%d)"
                                                    % (i, shells[i]['signed_volume'], shells[i]['faces'])
                                                    for i in worst))
-    if ambiguous:
-        return None, 'unknown', shells, ("%d 组壳的 AABB 相交但无法确证嵌套/空腔（互穿、部分重叠或重合副本）"
-                                         "—— 朝向语义 unresolved，不给通过结论" % len(ambiguous))
+    if ambiguous_unresolved:
+        return None, 'unknown', shells, ("%d 个壳 AABB 相交且自身朝向判不出来（未闭合/绕向不一致/零体积/未确证嵌套）"
+                                         "—— 朝向语义 unresolved，不给通过结论" % len(ambiguous_unresolved))
     # 没有确定的反向壳、也没有歧义：只剩"闭合性/绕向/零体积"判不出来的壳
     unknown = [i for i, s in enumerate(shells)
                if not s['closed'] or not s['winding_consistent'] or abs(s['signed_volume']) <= s['eps']]
@@ -315,6 +334,12 @@ def _shell_normals(bm):
     for s in shells:
         # 嵌套壳（合法空腔 / 壳内独立件）不是缺陷：标注 'nested'，不参与 fail
         s['state'] = 'nested' if s['nested'] else 'pass'
+    # v2.6（本轮反馈 #5）：第五态 —— 多壳但**每个壳的朝向都可确证**。
+    # 旧版把「多壳 + AABB 相交」一律判 unknown ⇒ 碎块簇 / 火球鳞瓣 / 布景资产永远 degraded，
+    # 三个子代理的交付回执里都写着「state=degraded 仅因 normals_unknown」—— 门的信号被噪声吃掉。
+    if len(shells) > 1:
+        return True, 'pass_multi_shell', shells, ("多壳（%d 个连通壳），每个壳的朝向都可确证；"
+                                                  "多壳本身不是缺陷（合法空腔已标 nested）" % len(shells))
     return True, 'pass', shells, ''
 
 
@@ -360,7 +385,7 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
     parts = []
     total = {"objects": 0, "tris": 0, "boundary_edges": 0, "nonmanifold_edges": 0, "degenerate_faces": 0,
              "loose_verts": 0, "self_intersections": 0, "normals_inverted": 0, "out_of_bounds": 0,
-             "empty_objects": 0, "loose_edges": 0, "normals_unknown": 0, "normals_checked": 0,
+             "empty_objects": 0, "loose_edges": 0, "normals_unknown": 0, "normals_checked": 0, "normals_multi_shell": 0,
              "analysis_incomplete": 0}
     for ob in objs:
         me = ob.data
@@ -405,6 +430,8 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
                 _out, _nstate = None, "n/a"        # 开放网格：整体朝向无意义
                 _nreason = ""
             info["normals_state"] = _nstate
+            # v2.6（本轮反馈 #5）：多壳但各壳朝向可确证 —— 独立第五态，不降级
+            info["multi_shell"] = bool(_nstate == "pass_multi_shell")
             info["normals_outward"] = _out
             info["normals_shell_count"] = len(_shells or [])
             info["normals_reason"] = _nreason or ""
@@ -524,6 +551,8 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
             info["state"] = "degraded"
         else:
             info["state"] = "pass"
+            if info.get("normals_state") == "pass_multi_shell":
+                info["state_detail"] = "pass_multi_shell"   # v2.6：pass 的子态，门照常通过
         # 汇总
         total["objects"] += 1
         total["tris"] += info["tris"]
@@ -534,8 +563,10 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
             total["normals_inverted"] += 1
         if info.get("normals_state") == "unknown":
             total["normals_unknown"] += 1
-        if info.get("normals_state") in ("pass", "fail"):
+        if info.get("normals_state") in ("pass", "pass_multi_shell", "fail"):
             total["normals_checked"] += 1
+        if info.get("normals_state") == "pass_multi_shell":
+            total["normals_multi_shell"] = int(total.get("normals_multi_shell") or 0) + 1
         if info.get("analysis_incomplete"):
             total["analysis_incomplete"] += 1
         if info.get("empty"):
@@ -565,7 +596,7 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
                  "normals_shell_count", "self_intersections", "self_intersections_analyzed",
                  "self_intersections_state", "self_intersections_same_island", "self_intersections_cross_island",
                  "self_intersections_filtered_small_island", "self_intersections_kept", "islands",
-                 "signed_volume", "empty", "out_of_bounds", "state")
+                 "signed_volume", "empty", "out_of_bounds", "state", "multi_shell", "state_detail")
         parts = [{k: v for k, v in p.items() if k in _keep} for p in parts]
     payload = {"ok": True, "clean": bool(not bad and state == "pass"), "state": state, "verdict": state,
                "reason": reason, "count": len(objs), "missing": missing,
@@ -580,6 +611,7 @@ def audit_mesh(objects=None, scope=None, envelope=None, eps_area=1e-9, self_inte
                        "normals_inverted/out_of_bounds/empty 任一非 0 → clean=false 且 state=fail；"
                        "normals_outward 逐**连通壳**判（聚合有符号体积会被大正向壳+小反向壳抵消成正数），"
                        "只对闭合网格有意义（closed=true 时才给），判不出来时给 normals_state=unknown；"
+                       "多壳但各壳朝向可确证时给 normals_state=pass_multi_shell（不算 degraded：碎块簇/布景多壳件是合法的）；"
                        "自交检查被跳过（self_intersect=false）或抛异常 ⇒ state=degraded，clean=false —— 不假通过"}
     if state == "degraded":
         payload["warn"] = "DEGRADED ≠ 通过：" + reason

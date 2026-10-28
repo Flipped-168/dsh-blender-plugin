@@ -1,5 +1,353 @@
 # CHANGELOG — @dsh-external/dsh-blender-plugin
 
+## Unreleased
+
+### 新增
+- **headless：`opts.hardExit`（默认开启）**——无头脚本在 `done` 标记之后显式冲刷 stdout/stderr，
+  随即 `os._exit(0)` 跳过 Blender 自身退出拆解。现场：Blender 5.2.3（Steam）在 .blend 加载材质带
+  Value→Material Output.Thickness 连线时，glTF 导出**成功、产物完整、done 已打出**之后，
+  在退出期命中导出器 AV（0xC0000005），结果被 exitCode≠0 顶成"失败"。
+  依赖正常 teardown 的调用方（`bpy.app.handlers` 落盘、延迟自动保存）传 `hardExit=false` 回旧行为。
+  作业路径与同步路径同一份实现（`runtime/hard_exit.mjs`）；
+  新增 `tests/headless_hard_exit_selftest.mjs`（顺序契约 / 开关语义 / 接线断言，已入 `npm test` 主链，
+  `npm run test:hardexit`）。
+### 修复
+- **headless：`file=` 缺失/空串/参数名误写不再静默成功**（旧症状：`file=""` 或 `blend=<路径>` →
+  `ok=true / exitCode=0 / inputFile=null / 零警告`，脚本拿到出厂空场景）：
+  引擎侧 `file=` 显式校验（空串→`file-empty`、非字符串→`file-type`，直连 `/headless` 的兜底）；
+  工具端（`blender_rt_headless` / `blender_rt_job` op=start|run）拦截参数名误写（`blend=`/`path=` 等六名）
+  与空串——工具端在 body 组装前剥 falsy，引擎守卫对工具路径永不触发，故 ALIAS 拦截必须落在工具端。
+  行为变化提示：`file=false`（布尔）旧行为被静默当「未传」，现按 `file-type` 明确报错——类型纪律收紧，
+  依赖旧语义者请改为省略该参数。
+- **headless：「成功但没开档」不再无声**——回执 `inputFile` 的 null 分支换成 `{given, opened, reason}`
+  语义对象（形态冻结：truthy 的 `fileFingerprint` 返回值一字未动）；未开档时 `warnings` 追加
+  `no_input_file`（含 `.py` 语义切换场景）；台账（headless/job 的 running 与终态）补记
+  `file`/`inputFile`，事后取证可区分「没给档」与「给了没开」。
+- **headless：同毫秒撞名**——无头脚本名（`staging.mjs`，旧 `Date.now().toString(36)` 同毫秒互相覆写）
+  与 stdout/stderr log 名（`engine.mjs`，同毫秒追加写同一文件互脏）都加唯一后缀（脚本名 = 毫秒+进程内
+  序号+随机；log 名 = 毫秒+runId）。
+- 新增 `runtime/file_guard.mjs`（engine / 工具端 / 单测共用同一份判定）与
+  `tests/headless_file_guard_selftest.mjs`（41 项，离线，已入 `npm test` 主链，`npm run test:fileguard`）。
+
+## v2.6.1（2026-10-23）—— 性能优化（选中轮询 / 审计 / 批处理 update）+ 平台与测试修复
+
+> v2.6.0 之后合入的改动打包为本版（含此前 PR 中标注为 v2.7 的 dsh-TUI 宿主半边）。
+> 模型工具仍 **15 个**；plan catalog 仍 **33 family / 217 op**；addon 仍 **v1.10 / protocol 11**。
+
+### 性能（真实成品文件实测）
+- **选中轮询 1200 ms → 100 ms**（Web 客户端 + dsh-TUI 宿主半边）：端到端 p50 ~993 ms → ~156 ms
+  （本机回环，8 次选中变化；CAS consume 语义不变）。
+- **`audit._tris` 大网格快路径**：面数 ≥256 时批量 `foreach_get("loop_total")`；
+  137k 面 59.3 ms → 15.5 ms（3.8×），逐值等价。
+- **批处理 update 第 1/2 步**：新增 `K.dsh_kit.BatchUpdates`；`motion._restore_transforms` 改为
+  「先写全部字段 → 一次 update → 统一核对」，真实成品 300 对象还原 32× / 91×
+  （行星发动机 / 太空电梯），motion selftest 25/25。
+- 实测否定了「msgbus 订阅选中」：Blender 5.2 上 `Object.select` 不是 RNA 属性；
+  选中变化继续用 `depsgraph_update_post`（0.3–0.7 ms）。
+
+### 功能（v2.6.0 之后合入）
+- **#35 工具卡片**：15 个工具的 `presentCall` / `presentResult`，宿主不再显示整段 JSON。
+- **#36 dsh-TUI 宿主半边**：选中上下文 chip、页脚状态字段、`@` 提及、`/blender status|doctor|jobs`；
+  按接缝能力检测启用，新增只读 `GET /host/state`。
+
+### 修复
+- **#38 / #39 / #43 Windows 终端弹窗**：三处 blender `spawn` + 两处 `execFileSync` 补 `windowsHide: true`，
+  并加 `tests/windows_hide_selftest.mjs` 静态自检（进 `npm test`）。
+- **#40 / #41 capability lock**：发布 tarball（无 `src/`）不再 ENOENT，降级工具维度并显式打印 SKIP。
+- **#42 capability lock families**：逐族取数改用族名字符串 + `full:true` detail，恢复族名 / 逐族 op 维度；
+  用 `--update` 重新落锁。
+
+## v2.6.0（2026-10-21）—— 33 family / 217 op · GUI 优先 · 无头备用 · 文档与 skill 重写
+
+> v2.5.0 之后的四轮工作（P0 / P1 / P2 + 文档与 skill 重写）并入本版一次发布。
+> 模型工具仍为 **15 个**；plan catalog 从 28 family / 186 op 扩到 **33 family / 217 op**。
+> 新增能力全部走 plan catalog，**不新增模型工具**；GUI 仍是最优先；无头能力补齐（含 rt_see），作为无 GUI / 批处理 / 长活的备用。
+> **2026-10-21 口径更正**：不是 headless-first；默认先开 GUI，headless 仅备用。
+
+### 测试与文档修正（issue #32 / #33）
+
+- **#32** `tests/linux_selftest.mjs`：裸 `import(path.join(...))` 在 Windows 上抛 `ERR_UNSUPPORTED_ESM_URL_SCHEME`，
+  `npm test` 链式中断、其后 13 个用例静默跳过 → 改 `pathToFileURL(...).href`。
+- **#33** `tests/workdir_shared_selftest.mjs`：C5 用 `path.sep` 切 POSIX 风格路径，Windows 上恒红
+  → 改 `path.posix.basename(...)`。
+- **文档口径**：改正「`/host/view/*`、`/host/pick*`、`/host/ready` 路由为兼容保留」的错误表述 ——
+  这些路由在 v2.3 已随面板删除，现存宿主路由只有 `/host/selection`（+`/latest`、`/consume`）、
+  `/host/scene-items`、`/host/jobs`（+`/log`）。
+
+### 文档与 skill 重写（2026-10-21）
+
+- **全量文本校正**：README 中英、操作教程、配置参考、安装/部署/迁移/AGENTS/CLAUDE 全部对齐 v2.6.0（15 工具 · 33 family / 217 op · addon v1.10 / protocol 11）；删除 28/186、v2.5/v0.9.x 旧口径与“必须 GUI”旧承诺。
+- **skill 架构优先重写**：SKILL.md 以“插件就是建模流程”为主线（catalog → plan op → worker session → 回执/verdict → 门/交付），新增架构铁律、标准状态机、工具选择矩阵、P0–P2 配方、反模式、多 Agent 协议；通用 Blender 知识降为附录 A。
+- **references 校正**：验收清单补 asm/visualreport/eval/强制门；参考图 SOP 改为 img_digest/measure/calib + shapesolve + visualreport；multiview 与英文 overview 标明与当前插件的关系。
+- **工具描述**：rt_do/rt_see/rt_watch/rt_worker/rt_headless/rt_plan 明确 GUI 首选、session 无头、worker see/watch/TTL、plan session=auto；package description 同步 v2.6.0。
+- 文档 grep：用户文档无 28/186/v2.5/v0.9.x 旧口径；skill >50KB 且 skill_bundle_selftest 61/61；npm test 全绿。
+
+### P2 第三轮（2026-10-20）
+
+- **装配交付导出** `asm_export`：GLB/FBX/OBJ + manifest.json + append-only merge_ledger.jsonl；`merge=true` 先 `asm_merge`（gate+snapshot，不过门不导出）；67 evidence 真机全绿。
+- **低风险修复策略** `asm_repair(policy=safe|manual|aggressive)`：safe 只做 translate/snap、硬禁布尔；manual 只规划不执行；回归 88 evidence 全绿。
+- **缺陷注入/基线评估** `eval_run`（evalharness.py）：assembly D1/D3/D4/D5/D7/D8 + reference 12 例 + calib core；缺模块 skipped/degraded 不假通过；assembly capture=1.0、reference 12/12、core degraded 0.875。
+- **Seedance 参考包** `blockout_refsheet`（4 正交/透视 PNG + 2x2 拼图 + refsheet.json + 可选转台）+ `blockout_turntable`（Blender 内置 FFMPEG MP4/H264）；22 通过/0 失败；256x256/12 帧 MP4 9192B。
+- **无头 watch** `rt_watch(session=...)` + worker `_watch`：逐帧 Workbench 离屏 + hash + 最多 6 帧图；真机 3 帧动画 distinct=3/58ms。
+- **无头 plan 路由** 扩展 eval/blockout/asm 等 family；真机 `asm_export` 161ms、`blockout_refsheet` 331ms、`turntable` 334ms。
+- catalog 33 family / 217 op；`npm test` 全绿；capability lock / 只读白名单 / 计数同步。
+
+### P1 第二轮（2026-10-20）
+
+- **装配修复**：`asm_repair` + `fix_clash`（执行器，dry_run 默认）+ `fix_interference`（只读规划器）；2mm 互穿 dry 不动场景→执行后 clash=0/float=0/有 snapshot；contained/布尔 subtract/浮块 snap 计划；88 条真机断言。
+- **强制门/flow op**：`gate_preflight / gate_checkpoint / gate_deliver`；`deliver_export(require_gate=true)` 真机验证（pass 才写盘，bad gate blocked；deliver+verify 18 项）。
+- **无头 plan 路由**：`blender_rt_plan(..., session="auto")` 按 family 自动起持久 worker + preload + dispatch，不依赖 GUI；首次冷启动 ~2s，之后同步复用。
+- **会话池**：worker idle TTL（默认 15 min，`DSH_WORKER_TTL_MS`）+ `idleMs` 回执。
+- **同机位 QC**：`visualreport_report`（verdict-first，qc→imgtools→numpy 三级降级）；32/32；同图 pass，平移/缺角 fail，缺陷 crop + mm 定位，72–96ms。
+- **无头轮廓拟合**：`shapesolve_solve`（正交解析投影+numpy 光栅化，不渲染）；三视反演 40/20/30→误差 0.98%/1.55%/0.35%、IoU [1,1,1]，solve 793ms。
+- catalog 32 family / 211 op；`npm test` 全绿；capability lock / 只读白名单 / 计数已同步。
+
+### P0 第一轮（2026-10-20）
+
+- **交互式 headless（重点）**：`rt_worker` 支持 `preload` 启动前导 + `see`（临时相机 + Workbench 离屏）+ `reset` + `warmup`；实测 start 2.24s（含 1.1s 首帧初始化），之后 exec 0–2ms、see 往返 53–85ms（320×180），**不是 job/异步回合**。
+- `rt_do` 在 GUI 不可达/显式 `session` 时自动降级到持久无头 worker（exec + see，图片直接回模型）；`rt_see` 增加 `session/auto`；`rt_loop` 增加 `target="session"` 的 `dsh_loop_sync` 阻塞内环（20 次 56ms，不依赖 timers）。
+- `rt_headless` 支持 `attach_images`（true/"sheet"）；`rt_plan` 增加单行 receipt.v2 信封（verdict/top_defects/next）+ `attach_images`（≤2 张），plan 主通道不再只有 12KB 文本。
+- `imgtools.py` v2：新增 `img_digest`（原生分辨率量测/轮廓/Hough/孔/对称/可读性/原生裁剪/标注 + 可确认数字表）、`img_probe`、`img_measure`、`img_calib`；真机 61/61 断言。
+- 新增 `runtime/assembly.py`：`asm_scan`（全对全分类：clash/hidden_ok/contact/gap/float/contained/unresolved + 完全包含补测）、`asm_manifest`（md5/接口帧/allow 校验）、`asm_merge`（id 序 append + 法线 + snapshot + 自动 gate，dry-run 默认）、`asm_gate`（verdict-first，export_allowed 仅 pass）；模块自检 + 测试脚本全绿。
+- 新增 `runtime/blockout.py`：`blockout_base/batch/export`（声明式 parts、mm/anchor、Workbench 3 视图、GLB）；真机 33/33，20 件 geom 9ms、3 视 512 约 1.1s（首帧后 25ms/张）、GLB 117KB。
+- **可交互 headless 真机建模测试**：参考图→img_digest（2m×0.8m 盒子：width 2000mm/height 800mm/px_per_mm 0.16）→ 12 件白模（GLB 70KB）→ 装配两件 2mm 互穿 scan 检出 depth=2mm/volume≈2.0e6mm³，移开 10mm 后 clash=0。
+- 目录 30 family / 201 op；`npm test` 全绿；`capability.lock` / `plan_readonly.baseline` / provenance 计数已同步。
+
+### 主线：七条实测反馈 —— 台账对账 / 5.2 合成器 / 多灯卫生 / 进度通道 / 第五态 / 不覆盖声明 / 写作用域两维
+
+**来源**：一次 4 小时、3 个子代理、479 对象的真实项目（120 m 哥斯拉 + 被毁城市 + 原子吐息）后，
+Lead 与 3 个子代理共同复盘出的 7 条改进；按顺序落地，每条都有独立自检。
+
+1. **台账以文件为准（`runtime/recover.mjs`）**：后端重启/被杀后，磁盘台账里只剩 `status=running`、pid 已死，
+   但**子进程其实已经跑完、产物/日志都在**。旧行为一律判 `stale`，模型只能自己去 `Get-Process` + `ls` 破案
+   （实测两次，各赔一轮往返）。现在 `reconcileLedger` 先做磁盘对账（`summary.json` → `resultPath` → stdout 终态
+   `DSH_STAGE done` / `HEADLESS` / `Traceback`），对得上就返回 `status=done|failed` + `recovered:true` +
+   `recoveredFrom/recoveredEvidence`；对不上才 `stale`，并附 `evidence` / `evidenceChecked`。
+   run 与 job 的台账 running 记录也补了 `stdoutLog`/`stderrLog`/`dir`，后端重启后不用扫目录猜。
+2. **Blender 5.2 合成器迁移（skill §6.5.6）**：补 5 行踩坑表 + 一段最小可跑片段 ——
+   `scene.node_tree` 已删（改 `compositing_node_group` + `NodeGroupOutput`；`CompositorNodeComposite` 不存在）、
+   Glare 的 Type/Quality 变 MENU 插座、`CompositorNodeMixRGB`/`CompositorNodeMath` 被删（改用 `ShaderNodeMix`/`ShaderNodeMath`）、
+   `mat.cycles.displacement_method` → `mat.displacement_method`、`surface_render_method` 只有 DITHERED/BLENDED。
+3. **多灯卫生**：识别 `Shadow buffer full (N / M)` 并产出结构化 warning（`code=eevee_shadow_pool_full`，含次数/用量/上限/可粘贴修法）；
+   新增常驻 `K.light_hygiene(apply=True, max_shadow=4)`（只保留能量最高的 N 盏点/聚光灯投影 + 池设 2048）。
+   实测：36 盏灯 → 控制台每帧刷错且 `shadow_pool_size='4096'` 静默无效（枚举上限 2048）。
+4. **进度通道**：`dsh_progress(**fields)` / `DSH_PROGRESS {json}` 与 stage 分开（stage=阶段跃迁，progress=阶段内高频进度，留最近 20 条）；
+   运行期每 5 s 心跳（`heartbeat`：elapsedMs/logBytes/lines/stage/progressAgeMs，作业还会 append `heartbeat.jsonl`）；
+   `op=status/collect` 与 headless 回执都带 `progress/progressAt/heartbeat/progressHistory`。
+5. **`audit_mesh` 第五态 `pass_multi_shell`**：多壳件不再一律 `degraded`。判据改为「每个壳自己闭合+绕向一致+体积符号可确证」，
+   AABB 相交（碎块簇/火球鳞瓣/布景多壳件）不再等于“判不出来”；合法空腔仍标 `nested` 豁免。
+   对象 `state` 仍是 `pass`（新增 `multi_shell`/`state_detail`），totals 增 `normals_multi_shell`。
+   实测：两个分离壳/嵌套空腔 → `pass_multi_shell` + `clean=true`；真互穿仍按自交判 fail。
+6. **catalog 不覆盖声明**：`catalog` 默认页与 `args={handoff:true}` 都明确写「生物/有机造型、电影级布光/体积/合成、角色动画绑定」不覆盖，
+   省掉“在这里找不到工具”的探索成本（handoff 仍守 3500 字符上限）。
+7. **写作用域两维（集合 + 对象前缀）**：`blender_viewport op="lease" scope="collection:COL_Lights,prefix:LGT-"`；
+   `/who`、`/lease`、409 回执（`holderScope`）都可见；裸 token 会按形态推断（`COL_*`→集合，带 `-`/`*`→前缀）。
+   配套常驻 `K.route_collections(rules=None)`：按前缀把灯/相机/各资产归位到 COL_Lights / COL_Camera / COL_VFX / …
+   —— 子代理只有单一集合写权限时，按前缀命名、装配前一行归位。
+
+#### 自检（新增 4 个用例）
+
+- `tests/ledger_recover_selftest.mjs`（18 断言，纯逻辑）
+- `tests/ledger_recover_e2e_selftest.mjs`（10 断言，独立后端 + 真 headless：对账三态 + progress + heartbeat）
+- `tests/scene_hygiene_selftest.mjs`（8 断言）
+- `tests/lease_scope_selftest.mjs`（6 断言，独立后端 HTTP 契约）
+
+#### 兼容性
+
+- 回执只**增字段**（`recovered` / `progress` / `heartbeat` / `warnings` / `scope`），不改旧字段语义；
+- `stale` 语义保留：没找到终态证据时仍然判 `stale`（不谎报完成）；
+- 宿主侧 `lib/index.js` 已同步（recovered/progress 文案、lease scope 参数），**升级后需重启 DSH**；只改后端可 `blender_viewport op=restart`。
+
+## v2.5.0（2026-10-20）—— N 面板重排（活动置顶 / 环境与模型 API 子面板）+ 暂停 AI 操作（addon v1.10）
+
+**来源**：用户要求把活动状态移到上面、资产库与 AI Model Generation 合并成「环境与角色模型API调用」父面板
+（环境生成 / 模型生成两个子面板，默认全折叠），AI 操作时显示警告，并加「暂停 AI 操作」按钮；顺带删掉一些图标。
+
+- **活动状态置顶**：N 面板第一块就是活动状态；`agent` / `both` 时用 `alert` 红色警告「AI 正在操作 Blender」。
+- **暂停 AI 操作**：新增场景属性 `dshbb_ai_paused` + 按钮 `dshbb.toggle_ai_pause`；
+  暂停后 socket 只放行只读命令（`ping` / `get_*` / `drain_human_activity` / `describe_node_type` / `bpy_api_lookup`），
+  `execute_code`、资产下载/生成/导入等写操作返回 `AI_PAUSED`；`get_activity_state` 带 `paused` 字段。
+  恢复只能由人在 Blender 面板点「继续 AI 操作」（模型无法自己解除）。
+- **新面板**：`环境与角色模型API调用`（父，默认折叠）→ `环境生成`（Poly Haven / Sketchfab / Poly Pizza）+
+  `模型生成`（Hyper3D / Hunyuan3D / Tripo，含 Premium 状态）；父面板与两个子面板都 `DEFAULT_CLOSED`。
+- **删图标**：新面板里的集成标题、环境生成 URL、模型生成的按钮等不再带装饰性图标；活动状态只在警告时带图标。
+- 状态变化由 0.5 s timer 触发 N 面板重绘（不靠鼠标移动才刷新）。
+
+## v2.4.0（2026-10-19）—— 子元素选中 + N 面板列表可伸缩（addon v1.9）
+
+### 新功能：编辑模式 / 姿态模式的子元素进入选中记录
+
+**来源**：用户问「Add 菜单里这些类型除了网格，能记录哪些？」→「把编辑模式子元素 / 骨骼也纳入选中记录」。
+
+- addon `build_selection_payload` 新增 `selection.sub`：
+  - `MESH`：`counts`（顶点/边/面）+ `indices`（三类索引数组，各上限 2000）+ `select_mode`（当前点/边/面模式）；
+  - `ARMATURE`：编辑模式 `edit_bones` / 姿态模式 `pose.bones` 的选中骨骼名（上限 500）；
+  - `CURVE` / `LATTICE`：控制点 `(spline_index, point_index)` 或点索引（上限 2000）；
+  - 其他编辑模式（文本/蜡笔）只带 `type:"OTHER"` + `note`，不伪造元素语义；
+  - `truncated` 如实标记截断。
+- 后端 `runtime/selectionstore.mjs` 增加 `sanitizeSubSelection`：白名单类型、过滤非整数/负数、再次夹上限；
+  未知类型归 `OTHER`，缺对象名直接丢弃。
+- Web 客户端 `selectionMessageText` 生成子元素草稿文本（网格给计数 + 索引样例，骨架给骨骼名，
+  曲线/晶格给控制点），完整数组可用 `blender_rt_cmd get_selection` 查。
+- N 面板：编辑/姿态模式显示「子元素：编辑模式（网格）· Cube」，展开列表会多出「顶点 12 / 边 3 / 面 7 / Bone.001」行。
+- 已知边界：子元素变化**不进入 activity 指纹**（activity 仍按对象级选区判定）；大网格不在每个 tick 扫描。
+
+### 同版本 UI：N 面板列表可折叠 + 可滚动 + 高度可调
+
+**来源**：用户反馈「这个列表是可伸缩的吗，能折叠或者隐藏的尽量隐藏」→「高度可以调整不要固定」。
+
+- 对象列表 / 集合成员列表改为 **Blender UIList**：自带滚动条，内容多时不再一长列铺开。
+- **高度可调**：展开后出现「高度（行）」滑杆（`dshbb_list_rows`，3–30，默认 8）+「− 矮一点 / + 高一点」按钮；
+  `template_list(..., maxrows=30)`。
+- **可折叠**：两个列表默认收起，点 `对象 / 子元素列表（N）▸` / `成员列表（N）▸` 展开；属性
+  `dshbb_show_selection_list` / `dshbb_show_collection_list`（默认 `False`）。
+- **绘制稳定性**：列表数据改由 timer / 属性 update 回调同步，不再在 `draw()` 里写 ID 数据；
+  面板绘制异常写入 `dshbb_last_panel_error`（诊断用，正常为空）。
+- 后端地址 / 覆盖项收进折叠的「后端 / 高级」（`dshbb_show_advanced`，默认隐藏）。
+
+## v2.3.0（2026-10-19）—— Blender 原生选中 → DSH · 统一 human/agent activity 判定（addon v1.8）
+
+**来源**：用户裁决 ——「bl 插件端加一个"操作中"的判定，把当前 DSH 的选中功能移到 Blender 插件端」。
+确认口径：**B. Blender N 面板「发送选中到 DSH」** + **C. human / agent 两种 activity 统一成一个状态**。
+**结论**：选物体不再依赖在 DSH 面板里点低清截图 —— 在 Blender 原生选区里选，按 N 面板按钮即进 DSH 当前会话草稿
+（**不自动发送**）；Blender 侧同时给出 `idle / human / agent / both` 四态，面板实时显示、模型可查。
+**同版本删除**（用户明确要求）：DSH 侧视口面板（Web 侧栏 + TUI 侧栏）、点击进消息、模型请求点选 `blender_rt_pick`
+—— 模型工具 **16 → 15**；后端 `/host/view/*`、`/host/pick*`、`/host/ready` 路由保留但无本仓 UI 消费者。
+**两种模式**：N 面板 `dshbb_selection_mode` 可切「**多选**」（发当前选中对象）/「**集合**」（整组发送，大装配体用）。
+
+### 新 · addon v1.8（协议号仍 11，向后兼容）
+
+- **`ActivityTracker`**（主线程，本地判定、**与 telemetry 同意无关、不上传**）：
+  - human 信号 = `bpy.context.window.modal_operators` 非空（拖拽/变换/菜单等，持续有效）+ 最近 1.5 s 人类操作符
+    （含 view3d 导航，agent 命令期间抑制）+ 撤销/重做 + 原生选区/活动对象/模式变化（1.5 s 窗口）；
+  - agent 信号 = agent 命令执行中（`agent_depth>0`）或最近一次命令结束 ≤1.5 s；
+  - agent 命令结束时作废选区指纹 ⇒ 不会把工具自己的改动误报成"人操作"。
+- **5 条常驻命令**（进 `capabilities`，常驻 19 → **24**，总命令 34 → **39**）：
+  `get_activity_state`（四态快照；**查询自身不计入 agent**）· `get_selection`（原生选中：名字/类型/活动对象/模式/场景）·
+  `send_selection_to_dsh`（把 §S1.3 payload POST 给后端；按钮与命令同一实现）·
+  `get_collections`（场景集合 + 对象数 + 选中数）· `send_collection_to_dsh`（整组发送；大装配体免逐个选）。
+- **N 面板新 section「Selection → DSH」**：活动状态行（人/agent/同时/空闲）+ 最近人类动作 + **模式切换（多选 / 集合）** +
+  多选模式下的已选摘要与「发送选中到 DSH」/ 集合模式下的集合下拉（`dshbb_collection_target`）与「发送集合到 DSH」 +
+  最近一次发送结果 + 后端地址（可用场景属性 `dshbb_backend_url` / 环境变量 `DSH_BLENDER_BACKEND_URL` 覆盖）。
+- **大装配体收敛**：对象模式草稿文本最多列 24 个名字（超出给"共 N 件"）；集合模式只给"集合名 + 件数 + 前几个成员"——
+  不再把 200 个对象名刷进输入框。
+- **Blender 侧两种模式完善（用户要求）**：多选模式在 N 面板里给出**可滚动的对象列表**（名字 + 类型，最多 30 行）；
+  集合模式给出**成员列表 + 件数 + 子集合 + 当前选中数**；切到集合模式时 `update` 回调自动推断最相关集合，
+  另有 ⟳ 按钮（`dshbb.use_selection_collection`）随时重新推断。
+- 真机实测：模态探针 `human_active=true` + `modal_operators=[DSH_TMP_OT_modal_probe]`；模态结束后回到 `idle`；
+  面板按钮 → 后端 `seq` 增长 → 浏览器草稿收到文本（`last_consume {ok:true,how:"actions"}`）；
+  集合命令 `get_collections` / `send_collection_to_dsh` 真机可用；旧 v1.7 addon 的其它命令不受影响。
+
+### 新 · 后端 `/host/selection`（纯内存，零 Blender 往返）
+
+- `runtime/selectionstore.mjs`：payload 消毒（名字 ≤200 / 对象 ≤50 / 字符串 ≤200 字符）· `seq` / `consumed_seq` 只增不减 ·
+  `consume` 幂等 + 非法 seq 400 · `last_consume` 记录客户端插入结果（回答"按钮点了为什么草稿没字"）。
+- 3 条路由：`POST /host/selection`（addon 推送，**不校验写租约**）· `GET /host/selection/latest`（只有未消费才带 payload）·
+  `POST /host/selection/consume`（可带 `{ok,how,reason}` 诊断）。
+- `tests/selection_store_selftest.mjs`（接入 `npm test`）：**53 断言**覆盖消毒 / seq / consume / 诊断 / 集合 payload。
+
+### 新 · Web 客户端半边：无头桥 `conversation.input.dock`
+
+- 注册 id `blender-selection-bridge`（session 作用域、渲染 null、**面板收起也收**），每 **1200 ms** 轮询 latest。
+- 插入当前会话草稿：优先 `inputActions.insertText`（可追加、保留用户内容）；备用 `SessionInput.setDraft` 仅当草稿为空；
+  **不自动发送**。插入成功才 `consume {ok:true,how}`；失败不消费、重试 3 次后消费并回传原因。
+- **不按页面可见性跳过**：用户可能点完 Blender 按钮立刻切回 DSH；轮询零 Blender 往返。
+- `tests/client_bundle_selftest.mjs` 重写为 v2.3 精简版：**46 断言**（bundle 形状 / 无面板残留 / @ codec / 选中文本（对象/集合/大名单收敛）/ 三种插入路径 / dock 注册）。
+- 删除 `src/tui-panel.ts`、`tests/tui_panel_selftest.mjs`、`docs/TUI-适配.md`；capability lock 16 → 15 工具。
+
+### 文档 / 契约
+
+- 新契约唯一真源：[`docs/宿主集成-接口契约-v2.3增补.md`](docs/宿主集成-接口契约-v2.3增补.md)（§S0 背景 · §S1 addon 命令与 payload ·
+  §S2 三条路由 · §S3 客户端插入 · §S4 判据 S1–S8 · §S5 已知边界）。
+- README（EN / zh-CN）：新增 §4.3「Blender 原生选中 → DSH」+ 四态表 + 前置（addon v1.8 + 重启 DSH）+ TUI 不支持说明；
+  命令面计数 34→37（常驻 19→22）；版本 v2.3.0。
+- 操作教程新增 §11（步骤 / 排错 / 验收）；`AGENTS.md`、`llms.txt`、`addon/README.md`、第三方安装清单、配置参考同步。
+- 版本三处同步 **2.3.0**（`package.json` / `src/index.ts` 的 `PLUGIN_VERSION` / 重建后的 `lib/`）；**addon 1.8**。
+
+### 验收（实测，2026-10-19）
+
+- `npm test` **exit 0**（新增 selection_store + client_bundle 入列）；`client_bundle_selftest` 全过；schema 预算仍 ≤12,000。
+- 真机：addon v1.8 重载后 `get_addon_info` 回 `[1,8]` 且 capabilities 含三条新命令；`get_activity_state` 空闲时 `idle`、
+  命令后 `agent`、模拟人类操作/模态时 `human`/`both`（`last_human_kind=selection` / `modal:…` 实测）。
+- 端到端：Blender 选中 Cube+Camera → 面板按钮 → 后端 `seq` → **当前会话草稿收到文本**；
+  `/host/selection/latest.last_consume` 回 `{ok:true, how:"actions"}`（真实 Web 客户端插入成功）。
+- 打包：**1.3 MB / 142 文件**（v2.2 为 1.5 MB/161；删 TUI 面板 + 视口/点选路由 + 旧 addon 适配/文档/测试；新增 selectionstore/契约/测试；`skills/blender-modeling/` 8 文件仍在包内）。
+- **清理（v2.3 精简）**：删除旧 `MCP for Blender` / harveyxiacn category-action addon 支持、双名回退与 `addonProtocol` 配置；
+  删除 `/host/view/*`、`/host/pick*`、`/host/ready` 路由与 `runtime/{viewstore,pickrequest,host_presence}.mjs`；
+  删除 `blender_rt_pick` 工具、Web/TUI 视口面板、`tests/{tui_panel,protocol,pick_presence,host_cors,acceptance_v093}_selftest.mjs`；
+  删除历史契约文档（v1.2/v2.1/v2.2）、上游整合/改名方案/评估文档、`tmp/` 与 `.bak` 备份。
+
+### 未证实 / 已知边界
+
+- **必须重启 DSH**（客户端半边是启动时装载的模块）；开发期 HMR 可能热加载，正式升级以重启为准。
+- **DSH 视口面板已删除**：老用户的侧栏 tab 会消失（代码不再注册）；`/host/view/*` 等路由仍在但无 UI。
+- **装完必须通知用户**：`docs/AI-安装提示词.md` §③.5 已要求安装型 AI 主动介绍原生选中 / 两种模式 / activity / 删除项。
+- **addon 兼容矩阵**：上游 `MCP for Blender`（`blender_mcp`）仍可用模型工具，但**没有** v2.3 的选中/集合/activity；
+  两 addon 同占 9876，不可同时启用。已写入 README §2 / `addon/README.md` / AI 安装提示词。
+- **TUI 暂不支持草稿插入**（无 composer dock；与 `sendToChat` 未授权的既有边界一致）。
+- 桥只写**当前打开的会话**；多标签页极端情况下同一选中可能各插一次（服务端 `last_consume` 保留最后一条）。
+- 宿主面板在 Blender 主线程之外无法逐帧刷新（面板显示随 Blender 重绘更新）。
+
+---
+
+## v2.2.0（2026-10-19）—— skill 并入插件仓：随包发布 + 加载时自动注册
+
+**来源**：用户提问 ——「把这个 blender-modeling skill 合并到 blender 插件仓库吧，好多人不看 github 主页不下载这个 skill」。
+**结论**：skill 不再要求用户去独立仓库下载 / 软链；插件装好、DSH 重启后，会话技能目录里自动出现 `blender-modeling`。
+
+> **本版还包含（上游 main 合入，PR #23–#26）**：dsh-TUI 适配 —— `ctx.tuiPanels` 侧栏「Blender 视口」面板 +
+> 点选（Web / headless 自动 no-op；无面板轮询时快速失败），详见 README §4.2 与 `docs/TUI-适配.md`、
+> `docs/宿主集成-接口契约-v2.2增补.md`。本次 skill 提交 rebase 到该 TUI 工作之上发布。
+
+### 新 · 随包 skill（真源迁到本仓）
+
+- 内容并入 [`skills/blender-modeling/`](skills/blender-modeling/)：`SKILL.md` + 4 个 `references/` + MIT `LICENSE` + `NOTICE.md` + 随包 `README.md`
+  （独立仓库 `dsh-skill-blender-modeling` 保留为非 DSH 宿主的镜像，内容与本目录同步）。
+- host 侧 `apply()` 在宿主**有 `skills` 服务时**注册 bundled provider：`ctx.inject(['skills'], cb)` 延迟挂载，
+  服务缺席则跳过；**任何注册失败只告警，不影响 16 个工具**（技能是附加能力）。
+- provider 口径：`source: "bundled"`、`rank = 600`（与 `@deepseek-ai/dsh-skill` 的 `BUNDLED_SKILL_RANK` 同值）；
+  candidate / definition 按 DSH 技能注册表契约构造，`resourceBase` 指向包内技能目录 ⇒ 引用 `references/*.md` 的相对路径可直接读。
+- **优先级**：DSH 规则 rank 小者优先 ⇒ 用户自己装在 `~/.dsh/skills`（user 级 rank 400）的副本覆盖包内副本（600），
+  老用户不会被强制更新；卸载插件即自动消失（不需要清理用户技能目录）。
+- 不新增运行时依赖：frontmatter 用约 20 行手写解析（只取 `name` / `description`），不引 `yaml`，不 import 宿主的 `@deepseek-ai/dsh-skill`。
+- 打包面：`package.json.files` 增加 `skills`；tgz **1.5 MB / 161 文件**（v2.1.0 为 1.3 MB / 144 文件）。
+
+### 新 · 回归门
+
+- 新增 `tests/skill_bundle_selftest.mjs`（接入 `npm test`）：
+  资产树 / frontmatter / 无 `.bak` / `files` 打包面 / lib 中 provider 形状 / frontmatter 解析边界 /
+  fake ctx 三条注册路径（`inject` / 直挂 / 无 skills 服务）/ **真 `SkillRegistry` 集成**（找到宿主才跑：`list`/`get` 全链路 + 用户级 rank 400 覆盖 bundled 600）。
+  本机 **61/61 PASS**；没有宿主包的环境会明确 skip 真 registry 集成段（57 断言，其中含 4 条带 `AbortController.signal` 的 thenable 断言）。
+- **复核发现的 P0（同日修复）**：provider 的 `list` / `get` 原先**同步**返回数组 / 对象；宿主 `waitWithAbort()` 在调用方带 `signal`
+  时会直接对返回值 `.then(...)`（模型侧每条 lookup 都带 signal）⇒ `TypeError: promise.then is not a function`，provider 被**静默 skip**，
+  skill 实际加载不了（无 signal 的测试恰好绕过）。改为 `async` 后在 selftest 里补带 `AbortController.signal` 的断言（先复现失败、后验证修复：
+  带 signal 的 `snapshot` 命中、`get()` 返回 103,925 字符正文）。
+- 实现细节：v2.2.0 代码块放在 `apply()` **之后**（函数声明提升，行为不变）—— 若插在 `registerSchemaDiagnostic` 之后，
+  会干扰 `discoverability_selftest` 对 `blender_viewport` 的 schema 字符片段切分（其口径依赖相对位置），
+  把预算误报成 12,317。调整后 schema 预算保持 **11,995 / 12,000**，**没有放宽这道门**。
+
+### 文档
+
+- README（EN / zh-CN）：「Companion skill」改为「Bundled skill（加载时自动注册）」，§1 增随包说明，§3 安装补「重启 DSH 后技能目录自动出现」；
+  Releases tgz 信息更新到 2.2.0（1.5 MB / 161 文件）。
+- `AGENTS.md`：打包健康值更新；新增「随包 skill 真源 = `skills/blender-modeling/`」约定。
+- 版本三处同步 **2.2.0**（`package.json` / `src/index.ts` 的 `PLUGIN_VERSION` / 重建后的 `lib/`）。
+
+### 验收（实测，2026-10-19）
+
+- `npm test` **exit 0**（含新增 skill_bundle_selftest）。
+- 真宿主 `SkillRegistry` 集成：`ctx.skills.list()` 命中 `blender-modeling`（`source=bundled`）· `get()` 加载 103,925 字符正文 ·
+  `resourceBase` 指向包内目录 · 模拟 user 级副本（rank 400）成功覆盖 bundled（600）。
+- **带 `AbortController.signal`** 的真注册表 `snapshot` / `get` 实测通过（修复前：snapshot 为空、get 抛 `TypeError`）。
+- `npm pack --dry-run`：**1.5 MB / 161 文件**，`skills/blender-modeling/**` 8 个文件全部在包内。
+
+### 未证实（需重启 DSH 后由用户确认）
+
+- 真实 DSH 会话里技能目录是否出现在**首条消息**的 available-skills 列表（本会话由用户级软链提供同一技能，无法在不重启的情况下验证 bundled 路径）。
+- 用户同时保留 user 级副本时，DSH 日志会有一条 "higher-priority skill already exists" 提示（预期行为，不是故障）。
+
+---
+
 ## v2.1.0（2026-10-16）—— 面板缩放/平移 · 一次多选零件 · headless 作业区
 
 **来源**：用户提问 —— ① 多子代理并行建模用的是 headless，"这怎么看"；② "能一次多选零件吗"；③ "可以在标签页 blender 视口里进行放大缩小移动视角吗" → 裁决"都做"。

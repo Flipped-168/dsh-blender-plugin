@@ -89,8 +89,8 @@ ok('C5 前置：副本里确实替换了一族名', mutated !== fs.readFileSync(
 fs.writeFileSync(COPY_CATALOG, mutated, 'utf8')
 // 本进程内存里的 PLAN_CATALOG 仍是旧的一份（正是"后端没重启"的现场）
 const catOld = m.catalogPayload({ verify: true })
-ok('C6 干净进程看到磁盘上的新目录（family 数 28、sculptx 已在）',
-  catOld.provenance.diskVerdict.families === 28 && catOld.provenance.diskVerdict.matchesLoadedCatalog === false,
+ok('C6 干净进程看到磁盘上的新目录（family 数与当前 catalog 一致、sculptx 已在）',
+  catOld.provenance.diskVerdict.families === m.PLAN_CATALOG.length && catOld.provenance.diskVerdict.matchesLoadedCatalog === false,
   JSON.stringify(catOld.provenance.diskVerdict).slice(0, 260))
 ok('C7 本进程 catalog 的 catalogHash 与磁盘不同 → 判定"本进程目录是旧版"',
   catOld.provenance.catalogHash !== catOld.provenance.diskVerdict.catalogHash,

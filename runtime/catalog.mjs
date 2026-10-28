@@ -105,20 +105,57 @@ export const PLAN_CATALOG = [
     when: '参考图看不清细节 / 要量它：轮廓尺寸、长宽比、主要直线角度、指定点取色；或把量到的东西画回图上、把两张图做差分',
     not: '不是"看图"本身（看图仍要 read_image/rt_see）；它是量具，负责把像素变成数字；**别用眼睛估尺寸** —— 用 img_* 量',
     sk: 'op="img_scan", args={path:"D:/ref/front.png"} → op="img_crop", args={path:…, x:20, y:30, w:200, h:160, scale:2} → op="img_diff", args={a:"render.png", b:"ref.png"}',
-    ops: ['scan', 'rectify', 'crop', 'annotate', 'diff', 'selftest', 'help'],
-    key: '协议：**看图必须产出数字**（写进 spec.py），否则算白看；每次 ≤2 张图且带明确问题；先 crop 到 ROI 再放大；判"像不像"用 img_diff 的 IoU 不靠肉眼；像素↔毫米要标定。照片背景复杂先抠图（rembg），否则给 threshold' },
+    ops: ['scan', 'rectify', 'crop', 'annotate', 'diff', 'digest', 'probe', 'measure', 'calib', 'selftest', 'help'],
+    key: '协议：**看图必须产出数字**（写进 spec.py），否则算白看；每次 ≤2 张图且带明确问题；先 crop 到 ROI 再放大；判"像不像"用 img_diff 的 IoU 不靠肉眼；像素↔毫米要标定。img_digest 一次给可确认数字表+原生裁剪图册+可读性；img_probe/img_measure 按需量测；img_calib 多视逐视标定' },
+  { f: 'assembly', prefix: 'asm_',
+    when: '多会话/多零件要合并：先生成 manifest（md5/接口帧/允许交叠），再全对全扫描、合并、过装配门',
+    not: '不是单件网格体检（audit_*）；**别手工 append 零件** —— asm_merge 按 id 序 + 接口帧落位',
+    sk: 'op="asm_manifest", args={action:"validate", path:"D:/proj/assembly.json"} → op="asm_scan", args={manifest:"D:/proj/assembly.json"} → op="asm_merge", args={manifest:"D:/proj/assembly.json", dry_run:true} → op="asm_merge"(dry_run:false) → op="asm_gate"',
+    ops: ['scan', 'manifest', 'merge', 'repair', 'export', 'gate', 'selftest', 'help'],
+    key: 'verdict 三态；hidden_ok=声明内隐藏交叠（不过报）、clash=真穿模、contained=完全包含、unresolved=证据不足；asm_gate 用 manifest 连接图判浮空，export_allowed 只在 pass' },
+  { f: 'blockout', prefix: 'blockout_',
+    when: '给视频模型/下游做基础白模：声明式 parts（mm/锚点/模板）→ 低模 + 3 视图 + GLB；或批量 N 件',
+    not: '不是高模/雕刻/材质入口；细节仍走 recipe/vehicle/human 现有通路',
+    sk: 'op="blockout_base", args={name:"robot", parts:[{id:"torso",prim:"box",size_mm:[300,180,420],at_mm:[0,0,900]}], render:{views:"auto3",res:[512,512]}, export:{glb:"D:/out/robot.glb"}}',
+    ops: ['base', 'batch', 'export', 'turntable', 'refsheet', 'selftest', 'help'],
+    key: '默认 Workbench、无审计、单白材质；热会话单件目标 ≤2.5 s；GLB 走 export_scene.gltf（exporter 未启用时自动 addon_enable）' },
+  { f: 'eval', prefix: 'eval_',
+    when: '验收自己的门/工具到底抓得住什么：缺陷注入（装配 D1/D3/D4/D5/D7/D8 + 参考图矩形/圆/斜线）+ 基线回放 + capture_rate',
+    not: '不是项目验收（项目走 gate_run/asm_gate）；capture_rate 只代表合成缺陷集，不等于真实项目通过率',
+    sk: 'op="eval_run", args={suite:"assembly", out_json:"D:/out/eval.json"}',
+    ops: ['run', 'selftest', 'help'],
+    key: 'verdict 三态；缺模块→skipped/degraded 不假装；out_json 带 md5；只碰 __eval_ 前缀对象并清理' },
   { f: 'calib', prefix: 'calib_',
     when: '想知道"我的门到底抓得住什么"：注入 8 类已知缺陷量捕获率；或改了门之后验证有没有变强',
     not: '不是日常体检（那是 audit_*/print_*）；它跑的是自建装配，不动你的件',
     sk: 'op="calib_run", args={} → 看 capture_rate / missed / baseline_pass；op="calib_selftest"',
     ops: ['run', 'selftest', 'help'],
     key: '**baseline_pass 必须为 true**（健康基线 4 门全过＝无假阳性），否则整次标定作废；missed 列表就是门的盲区 —— 实测它一次抓出 4 个真 bug（薄板测不到/体素假薄壁/各向异性缩放漏判/pass_if 优先级）' },
+  { f: 'visualreport', prefix: 'visualreport_',
+    when: '同机位 QC：参考图 vs 渲染图要一页 verdict（IoU/缺多面积/缺陷 crop/修法），不靠肉眼看两张图',
+    not: '不是出图（出图用 qc_render_views）；不同机位/分辨率不可比；**别把 degraded 当通过**',
+    sk: 'op="visualreport_report", args={ref:"...", render:"...", px_per_mm:2, out_dir:"..."}',
+    ops: ['report', 'selftest', 'help'],
+    key: '三级降级 qc→imgtools→numpy；top_defects 给 bbox/面积/center_mm；px_per_mm 缺失 mm 为 null；同机位/同分辨率才可比' },
+  { f: 'shapesolve', prefix: 'shapesolve_',
+    when: '参数化形体要按参考图轮廓反推尺寸：无头多视正交解析投影 + numpy 光栅化，不渲染、不依赖 timers',
+    not: '不是放样/建模（先 shape_plan/shape_loft）；**参考图必须同相机参数生成**；只比轮廓并集',
+    sk: 'op="shapesolve_solve", args={setup:"...apply(p)...", params:[...], views:[{ref,from,look_at,ortho_scale}], iterations:200}',
+    ops: ['solve', 'selftest', 'help'],
+    key: '返回 best/逐视 IoU/sensitivity；unidentifiable=该参数在当前视角没信息；ortho_scale 是画面宽的世界尺寸' },
+  { f: 'surface', prefix: 'surface_',
+    when: '复杂曲面要参数化候选：loft/sweep/patch → tessellate → validate → export(GLB)',
+    not: '不是雕刻/有机建模；**M1 线性截面，G1/G2/高级 blend/fillet 仍需 OCCT 后端**；**参考图 IoU / 材质 / 打印检查仍需 qc_render_views / print_report**',
+    sk: 'op="surface_loft", args={sections:[{z_mm:0,points_mm:[[-100,-50],...]},{z_mm:200,...}], tessellation:{u:24}, name:"R1-A"} → op="surface_tessellate"（拿 object）→ op="surface_export", args={spec_or_object:"SURF_loft_xxx", out_dir:"D:/out", name:"R1-A"}',
+
+    ops: ['loft', 'sweep', 'patch', 'tessellate', 'validate', 'export', 'blend', 'offset', 'fit', 'selftest', 'help'],
+    key: '纯 bpy+numpy；surface_validate 返回 verdict/metrics/defects；自交/厚度是近似，不是制造认证；曲面结果要 visualreport/asm_gate 复核' },
   { f: 'gate', prefix: 'gate_',
     when: '把**一个项目的验收判据固化下来、一次跑完**（替掉"每个项目重写一遍门脚本"）',
     not: '不是单点体检（只查一项用 audit_mesh / print_report）；也不做渲染对照（那是 qc_*）；**别自写判据** —— gate_plan→gate_run 读 verdict 三态',
     sk: 'op="gate_plan", args={spec_path:"D:/proj/gate.json"} → op="gate_run", args={spec_path:"D:/proj/gate.json", out_json:"D:/proj/gate_out.json"}；或 op="gate_run", args={preset:"assembly"}',
-    ops: ['plan', 'run', 'selftest', 'help'],
-    key: 'verdict **三态**（pass/fail/degraded），**ok 只在 pass 时为 true**（degraded 不等于通过）；spec 支持 .json / .py（SPEC 或 GATES）/ 内联 dict / preset；pass_if 是受限表达式（比较/布尔/算术 + min/max/len/abs/round/all/any/sum），引用不存在的字段会报错并列出可用字段' },
+    ops: ['plan', 'run', 'preflight', 'checkpoint', 'deliver', 'selftest', 'help'],
+    key: 'verdict **三态**（pass/fail/degraded），**ok 只在 pass 时为 true**（degraded 不等于通过）；preflight=开工体检卡；checkpoint=拓扑改动前文件级回退点；deliver=先过门再导出（不过不写盘）；spec 支持 .json / .py / 内联 dict / preset' },
   { f: 'material', prefix: 'material_',
     when: '要材质：程序化材质（金属拉丝 / 漆面 / 锈 / 玻璃 / 布料 / 木纹 / 混凝土 / 自发光 / 全息），或把程序化材质**烘成贴图**交付',
     not: '只是换个纯色（改 BSDF 默认值就行）；也不是贴图库（那走 PolyHaven 集成）；**别手搭节点树** —— material_build(preset=…)',
@@ -183,15 +220,15 @@ export const PLAN_CATALOG = [
 
 /** plan 之外的顶层工具：先决定"用哪个工具"，再决定 op */
 /**
- * v0.9.6（D2 · 描述预算）：重工具的参数长尾（从工具描述里搬出来的那部分）。
+ * 描述预算：重工具的参数长尾（从工具描述里搬出来的那部分）。
  * 取用：blender_rt_plan(op="catalog", args={tool:"rt_headless"})（后端本地直出）
  * 动机：15 个工具的 schema 是每轮固定开销；模型在"调用那一刻"只需要参数名 + 一句说明。
  * 维护：工具描述里删掉的解释性文字往这里放，别让它悄悄涨回去（tests/discoverability_selftest.mjs 有预算门）。
  */
 export const TOOL_DETAIL = {
- "rt_headless": "blender_rt_headless —— 无头 Blender 第一路径（独立进程，不动 GUI 场景）\n\n【路径语义（现场踩过，先读这条）】headless 的 cwd 是 \\\\wsl.localhost\\<distro>\\home\\<user>\\DSH；**绝对 WSL 路径必须带开头 / **（漏了会被当相对路径接到 cwd 后面，症状是 ...\\DSH\\home\\<user>\\DSH\\测试\\...；v0.9.6 起会自动纠正并写后端 stderr）。script_file 是**内联**执行（拷进 D:\\DSH\\blender\\tmp\\dsh_headless_*.py），v0.9.6 起自动注入 DSH_SCRIPT_FILE + __file__（指回原脚本）+ 脚本目录进 sys.path —— 多文件工程不再需要手铺 sys.path。\n\n【结果契约】脚本里 print(\"HEADLESS \" + json.dumps(obj, separators=(\",\",\":\")))；必须是**单行 JSON**。\n  解析失败不顶掉输出：记在 resultParseError，stdoutTail/logs 保留原文；>4KB 的结果自动落盘并给 resultPath。\n【超时语义】（v0.9.3）timeout_ms 只决定服务端子进程跑多久；客户端等待窗口默认 100 s（DSH_HEADLESS_WAIT_MS 可调），\n  到点回 {kind:\"promoted\", jobId:\"run-…\"} —— 子进程照跑，用 blender_rt_job(op=\"wait\"|\"collect\", id=…) 收结果。\n  ⇒ 预期 >100 s 的活**直接 as_job=true**（可配 wait_s 先等几秒），别让外层 deadline 决定结果去向。\n【引擎】默认注入 EEVEE + 光追前导（回执回 engine/gpu）；engine=\"cycles\" 走 OptiX、engine=\"keep\" 保持现状、\n  engine=\"none\" 完全跳过前导与 GPU 探测（纯 numpy/图像类任务省 1–1.5 s）。gpu 只对 cycles 路径有意义。\n【路径】outdir/out_json/file/script_file 都收 WSL 路径（/home/… 内部映射成 \\wsl.localhost\\<distro>\\…），\n  回执给 Windows + WSL 两种真实路径；脚本把 POSIX 路径交给 Windows API 会被体检出来（pathWarnings）。\n【可观测】三处 spawn 注入 PYTHONUNBUFFERED=1（日志运行期就有增量）；脚本里 dsh_stage(\"building\") 打心跳，\n  blender_rt_job(op=\"status\") 回 stage/idleMs/lines/logBytes/pidAlive。\n【多视角一体化】shots=[{name, from, look_at, lens, res, samples}] 一次出 N 张（内置 harness：自动三点光 + 渲染锁 +\n  逐张 md5 + 实测设备）；回执 res.shots 每行带 coverage_estimate，主体占画面 <5% 会给 subject_too_small。\n【回执字段】result / resultJson / status / gpu / logs / lastException / traceback / artifacts / shots / inputFile。\n【脚本内可用】K（持久内核，与 rt_do 同一套）/ K.args / K.win_path / K.wsl_path / K.blend_path / K.out_dir / K.env；\n  预载模块用 preload=\"audit,qc,qc_render\" → K.dsh_audit_api / K.dsh_qc_api …\n【别做】长任务别连发 op=status 轮询（用 job op=wait）；GUI 会话里别连发 render.render()。\n【常见坑】没传 outdir 时产物落在默认工作目录；file= 传了 .py 会被自动当脚本（并给提示）；\n  factory_startup=false 会加载用户 startup（其中本插件会尝试占 9876 端口，通常无害但有报错噪音）。",
+ "rt_headless": "blender_rt_headless —— 无头 Blender 备用路径（独立进程，不动 GUI 场景；默认仍先走 GUI）\n\n【路径语义（现场踩过，先读这条）】headless 的 cwd 是 \\\\wsl.localhost\\<distro>\\home\\<user>\\DSH；**绝对 WSL 路径必须带开头 / **（漏了会被当相对路径接到 cwd 后面，症状是 ...\\DSH\\home\\<user>\\DSH\\测试\\...；当前版本会自动纠正并写后端 stderr）。script_file 是**内联**执行（拷进 D:\\DSH\\blender\\tmp\\dsh_headless_*.py），当前版本自动注入 DSH_SCRIPT_FILE + __file__（指回原脚本）+ 脚本目录进 sys.path —— 多文件工程不再需要手铺 sys.path。\n\n【结果契约】脚本里 print(\"HEADLESS \" + json.dumps(obj, separators=(\",\",\":\")))；必须是**单行 JSON**。\n  解析失败不顶掉输出：记在 resultParseError，stdoutTail/logs 保留原文；>4KB 的结果自动落盘并给 resultPath。\n【超时语义】timeout_ms 只决定服务端子进程跑多久；客户端等待窗口默认 100 s（DSH_HEADLESS_WAIT_MS 可调），\n  到点回 {kind:\"promoted\", jobId:\"run-…\"} —— 子进程照跑，用 blender_rt_job(op=\"wait\"|\"collect\", id=…) 收结果。\n  ⇒ 预期 >100 s 的活**直接 as_job=true**（可配 wait_s 先等几秒），别让外层 deadline 决定结果去向。\n【引擎】默认注入 EEVEE + 光追前导（回执回 engine/gpu）；engine=\"cycles\" 走 OptiX、engine=\"keep\" 保持现状、\n  engine=\"none\" 完全跳过前导与 GPU 探测（纯 numpy/图像类任务省 1–1.5 s）。gpu 只对 cycles 路径有意义。\n【路径】outdir/out_json/file/script_file 都收 WSL 路径（/home/… 内部映射成 \\wsl.localhost\\<distro>\\…），\n  回执给 Windows + WSL 两种真实路径；脚本把 POSIX 路径交给 Windows API 会被体检出来（pathWarnings）。\n【可观测】三处 spawn 注入 PYTHONUNBUFFERED=1（日志运行期就有增量）；脚本里 dsh_stage(\"building\") 打心跳，\n  blender_rt_job(op=\"status\") 回 stage/idleMs/lines/logBytes/pidAlive。\n【多视角一体化】shots=[{name, from, look_at, lens, res, samples}] 一次出 N 张（内置 harness：自动三点光 + 渲染锁 +\n  逐张 md5 + 实测设备）；回执 res.shots 每行带 coverage_estimate，主体占画面 <5% 会给 subject_too_small。\n【回执字段】result / resultJson / status / gpu / logs / lastException / traceback / artifacts / shots / inputFile。\n【脚本内可用】K（持久内核，与 rt_do 同一套）/ K.args / K.win_path / K.wsl_path / K.blend_path / K.out_dir / K.env；\n  预载模块用 preload=\"audit,qc,qc_render\" → K.dsh_audit_api / K.dsh_qc_api …\n【别做】长任务别连发 op=status 轮询（用 job op=wait）；GUI 会话里别连发 render.render()。\n【硬退出（F-14）】done 后默认 os._exit(0) 跳过 Blender 退出拆解（规避 5.2.3 退出期 AV：glTF 导出等场景产物完整、done 已打，却被 exitCode 顶成失败）；hard_exit=false 回旧行为（atexit / bpy.app.handlers / 延迟存档照常执行）。job 路径同语义（as_job=true 走本工具即可传；直连 /job 用 opts.hardExit）。\\n【常见坑】没传 outdir 时产物落在默认工作目录；file= 传了 .py 会被自动当脚本（并给提示）；\n  factory_startup=false 会加载用户 startup（其中本插件会尝试占 9876 端口，通常无害但有报错噪音）。",
  "rt_job": "blender_rt_job —— 作业层（长活后台化 + 按 runId/jobId 回收）\n\nop=start: 与 headless 同形参（script / script_file / file / outdir / args / env / engine / preload /\n  factory_startup / bootstrap / workdir / out_json / timeout_ms 默认 1 h、上限 24 h）。\nop=wait: 阻塞到完成或超时（默认 120 s / 上限 600 s）—— 一次拿结构化结果，**别连发 status**。\nop=status/collect: stage/stageAt/stageAgeMs/lastOutputAt/idleMs/lines/logBytes/pidAlive；collect 可 tail=N。\nop=kill: 对未知 id 不抛错（回\"已结束/不存在\"）。op=list: 列作业。\nrun 与 job 同一 id 空间：headless 的 runId（run-…）也能用 status/collect/wait/kill 收。\n日志落 <outdir>/jobs/<id>/（stdout.log 边跑边写）；后端重启后台账仍在磁盘。",
- "rt_worker": "blender_rt_worker —— 热无头会话（反复迭代免冷启动：省 0.9–1.2 s 启动 + 最多 ~16 s EEVEE 着色器编译）\n\nstart: name（v0.9.4 多实例，默认 default）/ engine / gpu；exec: name / code / timeout_ms / purge_prefix；\nstatus / stop / restart / list。\n串行：一次只处理一个请求，长代码会占住 worker；无窗口（依赖 GUI 上下文的 bpy.ops 可能失败）。\n语义：同一实例共享场景与 K（复用 = 放弃进程隔离），脏了用 restart 换新会话。\n改了用户模块必须 purge_prefix（否则 import 命中旧代码）。print(\"HEADLESS {json}\") 仍是结果契约。",
+ "rt_worker": "blender_rt_worker —— 热无头会话（反复迭代免冷启动：省 0.9–1.2 s 启动 + 最多 ~16 s EEVEE 着色器编译）\n\nstart: name（默认 default）/ engine / gpu / preload（注入 K.dsh_*_api）/ warmup（预热 Workbench）；\nexec: name / code / timeout_ms / purge_prefix；see: name / spec（离屏 Workbench 帧）；watch: name / spec（逐帧 hash + ≤6 帧图）；\nreset / status / stop / restart / list。\n串行：一次只处理一个请求，长代码会占住 worker；无窗口（依赖 GUI 上下文的 bpy.ops 可能失败）。\n语义：同一实例共享场景与 K（复用 = 放弃进程隔离），脏了用 restart 换新会话；空闲 TTL 默认 15 min（DSH_WORKER_TTL_MS 可调）。\n改了用户模块必须 purge_prefix（否则 import 命中旧代码）。print(\"HEADLESS {json}\") 仍是结果契约。",
  "rt_see": "blender_rt_see —— 取一帧视口（约 55–160 ms；比 CLI/MCP 快 20 倍）\n\nmax_size（默认 560，420 更快 / 900 更清晰）；full=true + area=N 走整窗口截图（看 Blender UI 用）；\nfrom/look_at（+ lens / ortho / ortho_scale / view_size / shading / overlays / view_mode）走自定义视角：\n  自建矩阵离屏绘制，不建相机、不改 scene.camera、不动用户视口（约 100 ms）。\ndiagnostics=true 强制跑三项诊断（coverage / scene_bbox / objects_in_frame）；默认只在近空帧自动补跑。\n同画面重复出图默认不重复附图（省视觉 token），要重发传 force=true；回执带 hash 可对拍。",
  "rt_loop": `blender_rt_loop —— Blender 侧内环搜索（bpy.app.timers，160 tick/s；迭代/时间双上限 + op=stop 急停）
 
@@ -229,7 +266,7 @@ export const TOOL_DETAIL = {
    + '  generator_save|run（save 用 **code=**；run 的生成器 PARAMS 走嵌套 **args=**，不会被摊平）·\n'
    + '  gui_frame|shading|open · render_lock|render_status · montage ·\n'
    + '  契约层 status|register_*|check_*|destructive_guard|evidence|ledger|report|verify|flip|advance。\n'
-   + '【目录自证（v0.9.6 D3）】目录回执带 provenance：loadedHash=本进程加载 engine.mjs 时的**内容指纹**（sha256:12）、\n'
+   + '【目录自证】目录回执带 provenance：loadedHash=本进程加载 engine.mjs 时的**内容指纹**（sha256:12）、\n'
    + '  currentHash=现场再读磁盘的指纹、verdict=current|stale|unknown。**不看 mtime**（touch 会假 stale、同秒重写会假 fresh）。\n'
    + '  stale=true → 磁盘已改、本进程还是旧一代：重启后端再问一次；强对拍用 op="catalog", args={verify:true}\n'
    + '  （另起干净 node 进程 import 磁盘 engine.mjs，用它的 family/op 数与 catalogHash 当裁判 —— 实测 ~50 ms）。\n'
@@ -241,7 +278,7 @@ export const PLAN_TOOL_MAP = [
   { t: 'blender_viewport(op="doctor")', use: '开工前体检/排错；launch 可一键拉起 GUI Blender' },
   { t: 'blender_rt_see', use: '看一眼画面（约 100 ms；给 from/look_at 走自定义视角，不建相机）' },
   { t: 'blender_rt_do', use: '改一步看一眼（GUI 常驻 + 持久内核 K，变量跨调用保留）' },
-  { t: 'blender_rt_headless', use: '独立进程跑脚本（变量不保留）；批处理第一路径' },
+  { t: 'blender_rt_headless', use: '独立进程跑脚本（变量不保留）；批处理/无 GUI 备用（默认 GUI 优先）' },
   { t: 'blender_rt_job', use: '重活/长渲染：op=start 异步 + op=wait/collect 按 runId 回收（超时不丢结果）' },
   { t: 'blender_rt_worker', use: '同一脚本反复跑（冷启动与着色器编译只付一次）；单例串行，多 agent 别共用' },
   { t: 'blender_rt_txn', use: '回退点：mark/revert 对象级毫秒级；拓扑改动必须 snapshot/restore' },
@@ -321,7 +358,7 @@ export function planOpCrossChannelHint(addonName) {
 }
 
 /**
- * v0.9.6（D3）：目录自己的内容指纹 —— 只哈希"真正会回答的东西"（定序，顺序敏感）。
+ * 目录自己的内容指纹 —— 只哈希"真正会回答的东西"（定序，顺序敏感）。
  * 用途：① 跨进程对拍（干净进程 import 磁盘 engine.mjs 后的 catalogHash 必须相等）
  *       ② 把"目录变没变"变成可比对的 12 位十六进制，而不是"感觉好像多了几族"。
  */
@@ -347,6 +384,8 @@ export function probeDiskCatalog(timeoutMs) {
     const out = execFileSync(process.execPath, ['-e', js], {
       encoding: 'utf8', timeout: Math.max(2000, Math.min(30000, Number(timeoutMs) || 8000)),
       stdio: ['ignore', 'pipe', 'pipe'], env: Object.assign({}, process.env, { DSH_PROVENANCE_PROBE: '1' }),
+      // windowsHide: node.exe 是 console-subsystem，宿主无控制台时会被新配控制台（issue #43；非 Windows no-op）
+      windowsHide: true,
     });
     const line = String(out).trim().split(String.fromCharCode(10)).filter(Boolean).pop() || '';
     return JSON.parse(line);
@@ -354,7 +393,7 @@ export function probeDiskCatalog(timeoutMs) {
 }
 
 /**
- * 加载版本 / 磁盘版本的内容指纹对拍（v0.9.6 D3）。
+ * 加载版本 / 磁盘版本的内容指纹对拍。
  * 默认只读一次磁盘（~0.2 ms）；`verify:true` 才起干净进程对拍（~120 ms），按需付费。
  */
 /** 单条 family 的短渲染（渐进披露：先目录，再 family，再 *_help） */
@@ -398,6 +437,13 @@ export const PLAN_READ_ONLY_OPS = [
   'sculpt_help', 'fix_help', 'uv_stats', 'uv_help', 'print_walls',
   'print_overhang', 'print_report', 'print_help', 'sweep_analyze', 'sweep_help',
   'gui_frame', 'gui_shading', 'gui_help', 'render_status', 'render_lock_status',
+  'gate_preflight', 'gate_checkpoint', 'model_preflight', 'model_checkpoint',
+  'visualreport_report', 'visualreport_help', 'qc_visual_report', 'shapesolve_help', 'eval_help', 'surface_help',
+  // P0 新增只读面：参考图量具 / 装配扫描与清单/门 / 白模帮助
+  'img_digest', 'img_probe', 'img_measure', 'img_calib',
+  'audit_interference', 'audit_overlap', 'audit_snap_floaters', 'interference_report',
+  'asm_scan', 'asm_manifest', 'asm_gate', 'asm_selftest', 'asm_help', 'fix_interference',
+  'blockout_help', 'blockout_selftest',
 ];
 export const PLAN_READ_ONLY = new Set(PLAN_READ_ONLY_OPS);
 
@@ -408,10 +454,16 @@ export const COMMAND_CATALOG = {
   get_addon_info: { d: 'addon 版本与协议号', gate: null },
   get_object_info: { d: '单对象详情（参数 name）', gate: null },
   get_viewport_screenshot: { d: '视口离屏截图（max_size, filepath, format）', gate: null },
-  // v0.9.6：addon 升到 v1.7（协议号 11）后新增的三条常驻命令 —— 让模型查 API 而不是猜
+  // addon v1.10（协议号 11）的常驻命令 —— 让模型查 API 而不是猜
   describe_node_type: { d: '查节点类型的全部 socket/属性（bl_idname, property_overrides）—— 建着色器/几何节点前先查，别猜 socket 顺序', gate: null },
   bpy_api_lookup: { d: '查 bpy API 参考（query，如 "bpy.ops.mesh.primitive_cube_add"）', gate: null },
   export_scene: { d: '导出场景/选择/名单到 glb|fbx|obj（filepath, format, object_names, selection_only, apply_modifiers）', gate: null },
+  // v1.8（插件 v2.3）：Blender 原生选中 → DSH / 统一活动状态
+  get_activity_state: { d: '统一活动状态 human/agent/idle/both + 原生选中摘要（无参；查询自身不算 agent）', gate: null },
+  get_selection: { d: '当前 Blender 原生选中（名字/类型/活动对象/模式/场景；无参）', gate: null },
+  send_selection_to_dsh: { d: '把当前选中 POST 给 DSH 后端（N 面板按钮的同一实现；timeout 可选）', gate: null },
+  get_collections: { d: '列场景集合：名字 / 对象数 / 其中选中数（limit 可选；大装配体先选集合）', gate: null },
+  send_collection_to_dsh: { d: '把整个集合 POST 给 DSH（collection 可选，缺省用 N 面板下拉的 dshbb_collection_target）', gate: null },
   get_tripo_status: { d: 'Tripo 集成状态（premium 通道）', gate: null },
   execute_code: { d: '执行任意 Python（万能通道，预置 K/bpy/math/mathutils）', gate: null },
   drain_human_activity: { d: '取走"人类操作"事件缓冲', gate: null },

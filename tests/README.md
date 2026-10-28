@@ -21,6 +21,39 @@ node tests/host_routes_selftest.mjs     # /host/* 路由（需要后端 127.0.0.
   写租约被别的会话持有时**不夺租约**而是跳过（共享同一 Blender 时的有意取舍）。
 - 两条都不进 `npm test` 主链（`host_routes` 依赖真后端），需要时手动跑。
 
+## 工具卡片自检（v2.6.1 · 进 `npm test`）
+
+```bash
+node tests/tool_cards_selftest.mjs      # 15 个工具的 presentCall / presentResult（不需要 Blender，不起后端）
+```
+
+- 宿主（dsh-TUI / Web）用 `presentCall` / `presentResult` 决定**卡片怎么给人看**；模型侧回执（`render`）不变。
+- 断言：15 个工具都挂了 presenter；标题「Blender <动作> · <要点>」；带代码的调用把代码放进卡片正文；
+  结果卡片去掉单行 JSON 信封、摘要在前、代码在后、图片块原样透传；出错 / 没东西可改时回 `undefined`（宿主默认显示）；
+  `render` 输出仍以信封开头；坏参数不抛、view 全是 lossless JSON。
+
+## dsh-TUI 宿主半边自检（v2.6.1 · 进 `npm test`）
+
+```bash
+node tests/tui_host_selftest.mjs        # src/tui-host.ts：假宿主接缝 + 假后端 + 一个真 runtime/server.mjs（不需要 Blender / dsh-TUI）
+```
+
+- 草稿文本与 `lib/client.js` **逐字对拍**（16 组选中 payload）：两份实现，靠这里防漂移。
+- 选中桥 CAS：挂上才 `consume(ok)`、挂不上第 3 次 `consume(ok:false)`、空选中直接 `consume(ok:false)`、同一 seq 不重复挂。
+- 页脚字段的每种状态、`@` 提及条目、`/blender status|jobs|doctor`、接缝缺失时零注册、卸载清理。
+- 真后端 `/host/state`：无 Blender 时的形状与「未连接」；再挂一个假 addon，验「AI 操作已暂停」→ `aiPaused=true` → 成功一次后清空。
+
+## Windows 子进程藏窗自检（v2.6.1 · 进 `npm test`）
+
+```bash
+node tests/windows_hide_selftest.mjs     # 静态扫描 runtime/*.mjs 的 child_process 调用（不需要 Blender / 不需要 Windows）
+```
+
+- 规则：Windows 上会创建控制台的 child_process 调用必须带 `windowsHide: true`；GUI 启动 `runtime/launch.mjs`（`detached: true` ⇒ libuv `DETACHED_PROCESS`）允许用 `detached: true` 替代。
+- 背景 issue #38 / #43：`spawn` 族修了、同族的 `execFileSync` 漏了 ⇒ 用静态扫描把**整个 `runtime/*.mjs` 面**锁住，而不是只修当前这几处。
+- 实现：先遮掉字符串 / 注释 / 正则字面量（`/['"]/` 这类不会把后面代码带偏），再做括号配对；`exec(compile(...))` 这种字符串里的 Python 代码不会被误判成调用。
+- 反例实测：删掉 config / engine 的 `windowsHide`、删掉 launch 的 `detached` 均 exit 1，并指到文件:行。
+
 ## 上游整合 A1–A5 自检（v0.9.6）
 
 ``python
@@ -115,8 +148,7 @@ PARAMS 静默变空）；单键信封 `{"args":{…}}` 的向后兼容仍在。
 失败方式是 `fiber failed → 15 个工具整体消失`，而 Blender 与插件包看起来都没坏。
 
 ```bash
-node tests/protocol_selftest.mjs              # ① addon 协议层：28 项，不需要 Blender / DSH
-node tests/dsh_api_compat_probe.mjs           # ② 工具契约：15 个工具 + 15 个 timeoutMs + 0 报错
+node tests/dsh_api_compat_probe.mjs           # ② 工具契约：15 个工具 + 静态 timeoutMs + 0 报错
 node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.json   # ③ 对"待升级版本"预演
 ```
 
@@ -126,19 +158,15 @@ node tests/dsh_api_compat_probe.mjs --version 0.1.7-alpha.2 --json /tmp/base.jso
 ## 0. addon 协议适配（不需要 Blender / DSH，最省事）
 
 ```bash
-node tests/protocol_selftest.mjs      # 或 npm test
 ```
 
-用两个 mock addon（扁平协议 / category-action）把适配层跑一遍，共 39 项断言：
+（协议适配自检已随旧 addon 支持一起删除：v2.3 只支持本仓 addon 的扁平协议，真机连通性由 launch_selftest 覆盖。）
 
 | 覆盖 | 断言要点 |
 |---|---|
 | 协议探测 | 两种 mock 各判对；死端口 → `null`；**扁平 addon 第一轮没回时按封套形状纠错**回 `flat` |
-| 协议解析 | `auto` 探测出正确结果；显式 `addonProtocol` 不探测、立即返回；未知协议名报错；**已弃用别名** `'ahujasid'` 被接受并归一化为 `'flat'`（旧配置文件不炸） |
-| addon 标识双名探测 | 5 个集成开关在**旧 addon（`blendermcp_use_*`）**与**新 addon（`dshbb_use_*`）**下都读得到；双名都在时**新名优先**；回执键用新名 |
 | 两种协议下的调用 | `ping` / `get_scene_info` / `execute_code`（形状必须是 `{executed,result}`）/ 视口帧 |
 | 错误传播 | 两种协议各自把 addon 的错误变成 reject |
-| 缺能力不假装 | category-action 侧的资产集成命令明确报错；遥测类是本地桩（不占 socket） |
 
 ## 1. view.py 自检（矩阵 + 离屏 + PNG 字节）
 
